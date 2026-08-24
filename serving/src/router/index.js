@@ -32,6 +32,18 @@ const routes = [
 		meta: { title: "Addresses" },
 	},
 	{
+		path: "/benches",
+		name: "Benches",
+		component: () => import("../views/Benches.vue"),
+		meta: { title: "Benches" },
+	},
+	{
+		path: "/installs",
+		name: "Installs",
+		component: () => import("../views/Installs.vue"),
+		meta: { title: "App Installs" },
+	},
+	{
 		path: "/settings",
 		name: "Settings",
 		component: () => import("../views/Settings.vue"),

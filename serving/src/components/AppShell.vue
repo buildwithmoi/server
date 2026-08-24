@@ -45,10 +45,10 @@
 				<div class="mb-2.5 flex items-center gap-2 px-1">
 					<span
 						class="h-1.5 w-1.5 shrink-0 rounded-full"
-						:class="monitoring ? 'bg-[var(--ink)] u-live' : 'bg-[var(--ink-ghost)]'"
+						:class="monitoringEnabled ? 'bg-[var(--ink)] u-live' : 'bg-[var(--ink-ghost)]'"
 					/>
 					<span class="text-[11px] text-[var(--ink-faint)]">
-						{{ monitoring ? "Monitoring active" : "Monitoring off" }}
+						{{ monitoringEnabled ? "Monitoring active" : "Monitoring off" }}
 					</span>
 				</div>
 				<button
@@ -104,14 +104,14 @@
 </template>
 
 <script setup>
-import { inject, ref } from "vue";
+import { inject, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import Icon from "./Icon.vue";
+import { loadSettings, monitoringEnabled } from "../state";
 
 defineProps({
 	title: { type: String, default: "" },
 	subtitle: { type: String, default: "" },
-	monitoring: { type: Boolean, default: false },
 	siteName: { type: String, default: window.location.host },
 });
 
@@ -124,8 +124,13 @@ const nav = [
 	{ name: "AuthEvents", label: "SSH Events", icon: "shield" },
 	{ name: "SudoCommands", label: "Sudo Commands", icon: "terminal" },
 	{ name: "IpAddresses", label: "Addresses", icon: "globe" },
+	{ name: "Benches", label: "Benches", icon: "layers" },
+	{ name: "Installs", label: "App Installs", icon: "download" },
 	{ name: "Settings", label: "Settings", icon: "sliders" },
 ];
 
 const isActive = (name) => route.name === name;
+
+// The chrome owns this, so every page shows the same truth without passing it.
+onMounted(() => loadSettings());
 </script>

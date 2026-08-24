@@ -1,5 +1,5 @@
 <template>
-	<AppShell title="Settings" subtitle="read-only summary" :monitoring="Boolean(settings.ssh_monitoring_enabled)">
+	<AppShell title="Settings" subtitle="read-only summary">
 		<template #actions>
 			<Button :loading="ingesting" @click="ingestNow">
 				<template #prefix><Icon name="play" :size="14" /></template>
@@ -103,6 +103,7 @@ import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import Skeleton from "../components/Skeleton.vue";
 import { healthResource, runIngestResource, setMonitoringResource, settingsResource } from "../api";
+import { loadSettings } from "../state";
 
 const deskUrl = "/app/server-settings";
 
@@ -129,6 +130,8 @@ async function toggleMonitoring() {
 		await setMonitoringResource().submit({ enabled: next });
 		toast.success(next ? "Monitoring enabled" : "Monitoring paused");
 		settingsRes.fetch();
+		// Keep the sidebar indicator in step with what was just changed.
+		loadSettings(true);
 	} catch (error) {
 		toast.error(error.messages?.[0] || "Could not change the setting");
 	} finally {

@@ -118,6 +118,66 @@ export function healthResource() {
 	return createResource({ url: `${M}.get_health` });
 }
 
+/* ------------------------------------------------------------------ benches */
+
+export interface BenchApp {
+	app_name: string;
+	branch: string | null;
+	commit: string | null;
+	git_url: string | null;
+	remote_name: string | null;
+	is_shallow: number;
+	is_dirty: number;
+}
+
+export interface Bench {
+	name: string;
+	bench_path: string;
+	is_active: number;
+	frappe_branch: string | null;
+	python_version: string | null;
+	webserver_port: number | null;
+	socketio_port: number | null;
+	default_site: string | null;
+	shallow_clone: number;
+	last_scanned_at: string | null;
+	scan_error: string | null;
+	apps: BenchApp[];
+	sites: { site_name: string; is_default: number; installed_apps: string[] }[];
+}
+
+export function benchesResource() {
+	return createResource({ url: `${M}.list_benches` });
+}
+
+export function rescanBenchesResource() {
+	return createResource({ url: `${M}.rescan_benches` });
+}
+
+export function gitAuthResource() {
+	return createResource({ url: `${M}.check_git_auth` });
+}
+
+export function installRequestsResource() {
+	return createResource({ url: `${M}.list_install_requests` });
+}
+
+export function installRequestResource() {
+	return createResource({ url: `${M}.get_install_request` });
+}
+
+export function createInstallResource() {
+	return createResource({ url: `${M}.create_install_request` });
+}
+
+export function runInstallResource() {
+	return createResource({ url: `${M}.run_install_request` });
+}
+
+export function checkRepoResource() {
+	return createResource({ url: `${M}.check_repo_access` });
+}
+
 /* ----------------------------------------------------------------- actions */
 
 export function setMonitoringResource() {

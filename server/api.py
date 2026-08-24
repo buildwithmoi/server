@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import frappe
 
 from server import dashboard
+from server.bench import discovery, doctor, installer
 from server.geo import registry
 from server.server.doctype.server_settings.server_settings import get_settings
 from server.ssh import ingest, parser, sources
@@ -241,6 +242,207 @@ def set_monitoring_enabled(enabled: bool = False) -> dict:
 	frappe.db.commit()
 	sources.clear_cache()
 	return {"ssh_monitoring_enabled": bool(settings.ssh_monitoring_enabled)}
+
+
+# ---------------------------------------------------------------------------
+# Bench management
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def list_benches() -> list[dict]:
+	"""Every bench found on this machine, with its apps and sites."""
+	_assert_server_admin()
+	benches = frappe.get_all(
+		"Server Bench",
+		fields=[
+			"name",
+			"bench_path",
+			"is_active",
+			"frappe_branch",
+			"python_version",
+			"webserver_port",
+			"socketio_port",
+			"default_site",
+			"shallow_clone",
+			"last_scanned_at",
+			"scan_error",
+		],
+		order_by="bench_name asc",
+	)
+	for bench in benches:
+		doc = frappe.get_doc("Server Bench", bench["name"])
+		bench["apps"] = [
+			{
+				"app_name": a.app_name,
+				"branch": a.branch,
+				"commit": a.commit,
+				"git_url": a.git_url,
+				"remote_name": a.remote_name,
+				"is_shallow": a.is_shallow,
+				"is_dirty": a.is_dirty,
+			}
+			for a in doc.apps
+		]
+		bench["sites"] = [
+			{
+				"site_name": s.site_name,
+				"is_default": s.is_default,
+				"installed_apps": (s.installed_apps or "").splitlines(),
+			}
+			for s in doc.sites
+		]
+	return benches
+
+
+@frappe.whitelist(methods=["POST"])
+def rescan_benches() -> dict:
+	"""Rescan the bench root now."""
+	_assert_server_admin()
+	return discovery.scan_benches()
+
+
+@frappe.whitelist()
+def check_git_auth() -> dict:
+	"""Read-only report on whether private clones will work from this machine."""
+	_assert_server_admin()
+	return doctor.check_git_auth()
+
+
+@frappe.whitelist()
+def list_install_requests(start: int = 0, page_length: int = 20) -> dict:
+	"""Install history, newest first."""
+	_assert_server_admin()
+	return {
+		"rows": frappe.get_all(
+			"App Install Request",
+			fields=[
+				"name",
+				"bench",
+				"app_name",
+				"branch",
+				"status",
+				"exit_code",
+				"resolved_git_url",
+				"install_on_site",
+				"started_at",
+				"finished_at",
+				"duration",
+				"error_summary",
+				"creation",
+			],
+			order_by="creation desc",
+			limit_start=max(int(start), 0),
+			limit_page_length=min(max(int(page_length), 1), 100),
+		),
+		"total": frappe.db.count("App Install Request"),
+	}
+
+
+@frappe.whitelist()
+def get_install_request(name: str) -> dict:
+	"""One request with its full log.
+
+	Polled by the UI while a job runs. Realtime events are published too, but
+	polling is what makes the log correct after a page reload — a socket only
+	carries what happened while you were listening.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("App Install Request", name)
+	return {
+		"name": doc.name,
+		"bench": doc.bench,
+		"app_name": doc.app_name,
+		"branch": doc.branch,
+		"status": doc.status,
+		"exit_code": doc.exit_code,
+		"command": doc.command,
+		"resolved_git_url": doc.resolved_git_url,
+		"install_on_site": doc.install_on_site,
+		"started_at": doc.started_at,
+		"finished_at": doc.finished_at,
+		"duration": doc.duration,
+		"output": doc.output,
+		"error_summary": doc.error_summary,
+		"job_id": doc.job_id,
+		"is_terminal": doc.is_terminal(),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_install_request(
+	bench: str,
+	source_type: str = "GitHub Org + Repo",
+	github_org: str | None = None,
+	repo: str | None = None,
+	git_url: str | None = None,
+	branch: str | None = None,
+	install_on_site: str | None = None,
+	skip_assets: bool = True,
+	overwrite_existing: bool = False,
+	force_install: bool = False,
+	run: bool = False,
+) -> dict:
+	"""Create a request, optionally queueing it immediately."""
+	_assert_server_admin()
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "App Install Request",
+			"bench": bench,
+			"source_type": source_type,
+			"github_org": github_org,
+			"repo": repo,
+			"git_url": git_url,
+			"branch": branch,
+			"install_on_site": install_on_site,
+			"skip_assets": 1 if frappe.parse_json(skip_assets) else 0,
+			"overwrite_existing": 1 if frappe.parse_json(overwrite_existing) else 0,
+			"force_install": 1 if frappe.parse_json(force_install) else 0,
+			"status": "Draft",
+		}
+	)
+	doc.insert()
+	frappe.db.commit()
+
+	if frappe.parse_json(run):
+		return run_install_request(doc.name)
+	return {
+		"name": doc.name,
+		"status": doc.status,
+		"resolved_git_url": doc.resolved_git_url,
+		"app_name": doc.app_name,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def run_install_request(name: str) -> dict:
+	"""Queue a request for execution.
+
+	The interlock is checked HERE, where there is a session and a user to
+	refuse, as well as inside the job — where `frappe.only_for` cannot run
+	because a worker has no session. Both checks are load-bearing: the setting
+	can be switched off between queueing and execution.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	doc = frappe.get_doc("App Install Request", name)
+	if doc.status in ("Queued", "Running"):
+		frappe.throw(f"{name} is already {doc.status.lower()}.", title="Already Running")
+
+	doc.db_set({"status": "Queued", "error_summary": None}, update_modified=False)
+	job_id = installer.enqueue_install_request(name)
+	doc.db_set("job_id", job_id, update_modified=False)
+	frappe.db.commit()
+	return {"name": name, "status": "Queued", "job_id": job_id}
+
+
+@frappe.whitelist(methods=["POST"])
+def check_repo_access(git_url: str, branch: str | None = None) -> dict:
+	"""Probe a remote without cloning it. Used by the form before submitting."""
+	_assert_server_admin()
+	return doctor.check_repo(git_url, branch)
 
 
 # ---------------------------------------------------------------------------

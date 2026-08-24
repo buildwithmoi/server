@@ -2,7 +2,6 @@
 	<AppShell
 		title="Overview"
 		:subtitle="subtitle"
-		:monitoring="health.monitoring_enabled"
 	>
 		<template #actions>
 			<div class="flex items-center overflow-hidden rounded-md border border-[var(--rule)]">

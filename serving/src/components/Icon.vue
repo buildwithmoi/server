@@ -47,6 +47,9 @@ const SHAPES = {
 	chevron: { paths: ["M9 6l6 6-6 6"] },
 	play: { paths: ["M7 4.8v14.4L19 12 7 4.8Z"] },
 	trash: { paths: ["M4 7h16", "M9 7V5h6v2", "M6 7l1 13h10l1-13"] },
+	layers: { paths: ["M12 3 3 7.5l9 4.5 9-4.5L12 3Z", "M3 12.5 12 17l9-4.5", "M3 17.5 12 22l9-4.5"] },
+	download: { paths: ["M12 3v11", "M7.5 10 12 14.5 16.5 10", "M4 20h16"] },
+	key: { paths: ["M14.5 10.5 21 4", "M18 7l2 2", "M16 9l1.5 1.5"], circles: [[8.5, 15.5, 5]] },
 };
 
 const shape = computed(() => SHAPES[props.name] || SHAPES.gauge);
