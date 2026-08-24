@@ -61,32 +61,79 @@
 				</div>
 
 				<div v-if="repo" class="flex flex-col gap-1.5">
+					<!-- The failure notice sits ABOVE the field on purpose. Below it,
+					     an open dropdown covers it and the only thing visible is
+					     "No results found", which blames the search instead of
+					     naming the actual problem. -->
+					<div
+						v-if="branchError"
+						class="flex items-start gap-2.5 rounded-md border border-[var(--ink)] bg-[var(--paper-sunk)] px-3 py-2.5"
+					>
+						<Icon name="alert" :size="15" class="mt-0.5 shrink-0" />
+						<div class="min-w-0">
+							<p class="text-[12.5px] leading-relaxed">{{ branchError }}</p>
+							<RouterLink
+								v-if="/token/i.test(branchError)"
+								:to="{ name: 'GitHubProfiles' }"
+								class="mt-1 inline-block text-[12px] underline underline-offset-2"
+								@click="open = false"
+							>Add an access token</RouterLink>
+							<p class="mt-1 text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+								You can still type the branch name below.
+							</p>
+						</div>
+					</div>
+
 					<div class="flex items-baseline justify-between">
 						<span class="u-label">Branch</span>
-						<button
-							v-if="branch && branch.value !== defaultBranch"
-							type="button"
-							class="text-[11.5px] text-[var(--ink-faint)] hover:text-[var(--ink)]"
-							@click="resetBranch"
-						>use default ({{ defaultBranch }})</button>
+						<div class="flex items-center gap-3">
+							<button
+								v-if="branchValue && branchValue !== defaultBranch && defaultBranch"
+								type="button"
+								class="text-[11.5px] text-[var(--ink-faint)] hover:text-[var(--ink)]"
+								@click="resetBranch"
+							>use default ({{ defaultBranch }})</button>
+							<button
+								v-if="branchOptions.length"
+								type="button"
+								class="text-[11.5px] text-[var(--ink-faint)] hover:text-[var(--ink)]"
+								@click="manualBranch = !manualBranch"
+							>{{ manualBranch ? "pick from list" : "type a name" }}</button>
+						</div>
 					</div>
+
+					<!-- A picker that can only offer what it managed to fetch is a
+					     dead end when the fetch fails, and frappe-ui's Autocomplete
+					     accepts nothing but its own options. So a typed name is
+					     always reachable, and becomes the default when there is no
+					     list to pick from. -->
+					<input
+						v-if="manualBranch || (!branchOptions.length && !branchesRes.loading)"
+						v-model.trim="typedBranch"
+						:placeholder="defaultBranch || 'branch name'"
+						class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+					/>
 					<Autocomplete
+						v-else
 						v-model="branch"
 						:options="branchOptions"
 						:placeholder="branchesRes.loading ? 'loading branches…' : 'Default branch'"
 						:loading="branchesRes.loading"
 					/>
-					<p v-if="branchError" class="text-[11.5px] leading-relaxed text-[var(--ink)]">{{ branchError }}</p>
-					<p v-else-if="branchesRes.loading" class="text-[11.5px] text-[var(--ink-faint)]">
+
+					<p v-if="branchesRes.loading" class="text-[11.5px] text-[var(--ink-faint)]">
 						Default branch selected. Loading the full branch list…
 					</p>
-					<p v-else class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
-						Clear this to use the repository default.
+					<p v-else-if="branchOptions.length" class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+						Leave blank to use the repository default.
 						{{ branchOptions.length }} branches available.
 						<span v-if="branchesRes.data?.truncated">
-							Only the first {{ branchOptions.length }} are listed — type the exact name if
-							the branch you want is not here.
+							Only the first {{ branchOptions.length }} are listed — use “type a name” for
+							anything beyond that.
 						</span>
+					</p>
+					<p v-else-if="!branchError" class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+						No branch list available. Type a name, or leave blank for the repository default.
 					</p>
 				</div>
 
@@ -214,6 +261,8 @@ const overwrite = ref(false);
 const app = ref(null);
 const pullBranch = ref("");
 const allowMerge = ref(false);
+const manualBranch = ref(false);
+const typedBranch = ref("");
 const submitting = ref(false);
 const syncing = ref(false);
 const error = ref("");
@@ -229,6 +278,16 @@ const defaultBranch = computed(
 	() => repo.value?.defaultBranch || branchesRes.data?.default_branch || "",
 );
 const branchError = computed(() => branchesRes.data?.error || "");
+
+/**
+ * The chosen branch, from whichever control is showing.
+ *
+ * Two controls can set this — the picker and the free-text box — and every
+ * other piece of logic wants one answer, not a branch of its own.
+ */
+const branchValue = computed(() =>
+	manualBranch.value || !branchOptions.value.length ? typedBranch.value : branch.value?.value || "",
+);
 
 const repoOptions = computed(() =>
 	(reposRes.data || []).map((r) => ({
@@ -304,12 +363,15 @@ watch(repo, async (value) => {
 	branch.value = null;
 	if (!value?.value || !profile.value) return;
 
+	manualBranch.value = false;
 	if (value.defaultBranch) {
 		branch.value = { label: value.defaultBranch, value: value.defaultBranch };
+		typedBranch.value = value.defaultBranch;
 	}
 	await branchesRes.submit({ profile: profile.value, repo: value.value });
 	if (!branch.value && defaultBranch.value) {
 		branch.value = { label: defaultBranch.value, value: defaultBranch.value };
+		typedBranch.value = defaultBranch.value;
 	}
 });
 
@@ -317,6 +379,7 @@ function resetBranch() {
 	branch.value = defaultBranch.value
 		? { label: defaultBranch.value, value: defaultBranch.value }
 		: null;
+	typedBranch.value = defaultBranch.value || "";
 }
 
 async function sync() {
@@ -351,7 +414,7 @@ async function submit() {
 				: {
 						bench: props.bench, operation: "Clone", source_type: "GitHub Profile",
 						github_profile: profile.value, repo: repo.value.value,
-						branch: branch.value?.value || null, install_on_site: site.value || null,
+						branch: branchValue.value || null, install_on_site: site.value || null,
 						skip_assets: skipAssets.value, overwrite_existing: overwrite.value,
 					};
 		const result = await createInstallResource().submit({ ...payload, run: true });
