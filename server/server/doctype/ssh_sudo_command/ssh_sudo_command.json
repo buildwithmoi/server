@@ -1,0 +1,185 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "event_time",
+  "actor",
+  "target_user",
+  "status",
+  "failure_reason",
+  "column_break_who",
+  "tty",
+  "pwd",
+  "hostname",
+  "pid",
+  "command_section",
+  "command",
+  "correlation_section",
+  "audit_session",
+  "column_break_corr",
+  "ingest_source",
+  "provenance_section",
+  "raw_message",
+  "dedup_hash"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_time",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Event Time",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "description": "The user who invoked sudo.",
+   "fieldname": "actor",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Actor",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "description": "The user the command was to run as \u2014 usually root.",
+   "fieldname": "target_user",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Target User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Executed\nDenied\nAuth Failure",
+   "read_only": 1
+  },
+  {
+   "description": "Why sudo refused, verbatim: 'a password is required', 'user NOT in sudoers', and so on.",
+   "fieldname": "failure_reason",
+   "fieldtype": "Data",
+   "label": "Failure Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_who",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tty",
+   "fieldtype": "Data",
+   "label": "TTY",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pwd",
+   "fieldtype": "Data",
+   "label": "Working Directory",
+   "read_only": 1
+  },
+  {
+   "fieldname": "hostname",
+   "fieldtype": "Data",
+   "label": "Hostname",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pid",
+   "fieldtype": "Int",
+   "label": "PID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "command_section",
+   "fieldtype": "Section Break",
+   "label": "Command",
+   "read_only": 1
+  },
+  {
+   "description": "The full command line as sudo recorded it.",
+   "fieldname": "command",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Command",
+   "read_only": 1
+  },
+  {
+   "fieldname": "correlation_section",
+   "fieldtype": "Section Break",
+   "label": "Correlation",
+   "read_only": 1
+  },
+  {
+   "description": "Matches the Audit Session on an SSH Auth Event, which is how a command is attributed to the login that ran it.",
+   "fieldname": "audit_session",
+   "fieldtype": "Data",
+   "label": "Audit Session",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_corr",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ingest_source",
+   "fieldtype": "Select",
+   "label": "Ingest Source",
+   "options": "journald\nauthlog\nfixture",
+   "read_only": 1
+  },
+  {
+   "fieldname": "provenance_section",
+   "fieldtype": "Section Break",
+   "label": "Provenance",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_message",
+   "fieldtype": "Small Text",
+   "label": "Raw Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "dedup_hash",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Dedup Hash",
+   "length": 40,
+   "read_only": 1,
+   "unique": 1
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "SSH Sudo Command",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC"
+}

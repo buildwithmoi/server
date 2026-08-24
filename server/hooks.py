@@ -149,23 +149,28 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"server.tasks.all"
-# 	],
-# 	"daily": [
-# 		"server.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"server.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"server.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"server.tasks.monthly"
-# 	],
-# }
+# WHY `cron` IS SAFE HERE. Frappe skips non-daily scheduled jobs on "dormant"
+# sites, which would quietly stop a low-traffic monitoring site from ingesting.
+# It does not apply to us: `is_dormant()` returns False immediately unless
+# `on_frappecloud()` is true, and that only matches sites whose domain ends in
+# frappe.cloud / erpnext.com / frappehr.com / frappe.dev
+# (frappe/utils/scheduler.py, frappe/utils/frappecloud.py). A self-hosted site
+# is never dormant.
+scheduler_events = {
+	"cron": {
+		# Five minutes bounds how stale the intrusion view can be. Reading a
+		# cursor delta out of journald is milliseconds of work, so the cost is
+		# the worker slot, not the query — and one-minute ticks would compete
+		# for those slots with the bench operations this app also runs.
+		"*/5 * * * *": ["server.ssh.ingest.enqueue_ingest"],
+		# Offset by two minutes so a geolocation batch never starts in the same
+		# tick as an ingest run.
+		"2-59/5 * * * *": ["server.geo.registry.enqueue_resolve_pending"],
+	},
+	# "daily" is added together with the SSH Session doctype — a hook pointing at
+	# a module that does not exist yet would create a Scheduled Job Type row that
+	# fails every time it fires.
+}
 
 # Testing
 # -------
@@ -247,12 +252,25 @@ app_license = "mit"
 # Automatically update python controller files with type annotations for this app.
 # export_python_type_annotations = True
 
-# default_log_clearing_doctypes = {
-# 	"Logging DocType Name": 30  # days to retain logs
-# }
+# Registers both log doctypes with frappe's Log Settings, which runs the daily
+# clean-up. Registering here is only half of it: frappe will not clear a doctype
+# unless its controller also implements a `clear_old_logs(days)` staticmethod
+# (the LogType protocol in frappe/core/doctype/log_settings/log_settings.py).
+#
+# Auth events are high-volume and mostly scanner noise; sudo commands are
+# low-volume and are the record you actually want when reconstructing what an
+# intruder did. Hence the different retentions.
+default_log_clearing_doctypes = {
+	"SSH Auth Event": 90,
+	"SSH Sudo Command": 180,
+}
 
 # Translation
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+website_route_rules = [
+	{"from_route": "/serving/<path:app_path>", "to_route": "serving"},
+]

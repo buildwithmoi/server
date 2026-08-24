@@ -1,0 +1,196 @@
+{
+ "actions": [],
+ "autoname": "field:ip_address",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ip_address",
+  "status",
+  "country",
+  "country_code",
+  "column_break_geo",
+  "region",
+  "city",
+  "latitude",
+  "longitude",
+  "network_section",
+  "isp",
+  "org",
+  "column_break_net",
+  "asn",
+  "history_section",
+  "first_seen",
+  "last_seen",
+  "column_break_hist",
+  "resolved_at",
+  "resolver",
+  "error"
+ ],
+ "fields": [
+  {
+   "description": "The address itself, which is also this record's name \u2014 so an event's Source IP link reads as the address and needs no lookup.",
+   "fieldname": "ip_address",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "IP Address",
+   "read_only": 0,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "Pending",
+   "description": "'Private' means a loopback, LAN or otherwise non-routable address. Those are never sent to a geolocation provider.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nResolved\nPrivate\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Country",
+   "options": "Country",
+   "read_only": 1
+  },
+  {
+   "fieldname": "country_code",
+   "fieldtype": "Data",
+   "label": "Country Code",
+   "length": 2,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_geo",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Data",
+   "label": "Region",
+   "read_only": 1
+  },
+  {
+   "fieldname": "city",
+   "fieldtype": "Data",
+   "label": "City",
+   "read_only": 1
+  },
+  {
+   "fieldname": "latitude",
+   "fieldtype": "Float",
+   "label": "Latitude",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "longitude",
+   "fieldtype": "Float",
+   "label": "Longitude",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "network_section",
+   "fieldtype": "Section Break",
+   "label": "Network",
+   "read_only": 1
+  },
+  {
+   "fieldname": "isp",
+   "fieldtype": "Data",
+   "label": "ISP",
+   "read_only": 1
+  },
+  {
+   "fieldname": "org",
+   "fieldtype": "Data",
+   "label": "Organisation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_net",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "description": "Autonomous system. A hosting-provider ASN behind a 'successful login' is worth a look \u2014 people rarely log in from a datacentre.",
+   "fieldname": "asn",
+   "fieldtype": "Data",
+   "label": "ASN",
+   "read_only": 1
+  },
+  {
+   "fieldname": "history_section",
+   "fieldtype": "Section Break",
+   "label": "History",
+   "read_only": 1
+  },
+  {
+   "fieldname": "first_seen",
+   "fieldtype": "Datetime",
+   "label": "First Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_hist",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolved_at",
+   "fieldtype": "Datetime",
+   "label": "Resolved At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolver",
+   "fieldtype": "Data",
+   "label": "Resolver",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "IP Address Info",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "ip_address"
+}

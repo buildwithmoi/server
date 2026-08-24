@@ -1,0 +1,218 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "event_time",
+  "event_type",
+  "outcome",
+  "username",
+  "invalid_user",
+  "column_break_who",
+  "source_ip",
+  "source_port",
+  "country",
+  "auth_method",
+  "key_fingerprint",
+  "correlation_section",
+  "session_key",
+  "audit_session",
+  "column_break_corr",
+  "hostname",
+  "program",
+  "pid",
+  "provenance_section",
+  "ingest_source",
+  "raw_message",
+  "dedup_hash"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_time",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Event Time",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "event_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Event Type",
+   "options": "Accepted\nFailed\nInvalid User\nSession Opened\nSession Closed\nDisconnected\nRefused\nProtocol Error\nOther",
+   "read_only": 1
+  },
+  {
+   "description": "A flattened view of Event Type so every chart and card is a single equality filter instead of a list of event types that must be kept in sync in six places.",
+   "fieldname": "outcome",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Outcome",
+   "options": "Success\nFailure\nInfo",
+   "read_only": 1
+  },
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Username",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Set when sshd said the account does not exist. Distinguishes someone guessing your password from someone guessing your usernames.",
+   "fieldname": "invalid_user",
+   "fieldtype": "Check",
+   "label": "Invalid User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_who",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "description": "A Link, not free text, so the geolocation and history of an address live in one place and every event drills through to it.",
+   "fieldname": "source_ip",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Source IP",
+   "options": "IP Address Info",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "source_port",
+   "fieldtype": "Int",
+   "label": "Source Port",
+   "read_only": 1
+  },
+  {
+   "description": "Copied from the IP record once resolved. Denormalised on purpose: a Dashboard Chart grouping needs the value on this row, and re-joining millions of log rows to resolve it at chart time would not stay fast.",
+   "fieldname": "country",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Country",
+   "options": "Country",
+   "read_only": 1
+  },
+  {
+   "description": "password, publickey, keyboard-interactive/pam, none, gssapi-with-mic \u2014 stored as free text because a build with extra auth modules can emit values an enum would silently drop.",
+   "fieldname": "auth_method",
+   "fieldtype": "Data",
+   "label": "Auth Method",
+   "read_only": 1
+  },
+  {
+   "description": "Only populated when sshd runs at LogLevel VERBOSE. Tells you WHICH key was used.",
+   "fieldname": "key_fingerprint",
+   "fieldtype": "Data",
+   "label": "Key Fingerprint",
+   "read_only": 1
+  },
+  {
+   "fieldname": "correlation_section",
+   "fieldtype": "Section Break",
+   "label": "Correlation",
+   "read_only": 1
+  },
+  {
+   "description": "Groups every event from one sshd connection. sshd forks a child per connection, so its pid is the correlation key; the boot id is prefixed so pid reuse across a reboot cannot merge two unrelated logins.",
+   "fieldname": "session_key",
+   "fieldtype": "Data",
+   "label": "Session Key",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "description": "The kernel's own login-session id. This is the reliable link between an SSH login and the sudo commands that login went on to run.",
+   "fieldname": "audit_session",
+   "fieldtype": "Data",
+   "label": "Audit Session",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_corr",
+   "fieldtype": "Column Break",
+   "read_only": 1
+  },
+  {
+   "fieldname": "hostname",
+   "fieldtype": "Data",
+   "label": "Hostname",
+   "read_only": 1
+  },
+  {
+   "fieldname": "program",
+   "fieldtype": "Data",
+   "label": "Program",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pid",
+   "fieldtype": "Int",
+   "label": "PID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "provenance_section",
+   "fieldtype": "Section Break",
+   "label": "Provenance",
+   "read_only": 1
+  },
+  {
+   "description": "'fixture' means the row came from a replayed test fixture, not from this machine. Those rows exist so the dashboard can be demonstrated on a box with no sshd.",
+   "fieldname": "ingest_source",
+   "fieldtype": "Select",
+   "label": "Ingest Source",
+   "options": "journald\nauthlog\nfixture",
+   "read_only": 1
+  },
+  {
+   "description": "The complete original log message. Kept so that an event whose meaning we have not yet written a rule for is still recoverable after the fact.",
+   "fieldname": "raw_message",
+   "fieldtype": "Small Text",
+   "label": "Raw Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "dedup_hash",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Dedup Hash",
+   "length": 40,
+   "read_only": 1,
+   "unique": 1
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "SSH Auth Event",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC"
+}

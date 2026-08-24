@@ -1,0 +1,186 @@
+{
+ "actions": [],
+ "autoname": "field:source",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "source",
+  "enabled",
+  "column_break_head",
+  "last_run_at",
+  "last_run_status",
+  "position_section",
+  "cursor",
+  "file_path",
+  "column_break_position",
+  "inode",
+  "byte_offset",
+  "file_signature",
+  "stats_section",
+  "records_read",
+  "records_inserted",
+  "column_break_stats",
+  "records_skipped",
+  "records_unparsed",
+  "error_section",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "description": "Which reader this checkpoint belongs to: 'journald' or 'authlog'. One row per source, so switching sources and switching back resumes where each left off instead of re-reading.",
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Source",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "description": "Clear this to park a source without deleting its position. Useful when pinning to the other source temporarily.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "last_run_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Last Run At",
+   "read_only": 1
+  },
+  {
+   "default": "Never Run",
+   "description": "'Source Unavailable' means the log could not be read at all \u2014 usually a permissions problem. 'Cursor Lost' means the journal rotated past our stored position; the reader restarts from Bootstrap Hours and dedup absorbs the overlap, so no action is needed.",
+   "fieldname": "last_run_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Last Run Status",
+   "options": "Never Run\nOK\nNo New Records\nCursor Lost\nSource Unavailable\nError",
+   "read_only": 1
+  },
+  {
+   "fieldname": "position_section",
+   "fieldtype": "Section Break",
+   "label": "Position"
+  },
+  {
+   "description": "journald's opaque __CURSOR for the last record consumed. Stored here rather than in journalctl's own --cursor-file so it is visible in the desk, included in site backups, and cannot drift out of step with the rows that were actually committed.",
+   "fieldname": "cursor",
+   "fieldtype": "Small Text",
+   "label": "Journal Cursor",
+   "read_only": 1
+  },
+  {
+   "description": "The auth.log file this offset refers to.",
+   "fieldname": "file_path",
+   "fieldtype": "Data",
+   "label": "File Path",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_position",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Inode of the file at the time the offset was taken. This is how log rotation is detected: a changed inode means the file we were reading is now auth.log.1, and its tail must be drained before starting the new file at zero.",
+   "fieldname": "inode",
+   "fieldtype": "Data",
+   "label": "Inode",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "How far into the file we have read. Only ever advanced past a line that ended in a newline, so a half-written line is never treated as consumed.",
+   "fieldname": "byte_offset",
+   "fieldtype": "Long Int",
+   "label": "Byte Offset",
+   "read_only": 1
+  },
+  {
+   "description": "Fingerprint of the first bytes of the auth.log, as '<bytes>:<sha1>'. Appends never change a file's head, so a changed fingerprint means the file was replaced \u2014 which catches the case where the filesystem reuses the inode and the size check is fooled as well.",
+   "fieldname": "file_signature",
+   "fieldtype": "Data",
+   "label": "File Signature",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stats_section",
+   "fieldtype": "Section Break",
+   "label": "Last Run"
+  },
+  {
+   "default": "0",
+   "fieldname": "records_read",
+   "fieldtype": "Int",
+   "label": "Records Read",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "records_inserted",
+   "fieldtype": "Int",
+   "label": "Records Inserted",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_stats",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Records already present, recognised by their dedup hash. A non-zero value after a Cursor Lost run is expected and is the safety net working.",
+   "fieldname": "records_skipped",
+   "fieldtype": "Int",
+   "label": "Records Skipped",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "sshd or sudo lines that matched no rule. This should be zero. A persistent non-zero count means this server emits a message format the parser has never seen \u2014 check Last Error for a sample and add a rule with a fixture.",
+   "fieldname": "records_unparsed",
+   "fieldtype": "Int",
+   "label": "Records Unparsed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error_section",
+   "fieldtype": "Section Break",
+   "label": "Diagnostics"
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "Server Ingest Checkpoint",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

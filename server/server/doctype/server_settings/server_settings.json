@@ -1,0 +1,260 @@
+{
+ "actions": [],
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ssh_section",
+  "ssh_monitoring_enabled",
+  "log_source",
+  "detected_log_source",
+  "auth_log_path",
+  "column_break_ssh",
+  "max_records_per_run",
+  "bootstrap_hours",
+  "ignore_programs",
+  "geo_section",
+  "geo_enabled",
+  "geo_resolver",
+  "geo_batch_size",
+  "column_break_geo",
+  "geo_re_resolve_after_days",
+  "geo_api_key",
+  "alert_section",
+  "alerts_enabled",
+  "alert_recipients",
+  "failed_login_threshold",
+  "column_break_alert",
+  "alert_on_new_country",
+  "alert_on_root_login",
+  "trusted_countries",
+  "bench_section",
+  "allow_app_install",
+  "bench_root",
+  "bench_executable",
+  "column_break_bench",
+  "install_timeout_seconds",
+  "git_ssh_command"
+ ],
+ "fields": [
+  {
+   "fieldname": "ssh_section",
+   "fieldtype": "Section Break",
+   "label": "SSH Monitoring"
+  },
+  {
+   "default": "0",
+   "description": "Master switch for log ingestion. Leave OFF until you have confirmed this server actually writes sshd records where the app can read them \u2014 run the facility check in CLAUDE.md first. When off, the scheduled ingest job exits immediately and writes nothing.",
+   "fieldname": "ssh_monitoring_enabled",
+   "fieldtype": "Check",
+   "label": "Enable SSH Monitoring"
+  },
+  {
+   "default": "Auto",
+   "description": "Where auth events are read from. Auto probes journald first (structured, gives a resumable cursor and the kernel audit-session id) and falls back to the auth.log text file. Pin this to a specific source only when diagnosing \u2014 a wrong pin silently stops ingestion.",
+   "fieldname": "log_source",
+   "fieldtype": "Select",
+   "label": "Log Source",
+   "options": "Auto\nJournald\nAuth Log\nDisabled"
+  },
+  {
+   "description": "Read-only. What Auto actually chose on the last run, so you are never guessing which source is live. 'none' means neither journald nor auth.log was readable by the bench user.",
+   "fieldname": "detected_log_source",
+   "fieldtype": "Data",
+   "label": "Detected Log Source",
+   "read_only": 1
+  },
+  {
+   "default": "/var/log/auth.log",
+   "description": "Only used when the source is Auth Log. Debian/Ubuntu write /var/log/auth.log; RHEL-family systems use /var/log/secure. The bench user must be able to read it \u2014 on Ubuntu that means membership of the 'adm' group, which needs no sudo.",
+   "fieldname": "auth_log_path",
+   "fieldtype": "Data",
+   "label": "Auth Log Path"
+  },
+  {
+   "fieldname": "column_break_ssh",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "5000",
+   "description": "Back-pressure. A large backlog is drained across several runs rather than in one, so a brute-force burst can never make a single job exhaust memory. The checkpoint advances only as far as the records actually consumed, so nothing is skipped.",
+   "fieldname": "max_records_per_run",
+   "fieldtype": "Int",
+   "label": "Max Records Per Run"
+  },
+  {
+   "default": "24",
+   "description": "How far back to read on the very first run, and after a journal cursor is lost (which happens when the journal rotates past the position we stored). Re-reading is safe: every record carries a unique dedup hash, so an overlapping window inserts nothing new.",
+   "fieldname": "bootstrap_hours",
+   "fieldtype": "Int",
+   "label": "Bootstrap Hours"
+  },
+  {
+   "default": "CRON\npolkitd\n(systemd)",
+   "description": "One syslog program name per line, dropped before parsing. This is not cosmetic: on a typical box CRON's PAM session pairs are roughly three quarters of all auth-facility volume, and none of it is a login. Do NOT add 'sshd' or 'sudo' here.",
+   "fieldname": "ignore_programs",
+   "fieldtype": "Small Text",
+   "label": "Ignore Programs"
+  },
+  {
+   "fieldname": "geo_section",
+   "fieldtype": "Section Break",
+   "label": "Geolocation"
+  },
+  {
+   "default": "1",
+   "description": "Resolve each source IP to a country so the dashboard can show where logins come from. Turn off if this server must make no outbound requests at all; events are still recorded, they simply have no country.",
+   "fieldname": "geo_enabled",
+   "fieldtype": "Check",
+   "label": "Enable Geolocation"
+  },
+  {
+   "default": "ip-api.com",
+   "description": "ip-api.com is free and needs no key. Lookups are batched 100 IPs per request and each IP is resolved once and cached forever, so the free 45-requests-per-minute limit is never approached. Private and loopback addresses are never sent anywhere.",
+   "fieldname": "geo_resolver",
+   "fieldtype": "Select",
+   "label": "Resolver",
+   "options": "ip-api.com\nDisabled"
+  },
+  {
+   "default": "100",
+   "description": "IPs per lookup request. 100 is ip-api.com's documented maximum for a single batch call; raising it will cause the provider to reject the request.",
+   "fieldname": "geo_batch_size",
+   "fieldtype": "Int",
+   "label": "Batch Size"
+  },
+  {
+   "fieldname": "column_break_geo",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "0 means never re-resolve an IP once it has a country. Set a value only if you care about addresses being reassigned between networks, which for auditing an intrusion is rarely worth the extra requests.",
+   "fieldname": "geo_re_resolve_after_days",
+   "fieldtype": "Int",
+   "label": "Re-resolve After (Days)"
+  },
+  {
+   "description": "Not needed for the free ip-api.com tier \u2014 leave blank. It exists so a paid endpoint or a MaxMind licence key can be added later without a schema change.",
+   "fieldname": "geo_api_key",
+   "fieldtype": "Password",
+   "label": "Resolver API Key"
+  },
+  {
+   "fieldname": "alert_section",
+   "fieldtype": "Section Break",
+   "label": "Alerting"
+  },
+  {
+   "default": "1",
+   "description": "Raise a desk notification when an ingest run sees something worth a human look. Alerts are de-duplicated per rule per day, so a brute-force run of thousands of attempts produces one notification, not thousands.",
+   "fieldname": "alerts_enabled",
+   "fieldtype": "Check",
+   "label": "Enable Alerts"
+  },
+  {
+   "description": "One email address per line. Leave blank to notify every enabled System Manager, which is the safer default \u2014 an empty list here never means 'nobody gets told'.",
+   "fieldname": "alert_recipients",
+   "fieldtype": "Small Text",
+   "label": "Alert Recipients"
+  },
+  {
+   "default": "10",
+   "description": "Failed attempts from one IP within a single ingest window before an alert is raised. With fail2ban active most attackers are banned before reaching this, so a trigger means either fail2ban is not working or the source is distributed.",
+   "fieldname": "failed_login_threshold",
+   "fieldtype": "Int",
+   "label": "Failed Login Threshold"
+  },
+  {
+   "fieldname": "column_break_alert",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "Alert the first time a SUCCESSFUL login arrives from a country never seen before. This is the highest-signal rule available: an attacker with valid credentials looks exactly like you, except for where they are.",
+   "fieldname": "alert_on_new_country",
+   "fieldtype": "Check",
+   "label": "Alert On New Country"
+  },
+  {
+   "default": "1",
+   "description": "Alert on any successful login as root. On a correctly hardened server (PermitRootLogin no) this is impossible, which is precisely why it is worth alerting on \u2014 it means the SSH configuration changed.",
+   "fieldname": "alert_on_root_login",
+   "fieldtype": "Check",
+   "label": "Alert On Root Login"
+  },
+  {
+   "description": "One two-letter ISO country code per line (e.g. GH, DE). Logins from these never raise the new-country alert. Keep it short \u2014 every code added here is a place an attacker can log in from without you being told.",
+   "fieldname": "trusted_countries",
+   "fieldtype": "Small Text",
+   "label": "Trusted Countries"
+  },
+  {
+   "fieldname": "bench_section",
+   "fieldtype": "Section Break",
+   "label": "Bench Management"
+  },
+  {
+   "default": "0",
+   "description": "Safety interlock. While OFF, no App Install Request can run and nothing in this app will execute a bench command. Turn it on deliberately, and consider turning it back off once the apps you needed are installed.",
+   "fieldname": "allow_app_install",
+   "fieldtype": "Check",
+   "label": "Allow App Installs"
+  },
+  {
+   "default": "/home/patoo",
+   "description": "Directory scanned for benches. A folder counts as a bench only if it contains all of apps/, sites/, config/, logs/ and config/pids \u2014 the same test the bench CLI itself uses. Leave blank to use the parent directory of the bench this app is running in.",
+   "fieldname": "bench_root",
+   "fieldtype": "Data",
+   "label": "Bench Root"
+  },
+  {
+   "default": "/usr/local/bin/bench",
+   "description": "Absolute path to the bench CLI. Must be absolute: background workers do not inherit your login shell's PATH, so a bare 'bench' will not be found.",
+   "fieldname": "bench_executable",
+   "fieldtype": "Data",
+   "label": "Bench Executable"
+  },
+  {
+   "fieldname": "column_break_bench",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1800",
+   "description": "How long a single bench command may run before the app kills its whole process group. A cold clone of a large app plus its pip install can legitimately take several minutes; 1800 leaves generous headroom while still guaranteeing a stuck job cannot hold a worker forever.",
+   "fieldname": "install_timeout_seconds",
+   "fieldtype": "Int",
+   "label": "Install Timeout (Seconds)"
+  },
+  {
+   "default": "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15",
+   "description": "Exported as GIT_SSH_COMMAND for every git operation. BatchMode=yes is the load-bearing part: it turns a missing key or a passphrase prompt into an immediate error instead of a background job that hangs forever waiting for input nobody can type.",
+   "fieldname": "git_ssh_command",
+   "fieldtype": "Data",
+   "label": "Git SSH Command"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "Server Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
