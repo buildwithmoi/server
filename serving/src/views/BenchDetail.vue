@@ -1,8 +1,20 @@
 <template>
 	<AppShell :title="name" :subtitle="subtitle">
 		<template #actions>
+			<Button @click="showCommands = true">
+				<template #prefix><Icon name="terminal" :size="14" /></template>
+				Bench Commands
+			</Button>
 			<Dropdown :options="actions" :button="{ label: 'Actions', iconRight: null }" placement="right" />
 		</template>
+
+		<BenchCommandDialog
+			v-model="showCommands"
+			:bench="name"
+			:sites="bench.sites.map((s) => s.site_name)"
+			:default-site="bench.default_site || ''"
+			@started="onStarted"
+		/>
 
 		<InstallDialog
 			v-model="showInstall"
@@ -135,7 +147,7 @@
 							<li v-for="req in bench.installs" :key="req.name"
 							    class="flex items-center justify-between gap-3 px-4 py-2 text-[13px]">
 								<OutcomeMark
-									:outcome="req.status === 'Success' ? 'Success' : req.status === 'Failed' ? 'Failure' : 'Info'"
+									:outcome="['Success', 'Completed With Warnings'].includes(req.status) ? 'Success' : req.status === 'Failed' ? 'Failure' : 'Info'"
 									:label="req.status"
 								/>
 								<span class="u-mono min-w-0 flex-1 truncate">{{ req.app_name }}</span>
@@ -152,13 +164,14 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
-import { Dropdown, toast } from "frappe-ui";
+import { Button, Dropdown, toast } from "frappe-ui";
 import { useRoute, useRouter } from "vue-router";
 
 import AppShell from "../components/AppShell.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
+import BenchCommandDialog from "../components/BenchCommandDialog.vue";
 import InstallDialog from "../components/InstallDialog.vue";
 import Skeleton from "../components/Skeleton.vue";
 import { benchResource, rescanBenchesResource } from "../api";
@@ -168,6 +181,7 @@ const router = useRouter();
 const resource = benchResource();
 const rescanning = ref(false);
 const showInstall = ref(false);
+const showCommands = ref(false);
 const installMode = ref("Clone");
 
 const name = computed(() => String(route.params.name || ""));
@@ -208,6 +222,12 @@ const actions = computed(() => [
 		description: "git pull inside an app already in this bench",
 		onClick: () => openInstall("Pull"),
 		condition: () => bench.value.exists_on_disk !== false && bench.value.apps.length > 0,
+	},
+	{
+		label: "Run a bench command…",
+		description: "migrate, backup, clear cache, and the rest",
+		onClick: () => (showCommands.value = true),
+		condition: () => bench.value.exists_on_disk !== false,
 	},
 	{
 		label: "Rescan this bench",

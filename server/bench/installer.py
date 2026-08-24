@@ -24,6 +24,7 @@ good day:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -34,7 +35,7 @@ import time
 import frappe
 from frappe.utils.synchronization import LockTimeoutError, filelock
 
-from server.bench import doctor, scanner
+from server.bench import commands, doctor, scanner
 from server.server.doctype.server_settings.server_settings import get_settings
 
 #: How often, at most, to push log lines to a watching browser.
@@ -49,6 +50,14 @@ _LINE_BREAK = re.compile(r"[\r\n]")
 
 LOG_EVENT = "server:app_install_log"
 DONE_EVENT = "server:app_install_done"
+
+#: bench ends a get-app by calling `sudo supervisorctl status` to decide whether
+#: to restart processes. On a host with no passwordless sudo that raises, and
+#: bench exits 1 — AFTER the app has been cloned and pip-installed. It does this
+#: even when restart_supervisor_on_update and restart_systemd_on_update are both
+#: false, which is how two perfectly good erpnext clones were reported as
+#: failures here.
+_SUPERVISOR_POSTSTEP = re.compile(r"supervisorctl|restart_supervisor_processes", re.IGNORECASE)
 
 #: exit_code when the command was never executed at all — a pre-flight refused
 #: it. A frappe Int column is NOT NULL, so None is not storable, and 0 already
@@ -82,9 +91,35 @@ def _preflight(request, bench_doc, settings) -> list[str]:
 	if not os.path.isfile(bench_exe) or not os.access(bench_exe, os.X_OK):
 		raise InstallAborted(f"{bench_exe} is not an executable file.")
 
+	if request.is_command():
+		return _preflight_command(request, bench_doc)
 	if request.is_pull():
 		return _preflight_pull(request)
 	return _preflight_clone(request, bench_doc)
+
+
+def _preflight_command(request, bench_doc) -> list[str]:
+	"""Confirm the command still exists, is runnable, and its site is real."""
+	command = commands.get(request.bench_command or "")
+	if not command:
+		raise InstallAborted(f"{request.bench_command!r} is not a known bench command.")
+	if not command.runnable:
+		raise InstallAborted(command.unsupported_reason or f"{command.label} cannot be run from here.")
+
+	if command.scope == commands.SCOPE_SITE:
+		site = (request.install_on_site or "").strip()
+		if site not in bench_doc.site_names():
+			raise InstallAborted(
+				f"{site!r} is not a site on {bench_doc.name}. "
+				f"Known sites: {', '.join(bench_doc.site_names()) or 'none'}."
+			)
+
+	notes = [f"{command.label} · {command.risk}"]
+	if command.risk == commands.RISK_DESTRUCTIVE:
+		# Recorded in the log itself, so the record of what happened carries the
+		# warning that was shown before it happened.
+		notes.append("This command is destructive and no backup was taken automatically.")
+	return notes
 
 
 def _preflight_clone(request, bench_doc) -> list[str]:
@@ -411,7 +446,30 @@ def run_install_request(name: str) -> dict:
 		# parallel while one bench never sees concurrent get-app calls.
 		try:
 			with filelock(f"server_bench_install::{bench_doc.name}", timeout=5, is_global=True):
-				if request.is_pull():
+				if request.is_command():
+					command = commands.get(request.bench_command)
+					argv = commands.build_argv(
+						command,
+						settings.bench_executable,
+						request.install_on_site or None,
+						json.loads(request.command_params or "{}"),
+					)
+					request.db_set("command", " ".join(argv), update_modified=False)
+					frappe.db.commit()
+					emit(f"$ {' '.join(argv)}")
+
+					# The catalogue carries its own timeout: a clear-cache should
+					# not inherit the hour a bench update legitimately needs.
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, command.timeout, emit)
+					if code != 0:
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_failure(
+								code, timed_out, command.timeout, request, f"bench {command.label.lower()}"
+							),
+						)
+				elif request.is_pull():
 					app = scanner.read_app(request.app_path)
 					argv = build_pull_argv(request, app)
 					request.db_set("command", " ".join(argv), update_modified=False)
@@ -439,6 +497,30 @@ def run_install_request(name: str) -> dict:
 
 					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
 					if code != 0:
+						# Ask the FILESYSTEM whether the work happened, rather than
+						# trusting the exit code alone. This is not string-matching
+						# the log to decide success — the app either landed on disk
+						# at the branch that was asked for, or it did not.
+						landed = _clone_landed(request)
+						benign = landed and _SUPERVISOR_POSTSTEP.search("\n".join(buffer[-60:]))
+						if benign:
+							emit("")
+							emit(
+								"[note] The app was cloned and installed. bench then exited "
+								f"{code} because its final step runs `sudo supervisorctl status`, "
+								"which needs a password on this host. Nothing about the install is "
+								"affected."
+							)
+							return finish(
+								"Completed With Warnings",
+								exit_code=code,
+								error=(
+									"Installed successfully. bench's own post-step failed: it runs "
+									"`sudo supervisorctl status` to decide whether to restart "
+									"processes, and this host has no passwordless sudo. Do not re-run "
+									"this — the app is already in place."
+								),
+							)
 						return finish(
 							"Failed",
 							exit_code=code,
@@ -488,6 +570,25 @@ def run_install_request(name: str) -> dict:
 			)
 			frappe.db.commit()
 			return {"name": name, "status": "Failed", "error": str(exc)}
+
+
+def _clone_landed(request) -> bool:
+	"""Is the app actually on disk, as a checkout of the branch that was asked for?
+
+	The outcome check that lets a non-zero exit still be reported honestly. It
+	deliberately looks at the filesystem rather than the log: bench's exit code
+	answers "did the command end cleanly", which is a different question from
+	"is the app installed".
+	"""
+	try:
+		app = scanner.read_app(request.app_path)
+	except Exception:
+		return False
+	if not app.git_url:
+		return False
+	if request.branch and app.branch and app.branch != request.branch:
+		return False
+	return True
 
 
 def _explain_failure(code: int, timed_out: bool, timeout: int, request, what: str) -> str:

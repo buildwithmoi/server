@@ -106,7 +106,7 @@
 			<header class="flex items-center justify-between gap-3 border-b border-[var(--rule)] px-4 py-3">
 				<div class="flex min-w-0 items-center gap-2.5">
 					<Spinner v-if="!active.is_terminal" class="h-3.5 w-3.5 shrink-0" />
-					<OutcomeMark v-else :outcome="active.status === 'Success' ? 'Success' : 'Failure'" :label="active.status" />
+					<OutcomeMark v-else :outcome="['Success', 'Completed With Warnings'].includes(active.status) ? 'Success' : 'Failure'" :label="active.status" />
 					<span class="u-mono truncate text-[13px]">{{ active.name }} · {{ active.app_name }}</span>
 				</div>
 				<button class="text-[12px] text-[var(--ink-faint)] hover:text-[var(--ink)]" @click="active = null">
@@ -137,7 +137,7 @@
 			<template #cell-status="{ row }">
 				<button class="flex items-center gap-1.5" @click="open(row.name)">
 					<OutcomeMark
-						:outcome="row.status === 'Success' ? 'Success' : row.status === 'Failed' ? 'Failure' : 'Info'"
+						:outcome="['Success', 'Completed With Warnings'].includes(row.status) ? 'Success' : row.status === 'Failed' ? 'Failure' : 'Info'"
 						:label="row.status"
 					/>
 				</button>
@@ -267,7 +267,7 @@ function startPolling(name) {
 				stopPolling();
 				list.fetch();
 				benches.fetch();
-				(data.status === "Success" ? toast.success : toast.error)(
+				(['Success', 'Completed With Warnings'].includes(data.status) ? toast.success : toast.error)(
 					`${data.name} ${data.status.toLowerCase()}`,
 				);
 			}

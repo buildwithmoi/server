@@ -28,7 +28,7 @@
 						</span>
 						<OutcomeMark
 							v-else
-							:outcome="job.status === 'Success' ? 'Success' : 'Failure'"
+							:outcome="okStatuses.includes(job.status) ? 'Success' : 'Failure'"
 							:with-label="false"
 							class="shrink-0"
 						/>
@@ -110,14 +110,19 @@ function tick(job) {
 }
 
 const activeVerb = (job) => (job.operation === "Pull" ? "Updating" : "Cloning");
-const terminalVerb = (job) =>
-	job.status === "Success"
-		? job.operation === "Pull"
-			? "Updated"
-			: "Cloned"
-		: job.operation === "Pull"
-			? "Update failed —"
-			: "Clone failed —";
+// A warning is not a failure. Showing it as one recreates exactly the
+// confusion this status exists to remove.
+const okStatuses = ["Success", "Completed With Warnings"];
+
+const terminalVerb = (job) => {
+	const noun =
+		job.operation === "Pull" ? "Update" : job.operation === "Command" ? "Command" : "Clone";
+	if (job.status === "Completed With Warnings") return noun + " done, with a warning —";
+	if (okStatuses.includes(job.status)) {
+		return { Update: "Updated", Command: "Ran", Clone: "Cloned" }[noun];
+	}
+	return noun + " failed —";
+};
 
 function toggle(job) {
 	expand(expandedJob.value?.name === job.name ? null : job.name);

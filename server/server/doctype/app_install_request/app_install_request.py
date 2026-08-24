@@ -26,17 +26,23 @@ VALID_SITE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 #: three-minute subprocess failure.
 VALID_REMOTE = re.compile(r"^(?:git@[\w.-]+:|ssh://[\w.@-]+/|https://[\w.-]+/)")
 
-TERMINAL_STATUSES = ("Success", "Failed", "Cancelled")
+TERMINAL_STATUSES = ("Success", "Completed With Warnings", "Failed", "Cancelled")
+
+#: Statuses that mean the work was actually done.
+OK_STATUSES = ("Success", "Completed With Warnings")
 
 OP_CLONE = "Clone"
 OP_PULL = "Pull"
+OP_COMMAND = "Command"
 
 
 class AppInstallRequest(Document):
 	def validate(self):
 		self.operation = self.operation or OP_CLONE
 		self._validate_common()
-		if self.operation == OP_PULL:
+		if self.operation == OP_COMMAND:
+			self._validate_command()
+		elif self.operation == OP_PULL:
 			self._validate_pull()
 		else:
 			self._validate_clone()
@@ -46,6 +52,40 @@ class AppInstallRequest(Document):
 	def _validate_common(self):
 		if self.branch and not VALID_BRANCH.match(self.branch):
 			frappe.throw(f"{self.branch!r} is not a valid branch name.")
+		if self.install_on_site and not VALID_SITE.match(self.install_on_site):
+			frappe.throw(f"{self.install_on_site!r} is not a valid site name.")
+
+	def _validate_command(self):
+		"""A command must exist in the catalogue and be one we will run.
+
+		Validated here as well as in the API because the record can be created
+		by either path, and a request that cannot run should never reach the
+		queue in the first place.
+		"""
+		import json
+
+		from server.bench import commands
+
+		command = commands.get(self.bench_command or "")
+		if not command:
+			frappe.throw(f"{self.bench_command!r} is not a known bench command.", title="Unknown Command")
+		if not command.runnable:
+			frappe.throw(
+				command.unsupported_reason or f"{command.label} cannot be run from here.",
+				title="Not Runnable",
+			)
+		if command.scope == commands.SCOPE_SITE and not self.install_on_site:
+			frappe.throw(f"{command.label} needs a site.")
+
+		# Build it now purely to surface a bad parameter at save time rather
+		# than three seconds into a worker.
+		params = json.loads(self.command_params or "{}")
+		try:
+			commands.build_argv(command, "/usr/local/bin/bench", self.install_on_site, params)
+		except commands.CommandRefused as exc:
+			frappe.throw(str(exc), title="Cannot Build Command")
+
+		self.app_name = command.label
 
 	def _validate_pull(self):
 		if not self.app_name:
@@ -68,9 +108,6 @@ class AppInstallRequest(Document):
 		)
 
 	def _validate_clone(self):
-		if self.install_on_site and not VALID_SITE.match(self.install_on_site):
-			frappe.throw(f"{self.install_on_site!r} is not a valid site name.")
-
 		if self.source_type == "Git URL":
 			if not self.git_url:
 				frappe.throw("Enter a Git URL, or switch the source to a GitHub Profile.")
@@ -137,8 +174,14 @@ class AppInstallRequest(Document):
 	def is_pull(self) -> bool:
 		return self.operation == OP_PULL
 
+	def is_command(self) -> bool:
+		return self.operation == OP_COMMAND
+
 	def is_terminal(self) -> bool:
 		return self.status in TERMINAL_STATUSES
+
+	def succeeded(self) -> bool:
+		return self.status in OK_STATUSES
 
 	def append_output(self, chunk: str) -> None:
 		"""Persist log output without touching `modified`.

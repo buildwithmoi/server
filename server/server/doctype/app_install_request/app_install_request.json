@@ -17,6 +17,8 @@
   "column_break_source",
   "git_url",
   "resolved_git_url",
+  "bench_command",
+  "command_params",
   "options_section",
   "skip_assets",
   "overwrite_existing",
@@ -40,13 +42,13 @@
  "fields": [
   {
    "default": "Clone",
-   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app that is already there, to bring it up to date. They are different enough that mixing them into one button would hide which one is about to happen.",
+   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app already there. Command runs one of the catalogued bench commands. They are different enough that the choice is always explicit rather than inferred from which fields happen to be filled in.",
    "fieldname": "operation",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Operation",
-   "options": "Clone\nPull",
+   "options": "Clone\nPull\nCommand",
    "reqd": 1
   },
   {
@@ -155,11 +157,11 @@
    "fieldtype": "Column Break"
   },
   {
-   "depends_on": "eval:doc.operation==\"Clone\"",
-   "description": "Optional. After a successful clone, run bench --site <site> install-app. Leave blank to only place the code on disk.",
+   "depends_on": "eval:doc.operation==\"Clone\" || doc.operation==\"Command\"",
+   "description": "For a Clone, optionally run `bench --site <site> install-app` afterwards. For a site-scoped Command, the site it runs against. Leave blank on a Clone to only place the code on disk.",
    "fieldname": "install_on_site",
    "fieldtype": "Data",
-   "label": "Install On Site"
+   "label": "Site"
   },
   {
    "depends_on": "eval:doc.operation==\"Clone\" && doc.install_on_site",
@@ -175,12 +177,13 @@
   },
   {
    "default": "Draft",
+   "description": "\u201cCompleted With Warnings\u201d means the work was done but the command still exited non-zero. The case this exists for: bench finishes a get-app by calling `sudo supervisorctl status`, which fails on a host with no passwordless sudo \u2014 the app is cloned and installed, and only the cosmetic restart failed. Reporting that as Failed invites a re-run, and a re-run needs --overwrite, which archives the app that was already fine.",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Draft\nQueued\nRunning\nSuccess\nFailed\nCancelled",
+   "options": "Draft\nQueued\nRunning\nSuccess\nCompleted With Warnings\nFailed\nCancelled",
    "read_only": 1
   },
   {
@@ -241,6 +244,22 @@
    "fieldtype": "Code",
    "label": "Output",
    "options": "Text",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Command\"",
+   "description": "Identifier from the catalogue in server/bench/commands.py. Commands are never assembled from free text \u2014 the argv comes from a fixed entry plus parameters matched against a pattern.",
+   "fieldname": "bench_command",
+   "fieldtype": "Data",
+   "label": "Command",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Command\"",
+   "description": "JSON of the values supplied for this command's parameters, each validated against the pattern its catalogue entry declares.",
+   "fieldname": "command_params",
+   "fieldtype": "Small Text",
+   "label": "Command Parameters",
    "read_only": 1
   }
  ],

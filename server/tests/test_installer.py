@@ -251,6 +251,83 @@ class TestFailureExplanation(unittest.TestCase):
 		self.assertIn("shallow", message.lower())
 
 
+class TestSupervisorPostStepIsNotAFailure(unittest.TestCase):
+	"""bench exits 1 after a perfectly good clone, and that must not read as failure.
+
+	bench ends `get-app` by calling `sudo supervisorctl status` to decide
+	whether to restart processes. On a host with no passwordless sudo that
+	raises and bench exits 1 — after the app has been cloned and pip-installed.
+	It does this even when restart_supervisor_on_update is false. Two real
+	erpnext clones were reported as failures this way, and a re-run needs
+	--overwrite, which archives the app that was already fine.
+	"""
+
+	def test_the_post_step_is_recognised(self):
+		log = (
+			"Installing erpnext\n"
+			'  File "/usr/local/lib/python3.12/dist-packages/bench/utils/bench.py", line 350, '
+			"in restart_supervisor_processes\n"
+			'    supervisor_status = get_cmd_output("sudo supervisorctl status", cwd=bench_path)\n'
+			"subprocess.CalledProcessError: Command 'sudo supervisorctl status' returned non-zero exit status 1."
+		)
+		self.assertTrue(installer._SUPERVISOR_POSTSTEP.search(log))
+
+	def test_an_unrelated_failure_is_not_mistaken_for_it(self):
+		"""A genuine clone failure must still be a failure."""
+		log = "fatal: could not read Username for 'https://github.com': No such device or address"
+		self.assertIsNone(installer._SUPERVISOR_POSTSTEP.search(log))
+
+	def test_outcome_check_requires_the_app_on_disk(self):
+		"""The exit code answers a different question from 'is it installed'."""
+		import tempfile
+
+		class _Request:
+			branch = None
+
+			def __init__(self, path):
+				self.app_path = path
+
+		with tempfile.TemporaryDirectory() as tmp:
+			self.assertFalse(
+				installer._clone_landed(_Request(os.path.join(tmp, "nope"))),
+				"a missing directory can never count as landed",
+			)
+
+	def test_outcome_check_rejects_the_wrong_branch(self):
+		"""Landing something is not the same as landing what was asked for."""
+		import subprocess as sp
+		import tempfile
+
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = os.path.join(tmp, "app")
+			os.makedirs(repo)
+			env = {
+				"PATH": "/usr/bin:/bin",
+				"HOME": tmp,
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@t",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@t",
+			}
+			for argv in (
+				["git", "init", "-q", "-b", "main"],
+				["git", "remote", "add", "upstream", "https://example.invalid/a.git"],
+				["git", "commit", "-q", "--allow-empty", "-m", "x"],
+			):
+				sp.run(argv, cwd=repo, env=env, check=True, capture_output=True)
+
+			class _Request:
+				app_path = repo
+				branch = "main"
+
+			self.assertTrue(installer._clone_landed(_Request()))
+
+			class _Wrong(_Request):
+				branch = "version-15"
+
+			self.assertFalse(installer._clone_landed(_Wrong()))
+
+
 class TestNeverRanSentinel(unittest.TestCase):
 	def test_sentinel_is_distinct_from_success(self):
 		"""exit_code is NOT NULL, and 0 already means success.

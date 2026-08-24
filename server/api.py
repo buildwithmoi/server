@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import frappe
 
 from server import dashboard
+from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer
 from server.geo import registry
 from server.server.doctype.server_settings.server_settings import get_settings
@@ -438,6 +439,69 @@ def list_benches() -> list[dict]:
 			for s in doc.sites
 		]
 	return benches
+
+
+@frappe.whitelist()
+def list_bench_commands() -> list[dict]:
+	"""The catalogue of bench commands, including the ones we refuse to run.
+
+	The unrunnable entries are returned deliberately. Someone searching for
+	`console` should find it and be told why it cannot run here, rather than
+	searching an apparently incomplete list.
+	"""
+	_assert_server_admin()
+	return bench_commands.as_dicts()
+
+
+@frappe.whitelist(methods=["POST"])
+def run_bench_command(
+	bench: str,
+	command: str,
+	site: str | None = None,
+	params: dict | str | None = None,
+	confirm: str | None = None,
+) -> dict:
+	"""Queue one catalogued bench command against a bench.
+
+	A destructive command requires `confirm` to equal its label exactly. That is
+	deliberately more friction than a checkbox: `drop-site` deletes a database
+	and this app takes no backup first, so the interface should make it hard to
+	do by accident and impossible to do by reflex.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	entry = bench_commands.get(command)
+	if not entry:
+		frappe.throw(f"{command!r} is not a known bench command.", title="Unknown Command")
+	if not entry.runnable:
+		frappe.throw(
+			entry.unsupported_reason or f"{entry.label} cannot be run from here.", title="Not Runnable"
+		)
+
+	if entry.risk == bench_commands.RISK_DESTRUCTIVE and (confirm or "").strip() != entry.label:
+		frappe.throw(
+			f"{entry.label} can lose data and no backup is taken first. Type “{entry.label}” to "
+			"confirm you meant it.",
+			title="Confirmation Required",
+		)
+
+	values = frappe.parse_json(params) if isinstance(params, str) else (params or {})
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "App Install Request",
+			"operation": "Command",
+			"bench": bench,
+			"bench_command": command,
+			"install_on_site": site,
+			"command_params": frappe.as_json(values),
+			"status": "Draft",
+		}
+	)
+	doc.insert()
+	frappe.db.commit()
+	return run_install_request(doc.name)
 
 
 @frappe.whitelist()

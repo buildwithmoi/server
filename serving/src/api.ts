@@ -169,6 +169,35 @@ export function benchAppsResource() {
 	return createResource({ url: `${M}.list_bench_apps` });
 }
 
+/* --------------------------------------------------------- bench commands */
+
+export interface BenchCommandParam {
+	name: string;
+	label: string;
+	placeholder: string;
+	required: boolean;
+}
+
+export interface BenchCommandEntry {
+	id: string;
+	label: string;
+	scope: "bench" | "site";
+	description: string;
+	risk: "read" | "routine" | "destructive" | "unsupported";
+	runnable: boolean;
+	unsupported_reason: string;
+	preview: string;
+	params: BenchCommandParam[];
+}
+
+export function benchCommandsResource() {
+	return createResource({ url: `${M}.list_bench_commands` });
+}
+
+export function runBenchCommandResource() {
+	return createResource({ url: `${M}.run_bench_command` });
+}
+
 /* ------------------------------------------------------------------ benches */
 
 export interface BenchApp {
