@@ -25,6 +25,7 @@ good day:
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -42,6 +43,9 @@ STREAM_INTERVAL = 0.25
 #: How often to flush the accumulated log to the database, so a crash still
 #: leaves a usable trail rather than an empty Output field.
 PERSIST_EVERY_LINES = 40
+
+#: git redraws progress with \r; both count as end-of-line for the log.
+_LINE_BREAK = re.compile(r"[\r\n]")
 
 LOG_EVENT = "server:app_install_log"
 DONE_EVENT = "server:app_install_done"
@@ -206,8 +210,13 @@ def build_install_app_argv(request, settings) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> int:
-	"""Run a command, streaming combined output line by line. Returns the exit code.
+def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> tuple[int, bool]:
+	"""Run a command, streaming combined output. Returns (exit_code, timed_out).
+
+	The flag matters. A watchdog kill surfaces as exit -15, which is
+	indistinguishable from any other SIGTERM by exit code alone — and inferring
+	the cause produced a real, badly wrong message: a 30-minute erpnext pull was
+	killed by the timeout and the operator was told the branch had diverged.
 
 	stderr is folded into stdout so the log reads in the order things actually
 	happened. That makes the text unusable as a success signal, which is why the
@@ -230,8 +239,13 @@ def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> int:
 		stdin=subprocess.DEVNULL,
 		stdout=subprocess.PIPE,
 		stderr=subprocess.STDOUT,
-		text=True,
-		bufsize=1,
+		# BINARY, unbuffered, and read with os.read below. Text mode wraps the
+		# pipe in a TextIOWrapper whose iterator only yields on a newline, and
+		# git writes progress with CARRIAGE RETURNS — so a `git fetch` that runs
+		# for twenty minutes produces an empty log until the moment it finishes,
+		# which is indistinguishable from a hung job. Verified on a real
+		# erpnext pull that showed nothing at all while clearly working.
+		bufsize=0,
 		start_new_session=True,
 	)
 
@@ -246,8 +260,27 @@ def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> int:
 	watchdog.start()
 
 	try:
-		for line in proc.stdout:
-			on_line(line.rstrip("\n"))
+		pending = ""
+		fd = proc.stdout.fileno()
+		while True:
+			try:
+				chunk = os.read(fd, 4096)
+			except OSError:
+				break
+			if not chunk:
+				break
+
+			pending += chunk.decode("utf-8", errors="replace")
+			# Both terminators split a line. A bare \r is how git redraws a
+			# progress meter in place, so treating it as a line boundary turns
+			# "Receiving objects: 43%" into visible progress rather than silence.
+			parts = _LINE_BREAK.split(pending)
+			pending = parts.pop()
+			for part in parts:
+				if part.strip():
+					on_line(part.rstrip())
+		if pending.strip():
+			on_line(pending.rstrip())
 	finally:
 		watchdog.cancel()
 		if proc.stdout:
@@ -261,7 +294,7 @@ def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> int:
 	if timed_out.is_set():
 		on_line(f"--- timed out after {timeout}s; process group terminated ---")
 
-	return proc.returncode if proc.returncode is not None else -1
+	return (proc.returncode if proc.returncode is not None else -1), timed_out.is_set()
 
 
 def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
@@ -382,26 +415,35 @@ def run_install_request(name: str) -> dict:
 					app = scanner.read_app(request.app_path)
 					argv = build_pull_argv(request, app)
 					request.db_set("command", " ".join(argv), update_modified=False)
+					# Commit immediately. Without this the command sits in an
+					# uncommitted transaction for the whole run, so the dock has
+					# nothing to show while the work is actually happening.
+					frappe.db.commit()
 					emit(f"$ cd {request.app_path}")
 					emit(f"$ {' '.join(argv)}")
 
 					# cwd is the APP, not the bench: git has to run inside the
 					# checkout it is updating.
-					code = _stream(argv, request.app_path, env, timeout, emit)
+					code, timed_out = _stream(argv, request.app_path, env, timeout, emit)
 					if code != 0:
 						return finish(
 							"Failed",
 							exit_code=code,
-							error=_explain_pull_failure(code, request),
+							error=_explain_failure(code, timed_out, timeout, request, "git pull"),
 						)
 				else:
 					argv = build_get_app_argv(request, settings)
 					request.db_set("command", " ".join(argv), update_modified=False)
+					frappe.db.commit()
 					emit(f"$ {' '.join(argv)}")
 
-					code = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
 					if code != 0:
-						return finish("Failed", exit_code=code, error=f"bench get-app exited {code}")
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_failure(code, timed_out, timeout, request, "bench get-app"),
+						)
 
 					if request.install_on_site:
 						argv = build_install_app_argv(request, settings)
@@ -448,19 +490,34 @@ def run_install_request(name: str) -> dict:
 			return {"name": name, "status": "Failed", "error": str(exc)}
 
 
-def _explain_pull_failure(code: int, request) -> str:
-	"""Name the likely cause rather than echoing an exit code.
+def _explain_failure(code: int, timed_out: bool, timeout: int, request, what: str) -> str:
+	"""Name the actual cause rather than echoing an exit code.
 
-	A non-fast-forward is by far the most common way a pull fails on a bench,
-	and "git pull exited 1" tells nobody what to do about it.
+	Order matters, and getting it wrong is not harmless. A timeout must be
+	reported as a timeout BEFORE any guess about branch divergence: a real
+	erpnext pull was killed by the watchdog at thirty minutes and the operator
+	was told the branch had diverged, which is a completely different problem
+	with a completely different fix.
 	"""
-	if not request.allow_merge:
+	if timed_out:
 		return (
-			f"git pull exited {code}. The most likely cause is that the branch has diverged from "
-			"the remote, which --ff-only refuses rather than merging. Check the log: if a merge is "
+			f"{what} was still running after {timeout}s and was terminated. Pulling or cloning a "
+			"large repository can legitimately take longer, especially a shallow checkout "
+			"(bench clones with --depth 1), where git may have to fetch a great deal of history. "
+			"Raise Install Timeout in Server Settings and try again, or run the command by hand."
+		)
+
+	if code < 0:
+		return f"{what} was killed by signal {abs(code)} before it finished."
+
+	if what == "git pull" and not request.allow_merge:
+		return (
+			f"{what} exited {code}. The most likely cause is that the branch has diverged from the "
+			"remote, which --ff-only refuses rather than merging. Check the log: if a merge is "
 			"genuinely what you want, tick 'Allow Merge Commit' and run it again."
 		)
-	return f"git pull exited {code}."
+
+	return f"{what} exited {code}."
 
 
 def _tail(lines: list[str], count: int = 12) -> str:

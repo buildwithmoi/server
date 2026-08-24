@@ -237,9 +237,22 @@ function openInstall(mode) {
 	showInstall.value = true;
 }
 
-/** A queued job belongs on the Installs page, where its log streams. */
+/**
+ * Nothing to do — the dock picks the job up and follows it from here.
+ *
+ * This used to push to the Installs page, which threw away the context the
+ * user was in the middle of. Staying put is the point.
+ */
 function onStarted() {
-	router.push({ name: "Installs" });
+	rescanLater();
+}
+
+/**
+ * Refresh this bench once the operation has had time to land, so the app list
+ * reflects what was just installed without needing a manual rescan.
+ */
+function rescanLater() {
+	setTimeout(load, 4000);
 }
 
 async function rescan() {

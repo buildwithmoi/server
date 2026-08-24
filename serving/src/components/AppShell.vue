@@ -30,8 +30,15 @@
 				>
 					<Icon :name="item.icon" :size="16" />
 					<span class="truncate">{{ item.label }}</span>
+					<!-- The beacon. Visible from every page, because the point of
+					     backgrounding a clone is that you went somewhere else. -->
 					<span
-						v-if="item.count"
+						v-if="item.name === 'Installs' && isRunning"
+						class="u-live-dot ml-auto h-2 w-2 shrink-0 rounded-full"
+						:title="`${activeJobs.length} running`"
+					/>
+					<span
+						v-else-if="item.count"
 						class="u-num ml-auto text-[11px]"
 						:class="isActive(item.name) ? 'text-[var(--paper)]/70' : 'text-[var(--ink-ghost)]'"
 					>{{ item.count }}</span>
@@ -100,6 +107,10 @@
 				<slot />
 			</main>
 		</div>
+
+		<!-- Teleports to <body>, so it floats above every page and survives
+		     route changes without each view having to mount it. -->
+		<JobDock />
 	</div>
 </template>
 
@@ -107,6 +118,8 @@
 import { inject, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import Icon from "./Icon.vue";
+import JobDock from "./JobDock.vue";
+import { activeJobs, adoptRunningJobs, isRunning } from "../jobs";
 import { loadSettings, monitoringEnabled } from "../state";
 
 defineProps({
@@ -133,5 +146,10 @@ const nav = [
 const isActive = (name) => route.name === name;
 
 // The chrome owns this, so every page shows the same truth without passing it.
-onMounted(() => loadSettings());
+onMounted(() => {
+	loadSettings();
+	// Pick up anything already running, so a page reload does not make an
+	// in-flight clone look like it stopped.
+	adoptRunningJobs();
+});
 </script>

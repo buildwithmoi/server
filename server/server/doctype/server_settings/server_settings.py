@@ -191,7 +191,7 @@ class ServerSettings(Document):
 			)
 
 	def get_install_timeout(self) -> int:
-		return int(self.install_timeout_seconds or 1800)
+		return int(self.install_timeout_seconds or 3600)
 
 
 def get_settings() -> "ServerSettings":

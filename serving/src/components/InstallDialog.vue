@@ -270,6 +270,7 @@
 import { computed, ref, watch } from "vue";
 import { Autocomplete, Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
+import { watchJob } from "../jobs";
 import {
 	benchAppsResource, createInstallResource, githubProfilesResource,
 	profileReposResource, repoBranchesResource, syncGithubProfileResource,
@@ -519,7 +520,18 @@ async function submit() {
 						skip_assets: skipAssets.value, overwrite_existing: overwrite.value,
 					};
 		const result = await createInstallResource().submit({ ...payload, run: true });
-		toast.success(`${result.name} queued`);
+
+		// Hand it to the dock rather than navigating anywhere. The whole reason
+		// to background a clone is to carry on doing something else, and moving
+		// the user to another page defeats that.
+		watchJob(result.name, {
+			operation: operation.value,
+			app_name: operation.value === "Pull" ? app.value.value : repo.value.value,
+			bench: props.bench,
+			branch: operation.value === "Pull" ? pullBranch.value || null : branchValue.value || null,
+			status: "Queued",
+		});
+		toast.success(`${result.name} started`);
 		open.value = false;
 		emit("started", result.name);
 	} catch (err) {

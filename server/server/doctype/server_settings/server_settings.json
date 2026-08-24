@@ -220,8 +220,8 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": "1800",
-   "description": "How long a single bench command may run before the app kills its whole process group. A cold clone of a large app plus its pip install can legitimately take several minutes; 1800 leaves generous headroom while still guaranteeing a stuck job cannot hold a worker forever.",
+   "default": "3600",
+   "description": "How long a single bench command may run before the app kills its whole process group. Raised from 30 to 60 minutes on evidence: a git pull of erpnext into a bench that had been cloned shallow (bench uses --depth 1) was still fetching at the 30-minute mark and was terminated. Large repositories with little local history are genuinely slow. Existing installs keep whatever is already saved here \u2014 change it on this form if a real operation needs longer.",
    "fieldname": "install_timeout_seconds",
    "fieldtype": "Int",
    "label": "Install Timeout (Seconds)"
