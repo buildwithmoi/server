@@ -1,0 +1,199 @@
+{
+ "actions": [],
+ "autoname": "field:bench_name",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "bench_name",
+  "bench_path",
+  "is_active",
+  "column_break_head",
+  "frappe_branch",
+  "python_version",
+  "frappe_user",
+  "shallow_clone",
+  "ports_section",
+  "webserver_port",
+  "socketio_port",
+  "column_break_ports",
+  "redis_queue_port",
+  "redis_cache_port",
+  "apps_section",
+  "apps",
+  "sites_section",
+  "default_site",
+  "sites",
+  "scan_section",
+  "last_scanned_at",
+  "scan_error",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "bench_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Bench",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "bench_path",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Path",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "description": "Cleared automatically when a scan can no longer find the bench on disk. Left in place rather than deleted so any install history that referenced it survives.",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "frappe_branch",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Frappe Branch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "python_version",
+   "fieldtype": "Data",
+   "label": "Python",
+   "read_only": 1
+  },
+  {
+   "fieldname": "frappe_user",
+   "fieldtype": "Data",
+   "label": "Bench User",
+   "read_only": 1
+  },
+  {
+   "description": "This bench clones apps with --depth 1. Anything relying on git history will not work.",
+   "fieldname": "shallow_clone",
+   "fieldtype": "Check",
+   "label": "Shallow Clones",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ports_section",
+   "fieldtype": "Section Break",
+   "label": "Ports"
+  },
+  {
+   "fieldname": "webserver_port",
+   "fieldtype": "Int",
+   "label": "Web",
+   "read_only": 1
+  },
+  {
+   "fieldname": "socketio_port",
+   "fieldtype": "Int",
+   "label": "Socket.IO",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_ports",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "redis_queue_port",
+   "fieldtype": "Int",
+   "label": "Redis Queue",
+   "read_only": 1
+  },
+  {
+   "fieldname": "redis_cache_port",
+   "fieldtype": "Int",
+   "label": "Redis Cache",
+   "read_only": 1
+  },
+  {
+   "fieldname": "apps_section",
+   "fieldtype": "Section Break",
+   "label": "Apps"
+  },
+  {
+   "fieldname": "apps",
+   "fieldtype": "Table",
+   "label": "Apps",
+   "options": "Server Bench App",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sites_section",
+   "fieldtype": "Section Break",
+   "label": "Sites"
+  },
+  {
+   "fieldname": "default_site",
+   "fieldtype": "Data",
+   "label": "Default Site",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sites",
+   "fieldtype": "Table",
+   "label": "Sites",
+   "options": "Server Bench Site",
+   "read_only": 1
+  },
+  {
+   "fieldname": "scan_section",
+   "fieldtype": "Section Break",
+   "label": "Scan"
+  },
+  {
+   "fieldname": "last_scanned_at",
+   "fieldtype": "Datetime",
+   "label": "Last Scanned",
+   "read_only": 1
+  },
+  {
+   "fieldname": "scan_error",
+   "fieldtype": "Small Text",
+   "label": "Scan Error",
+   "read_only": 1
+  },
+  {
+   "description": "Free text for your own reference. Never touched by a scan.",
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "Server Bench",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "bench_name",
+ "sort_order": "ASC",
+ "title_field": "bench_name"
+}

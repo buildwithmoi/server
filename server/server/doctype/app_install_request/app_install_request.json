@@ -1,0 +1,240 @@
+{
+ "actions": [],
+ "autoname": "format:AIR-{#####}",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "bench",
+  "source_type",
+  "github_org",
+  "repo",
+  "git_url",
+  "column_break_source",
+  "branch",
+  "app_name",
+  "resolved_git_url",
+  "options_section",
+  "skip_assets",
+  "overwrite_existing",
+  "column_break_options",
+  "install_on_site",
+  "force_install",
+  "status_section",
+  "status",
+  "exit_code",
+  "started_at",
+  "column_break_status",
+  "finished_at",
+  "duration",
+  "job_id",
+  "log_section",
+  "error_summary",
+  "command",
+  "output"
+ ],
+ "fields": [
+  {
+   "description": "Which bench to install into. Only benches found by the last scan appear here.",
+   "fieldname": "bench",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Bench",
+   "options": "Server Bench",
+   "reqd": 1
+  },
+  {
+   "default": "GitHub Org + Repo",
+   "description": "Org + Repo builds an SSH URL through the configured host alias for that organisation, which is what pins the right key. Use Git URL only for a remote that is not one of yours.",
+   "fieldname": "source_type",
+   "fieldtype": "Select",
+   "label": "Source",
+   "options": "GitHub Org + Repo\nGit URL",
+   "reqd": 1
+  },
+  {
+   "default": "Carbonite-Solutions-Ltd",
+   "depends_on": "eval:doc.source_type=='GitHub Org + Repo'",
+   "description": "Determines which SSH key is offered. Getting this wrong produces 'Repository not found' on a repository you can definitely see in a browser.",
+   "fieldname": "github_org",
+   "fieldtype": "Select",
+   "label": "Organisation",
+   "options": "Carbonite-Solutions-Ltd\nbuildwithmoi"
+  },
+  {
+   "depends_on": "eval:doc.source_type=='GitHub Org + Repo'",
+   "description": "Just the repository name, e.g. gh_erp \u2014 not the full URL.",
+   "fieldname": "repo",
+   "fieldtype": "Data",
+   "label": "Repository"
+  },
+  {
+   "depends_on": "eval:doc.source_type=='Git URL'",
+   "description": "A full git remote, e.g. git@github.com:org/repo.git or https://github.com/org/repo.git",
+   "fieldname": "git_url",
+   "fieldtype": "Data",
+   "label": "Git URL"
+  },
+  {
+   "fieldname": "column_break_source",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Leave blank for the repository's default branch.",
+   "fieldname": "branch",
+   "fieldtype": "Data",
+   "label": "Branch"
+  },
+  {
+   "description": "Derived from the repository name and passed to bench explicitly, so it never has to guess the app name out of an SSH host alias.",
+   "fieldname": "app_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "App Name",
+   "read_only": 1
+  },
+  {
+   "description": "The exact remote that will be cloned, after the organisation alias is applied.",
+   "fieldname": "resolved_git_url",
+   "fieldtype": "Data",
+   "label": "Resolved URL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "options_section",
+   "fieldtype": "Section Break",
+   "label": "Options"
+  },
+  {
+   "default": "1",
+   "description": "Leave this on. Building assets is by far the largest memory consumer in a bench operation, and on a small server it is the step most likely to take the machine down. Run `bench build --app <name>` by hand when the box is idle.",
+   "fieldname": "skip_assets",
+   "fieldtype": "Check",
+   "label": "Skip Asset Build"
+  },
+  {
+   "description": "If the app directory already exists, replace it. bench ARCHIVES the old copy to archived/apps/<name>-<date> rather than deleting it, so nothing is lost.",
+   "fieldname": "overwrite_existing",
+   "fieldtype": "Check",
+   "label": "Overwrite If Present"
+  },
+  {
+   "fieldname": "column_break_options",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Optional. After a successful clone, run bench --site <site> install-app. Leave blank to only place the code on disk.",
+   "fieldname": "install_on_site",
+   "fieldtype": "Data",
+   "label": "Install On Site"
+  },
+  {
+   "depends_on": "install_on_site",
+   "description": "Passes --force to install-app. Only needed when reinstalling an app the site already has.",
+   "fieldname": "force_install",
+   "fieldtype": "Check",
+   "label": "Force Install"
+  },
+  {
+   "fieldname": "status_section",
+   "fieldtype": "Section Break",
+   "label": "Result"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nQueued\nRunning\nSuccess\nFailed\nCancelled",
+   "read_only": 1
+  },
+  {
+   "description": "The authoritative success signal \u2014 0 succeeded, above 0 the command failed, -1 means it never ran because a pre-flight refused it. stdout and stderr are interleaved in the log for readability, so the log text can never be used to decide whether it worked.",
+   "fieldname": "exit_code",
+   "fieldtype": "Int",
+   "label": "Exit Code",
+   "read_only": 1
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "finished_at",
+   "fieldtype": "Datetime",
+   "label": "Finished",
+   "read_only": 1
+  },
+  {
+   "fieldname": "duration",
+   "fieldtype": "Duration",
+   "label": "Duration",
+   "read_only": 1
+  },
+  {
+   "fieldname": "job_id",
+   "fieldtype": "Data",
+   "label": "Job ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "log_section",
+   "fieldtype": "Section Break",
+   "label": "Log"
+  },
+  {
+   "fieldname": "error_summary",
+   "fieldtype": "Small Text",
+   "label": "Error Summary",
+   "read_only": 1
+  },
+  {
+   "description": "The exact argv that was executed, so it can be reproduced by hand in a terminal.",
+   "fieldname": "command",
+   "fieldtype": "Small Text",
+   "label": "Command",
+   "read_only": 1
+  },
+  {
+   "fieldname": "output",
+   "fieldtype": "Code",
+   "label": "Output",
+   "options": "Text",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "App Install Request",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 0
+}
