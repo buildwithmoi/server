@@ -295,6 +295,58 @@ def list_benches() -> list[dict]:
 	return benches
 
 
+@frappe.whitelist()
+def get_bench(name: str) -> dict:
+	"""One bench in full, plus the install history that targeted it."""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", name)
+	return {
+		"name": doc.name,
+		"bench_path": doc.bench_path,
+		"is_active": doc.is_active,
+		"exists_on_disk": doc.path_exists(),
+		"frappe_branch": doc.frappe_branch,
+		"python_version": doc.python_version,
+		"frappe_user": doc.frappe_user,
+		"shallow_clone": doc.shallow_clone,
+		"webserver_port": doc.webserver_port,
+		"socketio_port": doc.socketio_port,
+		"redis_queue_port": doc.redis_queue_port,
+		"redis_cache_port": doc.redis_cache_port,
+		"default_site": doc.default_site,
+		"last_scanned_at": doc.last_scanned_at,
+		"scan_error": doc.scan_error,
+		"notes": doc.notes,
+		"apps": [
+			{
+				"app_name": a.app_name,
+				"branch": a.branch,
+				"commit": a.commit,
+				"git_url": a.git_url,
+				"remote_name": a.remote_name,
+				"is_shallow": a.is_shallow,
+				"is_dirty": a.is_dirty,
+			}
+			for a in doc.apps
+		],
+		"sites": [
+			{
+				"site_name": s.site_name,
+				"is_default": s.is_default,
+				"installed_apps": (s.installed_apps or "").splitlines(),
+			}
+			for s in doc.sites
+		],
+		"installs": frappe.get_all(
+			"App Install Request",
+			filters={"bench": name},
+			fields=["name", "app_name", "branch", "status", "install_on_site", "creation"],
+			order_by="creation desc",
+			limit_page_length=10,
+		),
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def rescan_benches() -> dict:
 	"""Rescan the bench root now."""

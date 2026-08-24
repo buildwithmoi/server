@@ -34,6 +34,11 @@
 						v-for="(row, i) in rows"
 						:key="row.name || i"
 						class="border-b border-[var(--rule)] transition-colors duration-100 last:border-0 hover:bg-[var(--paper-sunk)]"
+						:class="clickable ? 'cursor-pointer' : ''"
+						:tabindex="clickable ? 0 : undefined"
+						:role="clickable ? 'link' : undefined"
+						@click="clickable && $emit('row-click', row)"
+						@keydown.enter="clickable && $emit('row-click', row)"
 					>
 						<td
 							v-for="col in columns"
@@ -97,9 +102,12 @@ const props = defineProps({
 	skeletonRows: { type: Number, default: 8 },
 	emptyTitle: { type: String, default: "Nothing here yet" },
 	emptyHint: { type: String, default: "" },
+	// Rows become keyboard-focusable as well as clickable — a table row that
+	// only responds to a mouse is unreachable for anyone navigating by keyboard.
+	clickable: { type: Boolean, default: false },
 });
 
-defineEmits(["page"]);
+defineEmits(["page", "row-click"]);
 
 function format(value, col) {
 	if (value === null || value === undefined || value === "") return "—";

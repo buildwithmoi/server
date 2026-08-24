@@ -38,6 +38,12 @@ const routes = [
 		meta: { title: "Benches" },
 	},
 	{
+		path: "/benches/:name",
+		name: "BenchDetail",
+		component: () => import("../views/BenchDetail.vue"),
+		meta: { title: "Bench" },
+	},
+	{
 		path: "/installs",
 		name: "Installs",
 		component: () => import("../views/Installs.vue"),

@@ -150,6 +150,10 @@ export function benchesResource() {
 	return createResource({ url: `${M}.list_benches` });
 }
 
+export function benchResource() {
+	return createResource({ url: `${M}.get_bench` });
+}
+
 export function rescanBenchesResource() {
 	return createResource({ url: `${M}.rescan_benches` });
 }
