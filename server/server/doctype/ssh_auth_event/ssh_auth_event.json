@@ -94,12 +94,11 @@
    "read_only": 1
   },
   {
-   "description": "Copied from the IP record once resolved. Denormalised on purpose: a Dashboard Chart grouping needs the value on this row, and re-joining millions of log rows to resolve it at chart time would not stay fast.",
+   "description": "Country the source IP resolved to, copied from the IP record by the geolocation backfill. Deliberately Data rather than a Link to Country: frappe fills an empty Link->Country field with the site's own default country on insert, which on an audit log does not mean 'unknown' \u2014 it means every login silently claims to come from head office. Dashboard Chart groups by this field identically either way.",
    "fieldname": "country",
-   "fieldtype": "Link",
+   "fieldtype": "Data",
    "in_standard_filter": 1,
    "label": "Country",
-   "options": "Country",
    "read_only": 1
   },
   {

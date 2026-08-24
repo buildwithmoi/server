@@ -28,6 +28,24 @@ class IPAddressInfo(Document):
 		if not self.ip_address:
 			frappe.throw("IP Address is required.")
 
+	def before_insert(self):
+		"""Refuse the site's default country on a record that has none.
+
+		THE BUG THIS FIXES. `Document._set_defaults()` builds a fresh doc via
+		`frappe.new_doc()` and copies its defaults over any empty field, and
+		frappe.new_doc fills a Link->Country field with the session's default
+		country. On a business document that is a convenience. Here it is a
+		falsehood: a brand-new address that has not been looked up yet, or one
+		that is private and never will be, would be recorded as coming from
+		whatever country the site was set up in.
+
+		Country is only ever set by the resolver, so anything that arrives here
+		unresolved has no country by definition.
+		"""
+		if self.status != STATUS_RESOLVED:
+			self.country = None
+			self.country_code = None
+
 
 def is_private_address(ip: str) -> bool:
 	"""Is this address non-routable, and therefore never worth a lookup?
