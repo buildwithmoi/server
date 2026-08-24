@@ -78,7 +78,7 @@ def _apply(name: str, result: GeoResult, resolver_name: str) -> None:
 	)
 
 
-def _backfill_country(ips: list[str]) -> int:
+def backfill_country(ips: list[str]) -> int:
 	"""Copy the resolved country onto the events that referenced the address.
 
 	At insert time an event's IP is usually still Pending, so the denormalised
@@ -167,7 +167,7 @@ def resolve_pending(limit: int | None = None) -> dict:
 			if result.ok:
 				resolved += 1
 
-		backfilled = _backfill_country([ip for ip in lookups if (results.get(ip) or GeoResult(ip=ip)).ok])
+		backfilled = backfill_country([ip for ip in lookups if (results.get(ip) or GeoResult(ip=ip)).ok])
 		frappe.db.commit()
 		return {
 			"resolved": resolved,

@@ -9,10 +9,12 @@ reviewed by reading one file. Every function starts with an `_assert_*` guard.
 """
 
 import os
-from datetime import datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 
 import frappe
 
+from server.geo import registry
 from server.server.doctype.server_settings.server_settings import get_settings
 from server.ssh import ingest, parser, sources
 
@@ -89,6 +91,30 @@ def run_ingest_now(source: str | None = None) -> dict:
 	return ingest.run_ingest(source=source)
 
 
+@frappe.whitelist(methods=["POST"])
+def resolve_geolocation(limit: int | None = None, backfill_all: bool = False) -> dict:
+	"""Resolve pending IPs now, instead of waiting for the scheduled run.
+
+	`backfill_all` also re-copies the country onto every event whose address is
+	already resolved. The scheduled job only backfills the addresses it looked
+	up in that run, so this is the repair path for events that were ingested
+	before their address had a country — or after the events were reloaded.
+	"""
+	_assert_server_admin()
+	result = registry.resolve_pending(limit=limit)
+
+	if backfill_all:
+		resolved = frappe.get_all(
+			"IP Address Info",
+			filters={"status": "Resolved", "country": ("is", "set")},
+			pluck="name",
+		)
+		result["events_backfilled"] = registry.backfill_country(resolved)
+		frappe.db.commit()
+
+	return result
+
+
 # ---------------------------------------------------------------------------
 # Fixture replay
 # ---------------------------------------------------------------------------
@@ -99,7 +125,7 @@ REPLAYABLE_FIXTURES = ("auth_rfc3339.log", "auth_classic.log")
 
 
 @frappe.whitelist(methods=["POST"])
-def replay_fixture(name: str = "auth_rfc3339.log") -> dict:
+def replay_fixture(name: str = "auth_rfc3339.log", days: int = 7) -> dict:
 	"""Ingest a checked-in log fixture as if it had just been logged.
 
 	WHY THIS EXISTS. The development machine is WSL2 with no openssh-server, so
@@ -107,11 +133,22 @@ def replay_fixture(name: str = "auth_rfc3339.log") -> dict:
 	way to see the dashboard, the charts or the session correlation work before
 	deploying to the real server — and "it compiles" is not evidence.
 
+	WHY THE TIMESTAMPS ARE REBASED. The fixture carries fixed timestamps, and a
+	fixed timestamp is useless to a dashboard: it is either slightly in the
+	FUTURE, in which case every time window excludes it and every chart reads
+	zero, or it drifts further into the past each day until the charts go empty
+	anyway. Each replay is therefore shifted so the newest event lands an hour
+	ago. `days` replays the fixture once per day going back, which gives the
+	time-series charts a shape to draw — and because the shifted timestamps feed
+	the dedup hash, each day's rows are distinct rather than colliding.
+
 	Rows are tagged `ingest_source = "fixture"` so they are trivially
 	distinguishable from real events, and `purge_fixture_events()` removes them.
 	"""
 	_assert_server_admin()
 	_assert_developer_mode()
+
+	days = max(1, min(int(days), 60))
 
 	if name not in REPLAYABLE_FIXTURES:
 		frappe.throw(
@@ -127,10 +164,29 @@ def replay_fixture(name: str = "auth_rfc3339.log") -> dict:
 		raw_lines = [line.rstrip("\n") for line in fh]
 
 	lines = [parsed for parsed in (parser.parse_syslog_line(raw) for raw in raw_lines) if parsed is not None]
-	stats = ingest.ingest_syslog_lines(lines, "fixture")
+	if not lines:
+		return {"fixture": name, "lines_in_file": len(raw_lines), "read": 0}
+
+	# Anchor on the newest event so the set keeps its internal spacing: session
+	# correlation depends on a login and its logout staying next to each other.
+	newest = max(line.timestamp for line in lines)
+	if newest.tzinfo is None:
+		newest = newest.replace(tzinfo=datetime.now().astimezone().tzinfo)
+	now = datetime.now(UTC)
+
+	totals = ingest.IngestStats()
+	for day in range(days):
+		shift = (now - newest) - timedelta(hours=1) - timedelta(days=day)
+		shifted = [replace(line, timestamp=line.timestamp + shift) for line in lines]
+		stats = ingest.ingest_syslog_lines(shifted, "fixture")
+		totals.read += stats.read
+		totals.inserted += stats.inserted
+		totals.skipped += stats.skipped
+		totals.unparsed += stats.unparsed
+		totals.ignored += stats.ignored
 	frappe.db.commit()
 
-	return {"fixture": name, "lines_in_file": len(raw_lines), **stats.as_dict()}
+	return {"fixture": name, "lines_in_file": len(raw_lines), "days": days, **totals.as_dict()}
 
 
 @frappe.whitelist(methods=["POST"])

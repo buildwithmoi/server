@@ -1,0 +1,130 @@
+{
+ "app": "server",
+ "charts": [
+  {
+   "chart_name": "SSH Traffic by Country",
+   "label": "SSH Traffic by Country"
+  },
+  {
+   "chart_name": "Failed SSH Logins Over Time",
+   "label": "Failed SSH Logins Over Time"
+  },
+  {
+   "chart_name": "Top Attacking IPs",
+   "label": "Top Attacking IPs"
+  }
+ ],
+ "content": "[{\"id\": \"1cd61abaf2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>SSH Access</b></span>\", \"col\": 12}}, {\"id\": \"4464f10fa3\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"Failed SSH Logins (7 Days)\", \"col\": 4}}, {\"id\": \"d901ef68b9\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"Successful SSH Logins (7 Days)\", \"col\": 4}}, {\"id\": \"8834b31f30\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"Sudo Commands (7 Days)\", \"col\": 4}}, {\"id\": \"9519d1c22c\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"dc41447ff2\", \"type\": \"chart\", \"data\": {\"chart_name\": \"SSH Traffic by Country\", \"col\": 6}}, {\"id\": \"11b0793732\", \"type\": \"chart\", \"data\": {\"chart_name\": \"Failed SSH Logins Over Time\", \"col\": 6}}, {\"id\": \"db0ed3ac9a\", \"type\": \"chart\", \"data\": {\"chart_name\": \"Top Attacking IPs\", \"col\": 12}}, {\"id\": \"09254eb497\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"4542c42a24\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Records</b></span>\", \"col\": 12}}, {\"id\": \"01ade0bf68\", \"type\": \"card\", \"data\": {\"card_name\": \"Audit Log\", \"col\": 4}}, {\"id\": \"e7ee6efa9c\", \"type\": \"card\", \"data\": {\"card_name\": \"Configuration\", \"col\": 4}}]",
+ "creation": "2026-08-24 13:44:03.626795",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "hide_custom": 0,
+ "icon": "shield",
+ "idx": 0,
+ "indicator_color": "green",
+ "is_hidden": 0,
+ "label": "Server Security",
+ "link_type": "DocType",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Audit Log",
+   "link_count": 0,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "SSH Auth Event",
+   "link_count": 0,
+   "link_to": "SSH Auth Event",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "SSH Sudo Command",
+   "link_count": 0,
+   "link_to": "SSH Sudo Command",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "IP Address Info",
+   "link_count": 0,
+   "link_to": "IP Address Info",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Configuration",
+   "link_count": 0,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Server Settings",
+   "link_count": 0,
+   "link_to": "Server Settings",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Server Ingest Checkpoint",
+   "link_count": 0,
+   "link_to": "Server Ingest Checkpoint",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-08-24 13:44:03.626795",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "Server Security",
+ "number_cards": [
+  {
+   "label": "Failed SSH Logins (7 Days)",
+   "number_card_name": "Failed SSH Logins (7 Days)"
+  },
+  {
+   "label": "Successful SSH Logins (7 Days)",
+   "number_card_name": "Successful SSH Logins (7 Days)"
+  },
+  {
+   "label": "Sudo Commands (7 Days)",
+   "number_card_name": "Sudo Commands (7 Days)"
+  }
+ ],
+ "owner": "Administrator",
+ "public": 1,
+ "quick_lists": [],
+ "roles": [],
+ "sequence_id": 1.0,
+ "shortcuts": [],
+ "title": "Server Security",
+ "type": "Workspace"
+}
