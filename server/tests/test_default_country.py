@@ -105,3 +105,42 @@ class TestDefaultCountryDoesNotLeak(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestSettingsDefaultsArePersisted(unittest.TestCase):
+	"""Every declared default must be a real stored value, not a load-time one.
+
+	A frappe Single applies DocType defaults only while nothing has been saved.
+	After the first write of any field, unsaved fields read back as None — and a
+	None `geo_enabled` or `alerts_enabled` is falsy, which silently switches
+	geolocation and alerting off. `patches/seed_server_settings.py` writes the
+	defaults down so behaviour never depends on whether the form has been saved.
+	"""
+
+	def test_no_declared_default_is_missing_from_the_table(self):
+		stored = {
+			row.field
+			for row in frappe.db.sql(
+				"SELECT field FROM tabSingles WHERE doctype = 'Server Settings'", as_dict=True
+			)
+		}
+		missing = [
+			f.fieldname
+			for f in frappe.get_meta("Server Settings").fields
+			if f.fieldtype not in frappe.model.no_value_fields
+			and f.default not in (None, "")
+			and f.fieldname not in stored
+		]
+		self.assertEqual(
+			missing, [], "run patches/seed_server_settings.py — these defaults are not persisted"
+		)
+
+	def test_switches_that_default_on_are_actually_on(self):
+		settings = frappe.get_single("Server Settings")
+		for fieldname in ("geo_enabled", "alerts_enabled"):
+			self.assertTrue(
+				settings.get(fieldname),
+				f"{fieldname} declares default=1 but reads back falsy — geolocation or "
+				"alerting would be silently disabled",
+			)
