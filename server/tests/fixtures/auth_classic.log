@@ -1,0 +1,61 @@
+# Fixture: classic BSD-syslog auth.log format (pre-22.04 Ubuntu, RHEL, and
+# anything still writing the traditional format).
+#
+# GENERATED from auth_rfc3339.log by rewriting only the timestamp — do not
+# edit by hand. The event set is identical by construction, which is what
+# lets test_sshd_parser assert both prefix styles yield the same AuthEvents.
+# Note this format carries NO YEAR — see parser._infer_year.
+
+Aug 24 09:15:01 hetzner-prod sshd[4021]: Accepted password for patoo from 203.0.113.24 port 51234 ssh2
+Aug 24 09:15:01 hetzner-prod sshd[4021]: Accepted publickey for patoo from 203.0.113.24 port 51234 ssh2: RSA SHA256:pQr9vTn0aBcDeFgHiJkLmNoPqRsTuVwXyZ012345678
+Aug 24 09:15:01 hetzner-prod sshd[4022]: Accepted publickey for deploy from 198.51.100.7 port 40122 ssh2: ED25519 SHA256:9zYxWvUtSrQpOnMlKjIhGfEdCbA9876543210zyxwvu
+Aug 24 09:15:01 hetzner-prod sshd[4023]: Accepted keyboard-interactive/pam for patoo from 203.0.113.24 port 51240 ssh2
+Aug 24 09:15:01 hetzner-prod sshd[4024]: Accepted gssapi-with-mic for patoo from 203.0.113.24 port 51241 ssh2
+Aug 24 09:15:01 hetzner-prod sshd[4025]: Accepted none for guest from 203.0.113.24 port 51242 ssh2
+Aug 24 09:15:01 hetzner-prod sshd[4021]: pam_unix(sshd:session): session opened for user patoo(uid=1000) by (uid=0)
+Aug 24 09:47:55 hetzner-prod sshd[4021]: pam_unix(sshd:session): session closed for user patoo
+Aug 24 09:47:55 hetzner-prod sshd[4021]: Disconnected from user patoo 203.0.113.24 port 51234
+Aug 24 09:20:11 hetzner-prod sshd[4100]: Failed password for patoo from 45.61.187.3 port 33344 ssh2
+Aug 24 09:20:12 hetzner-prod sshd[4101]: Failed password for invalid user admin from 45.61.187.3 port 33346 ssh2
+Aug 24 09:20:13 hetzner-prod sshd[4102]: Failed publickey for root from 45.61.187.3 port 33348 ssh2
+Aug 24 09:20:14 hetzner-prod sshd[4103]: Invalid user oracle from 45.61.187.3 port 33350
+Aug 24 09:20:15 hetzner-prod sshd[4104]: Invalid user  from 45.61.187.3 port 33352
+Aug 24 09:20:16 hetzner-prod sshd[4105]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=45.61.187.3  user=patoo
+Aug 24 09:20:17 hetzner-prod sshd[4106]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=45.61.187.3
+Aug 24 09:20:18 hetzner-prod sshd[4107]: maximum authentication attempts exceeded for root from 45.61.187.3 port 33354 ssh2 [preauth]
+Aug 24 09:20:19 hetzner-prod sshd[4108]: error: maximum authentication attempts exceeded for invalid user admin from 45.61.187.3 port 33356 ssh2 [preauth]
+Aug 24 09:20:20 hetzner-prod sshd[4109]: Disconnecting authenticating user root 45.61.187.3 port 33358: Too many authentication failures [preauth]
+Aug 24 09:22:00 hetzner-prod sshd[4200]: ROOT LOGIN REFUSED FROM 45.61.187.3
+Aug 24 09:22:01 hetzner-prod sshd[4201]: error: PAM: ROOT LOGIN REFUSED FROM 45.61.187.3 port 33360
+Aug 24 09:22:02 hetzner-prod sshd[4202]: User backup from 45.61.187.3 not allowed because not listed in AllowUsers
+Aug 24 09:22:03 hetzner-prod sshd[4203]: User root from 45.61.187.3 not allowed because listed in DenyUsers
+Aug 24 09:24:00 hetzner-prod sshd[4300]: Disconnected from invalid user admin 45.61.187.3 port 33362 [preauth]
+Aug 24 09:24:01 hetzner-prod sshd[4301]: Connection closed by authenticating user root 45.61.187.3 port 33364 [preauth]
+Aug 24 09:24:02 hetzner-prod sshd[4302]: Connection closed by invalid user oracle 45.61.187.3 port 33366 [preauth]
+Aug 24 09:24:03 hetzner-prod sshd[4303]: Received disconnect from 203.0.113.24 port 51234:11: disconnected by user
+Aug 24 09:24:04 hetzner-prod sshd[4304]: Disconnected from 45.61.187.3 port 33368 [preauth]
+Aug 24 09:26:00 hetzner-prod sshd[4400]: Did not receive identification string from 185.243.96.11 port 44000
+Aug 24 09:26:01 hetzner-prod sshd[4401]: Bad protocol version identification 'GET / HTTP/1.1' from 185.243.96.11 port 44002
+Aug 24 09:26:02 hetzner-prod sshd[4402]: kex_exchange_identification: Connection closed by remote host
+Aug 24 09:26:03 hetzner-prod sshd[4403]: fatal: Timeout before authentication for 185.243.96.11 port 44004
+Aug 24 09:28:00 hetzner-prod sshd[4500]: Connection from 203.0.113.24 port 51250 on 10.0.0.5 port 22
+Aug 24 09:30:00 hetzner-prod sshd[4600]: Accepted publickey for patoo from 2a01:4f8:1c1c:abcd::1 port 51260 ssh2: ED25519 SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG
+Aug 24 09:30:01 hetzner-prod sshd[4601]: Failed password for invalid user test from 2a01:4f8:1c1c:abcd::1 port 51262 ssh2
+Aug 24 09:16:00 hetzner-prod sshd[4030]: Accepted publickey for patoo from 8.8.8.8 port 51300 ssh2: ED25519 SHA256:LmNoPqRsTuVwXyZ0123456789abcdefghijklmnop
+Aug 24 09:16:01 hetzner-prod sshd[4030]: pam_unix(sshd:session): session opened for user patoo(uid=1000) by (uid=0)
+Aug 24 09:48:00 hetzner-prod sshd[4030]: pam_unix(sshd:session): session closed for user patoo
+Aug 24 09:16:02 hetzner-prod sshd[4031]: Accepted password for root from 1.1.1.1 port 51302 ssh2
+Aug 24 10:11:53 DESKTOP-G6V9TKR sudo:    patoo : TTY=pts/0 ; PWD=/home/patoo/fb-15-1 ; USER=root ; COMMAND=/usr/bin/supervisorctl status
+Aug 23 12:18:30 DESKTOP-G6V9TKR sudo:    patoo : a password is required ; PWD=/home/patoo/fb-16-res/apps/bwm_pos ; USER=root ; COMMAND=/usr/bin/true
+Aug 23 00:20:15 DESKTOP-G6V9TKR sudo: pam_unix(sudo:auth): conversation failed
+Aug 23 00:20:15 DESKTOP-G6V9TKR sudo: pam_unix(sudo:auth): auth could not identify password for [patoo]
+Aug 24 10:11:53 DESKTOP-G6V9TKR sudo: pam_unix(sudo:session): session opened for user root(uid=0) by (uid=1000)
+Aug 24 10:11:53 DESKTOP-G6V9TKR sudo: pam_unix(sudo:session): session closed for user root
+Aug 24 10:12:00 hetzner-prod sudo:  intruder : user NOT in sudoers ; TTY=pts/3 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash
+Aug 24 10:12:01 hetzner-prod sudo:    patoo : TTY=pts/1 ; PWD=/home/patoo ; USER=root ; COMMAND=/bin/sh -c "cd /tmp && ./x; echo done"
+Aug 24 10:12:02 hetzner-prod sudo:    deploy : TTY=unknown ; PWD=/ ; USER=www-data ; COMMAND=/usr/bin/systemctl restart nginx
+Aug 23 06:44:06 DESKTOP-G6V9TKR login[530]: pam_unix(login:session): session opened for user patoo(uid=1000) by patoo(uid=0)
+Aug 23 06:44:06 DESKTOP-G6V9TKR systemd-logind[185]: New session 1 of user patoo.
+Aug 23 06:44:06 DESKTOP-G6V9TKR (systemd): pam_unix(systemd-user:session): session opened for user patoo(uid=1000) by patoo(uid=0)
+Aug 23 06:44:03 DESKTOP-G6V9TKR login[530]: PAM unable to dlopen(pam_lastlog.so): /usr/lib/security/pam_lastlog.so: cannot open shared object file: No such file or directory
+Aug 23 00:00:36 DESKTOP-G6V9TKR CRON[181265]: pam_unix(cron:session): session closed for user patoo

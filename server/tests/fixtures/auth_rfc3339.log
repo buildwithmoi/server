@@ -1,0 +1,99 @@
+# Fixture: Ubuntu 22.04+ RFC3339 auth.log format.
+#
+# Lines whose program is `sshd` are SYNTHETIC. This development machine is WSL2
+# with no openssh-server installed, so not one real sshd line exists anywhere on
+# it. The message bodies below are taken from the OpenSSH 9.x catalogue encoded
+# in /etc/fail2ban/filter.d/sshd.conf, which is the authoritative list of what
+# sshd actually emits and is what fail2ban itself matches against in production.
+#
+# Every other line (sudo, login, systemd-logind, CRON, (systemd)) is REAL and
+# was copied verbatim out of this box's /var/log/auth.log. Those are what keep
+# the prefix regex honest about the shapes it has to survive: a missing pid
+# bracket, a parenthesised program name, and a hyphenated one.
+#
+# Comment lines and blank lines are here on purpose too — the parser must skip
+# them rather than raise.
+
+# --- successful authentication -------------------------------------------
+2026-08-24T09:15:01.100000+00:00 hetzner-prod sshd[4021]: Accepted password for patoo from 203.0.113.24 port 51234 ssh2
+2026-08-24T09:15:01.180000+00:00 hetzner-prod sshd[4021]: Accepted publickey for patoo from 203.0.113.24 port 51234 ssh2: RSA SHA256:pQr9vTn0aBcDeFgHiJkLmNoPqRsTuVwXyZ012345678
+2026-08-24T09:15:01.190000+00:00 hetzner-prod sshd[4022]: Accepted publickey for deploy from 198.51.100.7 port 40122 ssh2: ED25519 SHA256:9zYxWvUtSrQpOnMlKjIhGfEdCbA9876543210zyxwvu
+2026-08-24T09:15:01.200000+00:00 hetzner-prod sshd[4023]: Accepted keyboard-interactive/pam for patoo from 203.0.113.24 port 51240 ssh2
+2026-08-24T09:15:01.210000+00:00 hetzner-prod sshd[4024]: Accepted gssapi-with-mic for patoo from 203.0.113.24 port 51241 ssh2
+2026-08-24T09:15:01.220000+00:00 hetzner-prod sshd[4025]: Accepted none for guest from 203.0.113.24 port 51242 ssh2
+
+# --- PAM session lifecycle for a real login ------------------------------
+2026-08-24T09:15:01.300000+00:00 hetzner-prod sshd[4021]: pam_unix(sshd:session): session opened for user patoo(uid=1000) by (uid=0)
+2026-08-24T09:47:55.900000+00:00 hetzner-prod sshd[4021]: pam_unix(sshd:session): session closed for user patoo
+2026-08-24T09:47:55.950000+00:00 hetzner-prod sshd[4021]: Disconnected from user patoo 203.0.113.24 port 51234
+
+# --- failed authentication -----------------------------------------------
+2026-08-24T09:20:11.000000+00:00 hetzner-prod sshd[4100]: Failed password for patoo from 45.61.187.3 port 33344 ssh2
+2026-08-24T09:20:12.000000+00:00 hetzner-prod sshd[4101]: Failed password for invalid user admin from 45.61.187.3 port 33346 ssh2
+2026-08-24T09:20:13.000000+00:00 hetzner-prod sshd[4102]: Failed publickey for root from 45.61.187.3 port 33348 ssh2
+2026-08-24T09:20:14.000000+00:00 hetzner-prod sshd[4103]: Invalid user oracle from 45.61.187.3 port 33350
+2026-08-24T09:20:15.000000+00:00 hetzner-prod sshd[4104]: Invalid user  from 45.61.187.3 port 33352
+2026-08-24T09:20:16.000000+00:00 hetzner-prod sshd[4105]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=45.61.187.3  user=patoo
+2026-08-24T09:20:17.000000+00:00 hetzner-prod sshd[4106]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=45.61.187.3
+2026-08-24T09:20:18.000000+00:00 hetzner-prod sshd[4107]: maximum authentication attempts exceeded for root from 45.61.187.3 port 33354 ssh2 [preauth]
+2026-08-24T09:20:19.000000+00:00 hetzner-prod sshd[4108]: error: maximum authentication attempts exceeded for invalid user admin from 45.61.187.3 port 33356 ssh2 [preauth]
+2026-08-24T09:20:20.000000+00:00 hetzner-prod sshd[4109]: Disconnecting authenticating user root 45.61.187.3 port 33358: Too many authentication failures [preauth]
+
+# --- refusals -------------------------------------------------------------
+2026-08-24T09:22:00.000000+00:00 hetzner-prod sshd[4200]: ROOT LOGIN REFUSED FROM 45.61.187.3
+2026-08-24T09:22:01.000000+00:00 hetzner-prod sshd[4201]: error: PAM: ROOT LOGIN REFUSED FROM 45.61.187.3 port 33360
+2026-08-24T09:22:02.000000+00:00 hetzner-prod sshd[4202]: User backup from 45.61.187.3 not allowed because not listed in AllowUsers
+2026-08-24T09:22:03.000000+00:00 hetzner-prod sshd[4203]: User root from 45.61.187.3 not allowed because listed in DenyUsers
+
+# --- disconnects and pre-auth aborts --------------------------------------
+2026-08-24T09:24:00.000000+00:00 hetzner-prod sshd[4300]: Disconnected from invalid user admin 45.61.187.3 port 33362 [preauth]
+2026-08-24T09:24:01.000000+00:00 hetzner-prod sshd[4301]: Connection closed by authenticating user root 45.61.187.3 port 33364 [preauth]
+2026-08-24T09:24:02.000000+00:00 hetzner-prod sshd[4302]: Connection closed by invalid user oracle 45.61.187.3 port 33366 [preauth]
+2026-08-24T09:24:03.000000+00:00 hetzner-prod sshd[4303]: Received disconnect from 203.0.113.24 port 51234:11: disconnected by user
+2026-08-24T09:24:04.000000+00:00 hetzner-prod sshd[4304]: Disconnected from 45.61.187.3 port 33368 [preauth]
+
+# --- bot scans and protocol noise -----------------------------------------
+2026-08-24T09:26:00.000000+00:00 hetzner-prod sshd[4400]: Did not receive identification string from 185.243.96.11 port 44000
+2026-08-24T09:26:01.000000+00:00 hetzner-prod sshd[4401]: Bad protocol version identification 'GET / HTTP/1.1' from 185.243.96.11 port 44002
+2026-08-24T09:26:02.000000+00:00 hetzner-prod sshd[4402]: kex_exchange_identification: Connection closed by remote host
+2026-08-24T09:26:03.000000+00:00 hetzner-prod sshd[4403]: fatal: Timeout before authentication for 185.243.96.11 port 44004
+
+# --- LogLevel VERBOSE only -------------------------------------------------
+2026-08-24T09:28:00.000000+00:00 hetzner-prod sshd[4500]: Connection from 203.0.113.24 port 51250 on 10.0.0.5 port 22
+
+# --- IPv6 ------------------------------------------------------------------
+2026-08-24T09:30:00.000000+00:00 hetzner-prod sshd[4600]: Accepted publickey for patoo from 2a01:4f8:1c1c:abcd::1 port 51260 ssh2: ED25519 SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG
+2026-08-24T09:30:01.000000+00:00 hetzner-prod sshd[4601]: Failed password for invalid user test from 2a01:4f8:1c1c:abcd::1 port 51262 ssh2
+
+# --- routable source addresses -------------------------------------------
+# Everything above uses RFC 5737 TEST-NET ranges (198.51.100.0/24,
+# 203.0.113.0/24), which is correct for documentation and which the app
+# correctly refuses to send to a geolocation provider. But that means no
+# SUCCESSFUL login above can ever resolve to a country, leaving the country
+# chart and the new-country alert with nothing to demonstrate. These four lines
+# use well-known public resolver addresses purely so those paths have real,
+# routable input. They are not claims about anyone's traffic.
+2026-08-24T09:16:00.000000+00:00 hetzner-prod sshd[4030]: Accepted publickey for patoo from 8.8.8.8 port 51300 ssh2: ED25519 SHA256:LmNoPqRsTuVwXyZ0123456789abcdefghijklmnop
+2026-08-24T09:16:01.000000+00:00 hetzner-prod sshd[4030]: pam_unix(sshd:session): session opened for user patoo(uid=1000) by (uid=0)
+2026-08-24T09:48:00.000000+00:00 hetzner-prod sshd[4030]: pam_unix(sshd:session): session closed for user patoo
+2026-08-24T09:16:02.000000+00:00 hetzner-prod sshd[4031]: Accepted password for root from 1.1.1.1 port 51302 ssh2
+
+# --- REAL sudo lines from this box ----------------------------------------
+2026-08-24T10:11:53.398705+00:00 DESKTOP-G6V9TKR sudo:    patoo : TTY=pts/0 ; PWD=/home/patoo/fb-15-1 ; USER=root ; COMMAND=/usr/bin/supervisorctl status
+2026-08-23T12:18:30.444190+00:00 DESKTOP-G6V9TKR sudo:    patoo : a password is required ; PWD=/home/patoo/fb-16-res/apps/bwm_pos ; USER=root ; COMMAND=/usr/bin/true
+2026-08-23T00:20:15.849930+00:00 DESKTOP-G6V9TKR sudo: pam_unix(sudo:auth): conversation failed
+2026-08-23T00:20:15.943082+00:00 DESKTOP-G6V9TKR sudo: pam_unix(sudo:auth): auth could not identify password for [patoo]
+2026-08-24T10:11:53.455417+00:00 DESKTOP-G6V9TKR sudo: pam_unix(sudo:session): session opened for user root(uid=0) by (uid=1000)
+2026-08-24T10:11:53.806147+00:00 DESKTOP-G6V9TKR sudo: pam_unix(sudo:session): session closed for user root
+
+# --- synthetic sudo variants worth covering --------------------------------
+2026-08-24T10:12:00.000000+00:00 hetzner-prod sudo:  intruder : user NOT in sudoers ; TTY=pts/3 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash
+2026-08-24T10:12:01.000000+00:00 hetzner-prod sudo:    patoo : TTY=pts/1 ; PWD=/home/patoo ; USER=root ; COMMAND=/bin/sh -c "cd /tmp && ./x; echo done"
+2026-08-24T10:12:02.000000+00:00 hetzner-prod sudo:    deploy : TTY=unknown ; PWD=/ ; USER=www-data ; COMMAND=/usr/bin/systemctl restart nginx
+
+# --- REAL non-sudo, non-sshd lines: prefix torture tests -------------------
+2026-08-23T06:44:06.064790+00:00 DESKTOP-G6V9TKR login[530]: pam_unix(login:session): session opened for user patoo(uid=1000) by patoo(uid=0)
+2026-08-23T06:44:06.125231+00:00 DESKTOP-G6V9TKR systemd-logind[185]: New session 1 of user patoo.
+2026-08-23T06:44:06.221166+00:00 DESKTOP-G6V9TKR (systemd): pam_unix(systemd-user:session): session opened for user patoo(uid=1000) by patoo(uid=0)
+2026-08-23T06:44:03.578756+00:00 DESKTOP-G6V9TKR login[530]: PAM unable to dlopen(pam_lastlog.so): /usr/lib/security/pam_lastlog.so: cannot open shared object file: No such file or directory
+2026-08-23T00:00:36.372501+00:00 DESKTOP-G6V9TKR CRON[181265]: pam_unix(cron:session): session closed for user patoo
