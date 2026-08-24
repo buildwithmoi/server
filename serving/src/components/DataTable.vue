@@ -1,0 +1,118 @@
+<!--
+  A monochrome table with its own loading and empty states.
+
+  Columns are described by objects rather than markup so every list page renders
+  the same way — same row height, same header treatment, same skeleton — instead
+  of three tables that drift apart as they are edited.
+-->
+<template>
+	<div class="u-card overflow-hidden">
+		<div class="u-scroll overflow-x-auto">
+			<table class="w-full border-collapse text-left">
+				<thead>
+					<tr class="border-b border-[var(--rule)] bg-[var(--paper-sunk)]">
+						<th
+							v-for="col in columns"
+							:key="col.key"
+							scope="col"
+							class="u-label whitespace-nowrap px-3 py-2 font-medium"
+							:style="col.width ? { width: col.width } : null"
+						>{{ col.label }}</th>
+					</tr>
+				</thead>
+
+				<tbody v-if="loading">
+					<tr v-for="n in skeletonRows" :key="`s${n}`" class="border-b border-[var(--rule)] last:border-0">
+						<td v-for="col in columns" :key="col.key" class="px-3 py-2.5">
+							<Skeleton height="0.85rem" :width="col.skeletonWidth || '70%'" />
+						</td>
+					</tr>
+				</tbody>
+
+				<tbody v-else>
+					<tr
+						v-for="(row, i) in rows"
+						:key="row.name || i"
+						class="border-b border-[var(--rule)] transition-colors duration-100 last:border-0 hover:bg-[var(--paper-sunk)]"
+					>
+						<td
+							v-for="col in columns"
+							:key="col.key"
+							class="px-3 py-2.5 align-top text-[13px]"
+							:class="col.mono ? 'u-mono' : ''"
+						>
+							<slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
+								<span :class="col.muted ? 'text-[var(--ink-faint)]' : ''">
+									{{ format(row[col.key], col) }}
+								</span>
+							</slot>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+
+		<EmptyState
+			v-if="!loading && !rows.length"
+			:title="emptyTitle"
+			:hint="emptyHint"
+		/>
+
+		<!-- pager -->
+		<div
+			v-if="!loading && total > pageLength"
+			class="flex items-center justify-between gap-3 border-t border-[var(--rule)] px-3 py-2"
+		>
+			<p class="u-num text-[12px] text-[var(--ink-faint)]">
+				{{ (start + 1).toLocaleString() }}–{{ Math.min(start + rows.length, total).toLocaleString() }}
+				of {{ total.toLocaleString() }}
+			</p>
+			<div class="flex items-center gap-1">
+				<button
+					class="rounded-md px-2 py-1 text-[12px] text-[var(--ink-soft)] transition-colors hover:bg-[var(--paper-sunk)] disabled:cursor-not-allowed disabled:opacity-35"
+					:disabled="start === 0"
+					@click="$emit('page', Math.max(start - pageLength, 0))"
+				>Previous</button>
+				<button
+					class="rounded-md px-2 py-1 text-[12px] text-[var(--ink-soft)] transition-colors hover:bg-[var(--paper-sunk)] disabled:cursor-not-allowed disabled:opacity-35"
+					:disabled="start + pageLength >= total"
+					@click="$emit('page', start + pageLength)"
+				>Next</button>
+			</div>
+		</div>
+	</div>
+</template>
+
+<script setup>
+import Skeleton from "./Skeleton.vue";
+import EmptyState from "./EmptyState.vue";
+
+const props = defineProps({
+	columns: { type: Array, required: true },
+	rows: { type: Array, default: () => [] },
+	loading: { type: Boolean, default: false },
+	total: { type: Number, default: 0 },
+	start: { type: Number, default: 0 },
+	pageLength: { type: Number, default: 50 },
+	skeletonRows: { type: Number, default: 8 },
+	emptyTitle: { type: String, default: "Nothing here yet" },
+	emptyHint: { type: String, default: "" },
+});
+
+defineEmits(["page"]);
+
+function format(value, col) {
+	if (value === null || value === undefined || value === "") return "—";
+	if (col.type === "datetime") return formatDateTime(value);
+	if (col.type === "number") return Number(value).toLocaleString();
+	return value;
+}
+
+function formatDateTime(value) {
+	const d = new Date(String(value).replace(" ", "T"));
+	if (Number.isNaN(d.getTime())) return value;
+	return d.toLocaleString(undefined, {
+		day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit",
+	});
+}
+</script>

@@ -10,10 +10,11 @@ reviewed by reading one file. Every function starts with an `_assert_*` guard.
 
 import os
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import frappe
 
+from server import dashboard
 from server.geo import registry
 from server.server.doctype.server_settings.server_settings import get_settings
 from server.ssh import ingest, parser, sources
@@ -42,6 +43,204 @@ def _assert_developer_mode() -> None:
 			frappe.PermissionError,
 			title="Developer Mode Only",
 		)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard (consumed by the /serving SPA)
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def get_overview(days: int = 7) -> dict:
+	"""Everything the dashboard landing page needs, in one request."""
+	_assert_server_admin()
+	return dashboard.get_overview(days=days)
+
+
+@frappe.whitelist()
+def get_health() -> dict:
+	"""Is ingestion actually working, and what did the last pass do?
+
+	Separate from `check_log_source`, which probes the machine. This reports
+	what the reader has actually done — the two answer different questions and
+	conflating them meant the Settings page asked one and rendered the other.
+	"""
+	_assert_server_admin()
+	return dashboard.get_health()
+
+
+@frappe.whitelist()
+def list_auth_events(
+	start: int = 0,
+	page_length: int = 50,
+	outcome: str | None = None,
+	event_type: str | None = None,
+	username: str | None = None,
+	source_ip: str | None = None,
+	country: str | None = None,
+	search: str | None = None,
+) -> dict:
+	"""Paginated SSH Auth Events, newest first.
+
+	Returns `total` alongside the rows so the SPA can render a real pager rather
+	than guessing whether another page exists.
+	"""
+	_assert_server_admin()
+
+	filters: dict = {}
+	if outcome:
+		filters["outcome"] = outcome
+	if event_type:
+		filters["event_type"] = event_type
+	if username:
+		filters["username"] = username
+	if source_ip:
+		filters["source_ip"] = source_ip
+	if country:
+		filters["country"] = country
+	if search:
+		filters["raw_message"] = ("like", f"%{search}%")
+
+	fields = [
+		"name",
+		"event_time",
+		"event_type",
+		"outcome",
+		"username",
+		"invalid_user",
+		"auth_method",
+		"source_ip",
+		"source_port",
+		"country",
+		"session_key",
+		"hostname",
+		"ingest_source",
+		"raw_message",
+	]
+	return {
+		"rows": frappe.get_all(
+			"SSH Auth Event",
+			filters=filters,
+			fields=fields,
+			order_by="event_time desc",
+			limit_start=max(int(start), 0),
+			limit_page_length=min(max(int(page_length), 1), 200),
+		),
+		"total": frappe.db.count("SSH Auth Event", filters),
+	}
+
+
+@frappe.whitelist()
+def list_sudo_commands(
+	start: int = 0,
+	page_length: int = 50,
+	actor: str | None = None,
+	status: str | None = None,
+	search: str | None = None,
+) -> dict:
+	"""Paginated sudo commands, newest first."""
+	_assert_server_admin()
+
+	filters: dict = {}
+	if actor:
+		filters["actor"] = actor
+	if status:
+		filters["status"] = status
+	if search:
+		filters["command"] = ("like", f"%{search}%")
+
+	return {
+		"rows": frappe.get_all(
+			"SSH Sudo Command",
+			filters=filters,
+			fields=[
+				"name",
+				"event_time",
+				"actor",
+				"target_user",
+				"tty",
+				"pwd",
+				"command",
+				"status",
+				"failure_reason",
+				"hostname",
+				"ingest_source",
+			],
+			order_by="event_time desc",
+			limit_start=max(int(start), 0),
+			limit_page_length=min(max(int(page_length), 1), 200),
+		),
+		"total": frappe.db.count("SSH Sudo Command", filters),
+	}
+
+
+@frappe.whitelist()
+def list_ip_addresses(start: int = 0, page_length: int = 50, status: str | None = None) -> dict:
+	"""Paginated IP geolocation cache, most recently seen first."""
+	_assert_server_admin()
+
+	filters: dict = {"status": status} if status else {}
+	return {
+		"rows": frappe.get_all(
+			"IP Address Info",
+			filters=filters,
+			fields=[
+				"name",
+				"ip_address",
+				"status",
+				"country",
+				"country_code",
+				"city",
+				"region",
+				"isp",
+				"org",
+				"asn",
+				"first_seen",
+				"last_seen",
+				"error",
+			],
+			order_by="last_seen desc",
+			limit_start=max(int(start), 0),
+			limit_page_length=min(max(int(page_length), 1), 200),
+		),
+		"total": frappe.db.count("IP Address Info", filters),
+	}
+
+
+@frappe.whitelist()
+def get_settings_summary() -> dict:
+	"""The handful of settings the SPA surfaces, without exposing secrets."""
+	_assert_server_admin()
+	settings = get_settings()
+	return {
+		"ssh_monitoring_enabled": bool(settings.ssh_monitoring_enabled),
+		"log_source": settings.log_source,
+		"detected_log_source": settings.detected_log_source,
+		"auth_log_path": settings.auth_log_path,
+		"geo_enabled": bool(settings.geo_enabled),
+		"geo_resolver": settings.geo_resolver,
+		"alerts_enabled": bool(settings.alerts_enabled),
+		"failed_login_threshold": settings.failed_login_threshold,
+		"allow_app_install": bool(settings.allow_app_install),
+		"bench_root": settings.bench_root,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_monitoring_enabled(enabled: bool = False) -> dict:
+	"""Toggle the ingest master switch from the SPA.
+
+	Deliberately the ONLY setting the SPA can write. Everything else lives on
+	the Desk form, where each field carries the long description explaining what
+	it does — a toggle in a dashboard has no room for that, and these are
+	settings you want someone to read before changing.
+	"""
+	_assert_server_admin()
+	settings = get_settings()
+	settings.db_set("ssh_monitoring_enabled", 1 if frappe.parse_json(enabled) else 0)
+	frappe.db.commit()
+	sources.clear_cache()
+	return {"ssh_monitoring_enabled": bool(settings.ssh_monitoring_enabled)}
 
 
 # ---------------------------------------------------------------------------

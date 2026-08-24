@@ -1,296 +1,232 @@
+@import "frappe-ui/style.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * MONOCHROME DESIGN SYSTEM
+ *
+ * Why no colour. This is a security console: the things worth noticing are
+ * failures, unfamiliar countries and root logins. If every surface is already
+ * tinted, an alert has nothing left to distinguish itself with. Holding the
+ * whole interface to greyscale means contrast, weight and rule-thickness are
+ * free to carry meaning — a solid black bar reads as "this is the one" without
+ * competing against a blue sidebar and a green badge.
+ *
+ * Consequence: severity is NEVER encoded in hue alone. Failure states get a
+ * filled marker, success gets a hollow one, and both get a text label. That is
+ * also the only version of this that works for a colour-blind reader.
+ */
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+	--paper: #ffffff;
+	--paper-sunk: #fafafa;
+	--paper-raised: #ffffff;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+	--ink: #0a0a0a;
+	--ink-soft: #4a4a4a;
+	--ink-faint: #767676;
+	--ink-ghost: #a3a3a3;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+	--rule: #e6e6e6;
+	--rule-strong: #cfcfcf;
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+	--focus: #0a0a0a;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+	:root[data-theme="auto"] {
+		--paper: #0b0b0b;
+		--paper-sunk: #131313;
+		--paper-raised: #161616;
+		--ink: #f5f5f5;
+		--ink-soft: #c4c4c4;
+		--ink-faint: #8f8f8f;
+		--ink-ghost: #6b6b6b;
+		--rule: #262626;
+		--rule-strong: #3a3a3a;
+		--focus: #f5f5f5;
+	}
+}
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+html,
+body,
+#app {
+	height: 100%;
 }
 
 body {
-  margin: 0;
+	margin: 0;
+	background: var(--paper);
+	color: var(--ink);
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+/* ------------------------------------------------------------------ type */
+
+.u-display {
+	font-weight: 620;
+	letter-spacing: -0.022em;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
+.u-num {
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.02em;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+.u-mono {
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+	font-size: 0.8125rem;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.u-label {
+	font-size: 0.6875rem;
+	font-weight: 560;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-faint);
 }
 
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
+/* --------------------------------------------------------------- surfaces */
 
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
+.u-card {
+	background: var(--paper-raised);
+	border: 1px solid var(--rule);
+	border-radius: 10px;
 }
 
-.hero {
-  position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
+.u-rule {
+	border-color: var(--rule);
 }
 
-#app {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+/* ---------------------------------------------------------------- motion */
+
+/*
+ * One shared duration and curve. Interfaces feel incoherent when every
+ * component animates at its own speed, and the fastest way to make motion feel
+ * cheap is to let it run long.
+ */
+:root {
+	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--fast: 120ms;
+	--base: 200ms;
 }
 
-#center {
-  display: flex;
-  flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
+@keyframes u-fade-up {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
 }
 
-#next-steps {
-  display: flex;
-  border-top: 1px solid var(--border);
-  text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
+@keyframes u-shimmer {
+	from {
+		background-position: -180% 0;
+	}
+	to {
+		background-position: 180% 0;
+	}
 }
 
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+@keyframes u-pulse-ring {
+	0% {
+		box-shadow: 0 0 0 0 rgba(10, 10, 10, 0.28);
+	}
+	70% {
+		box-shadow: 0 0 0 7px rgba(10, 10, 10, 0);
+	}
+	100% {
+		box-shadow: 0 0 0 0 rgba(10, 10, 10, 0);
+	}
 }
 
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
+.u-enter {
+	animation: u-fade-up var(--base) var(--ease) both;
 }
 
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
+/* Stagger children so a grid resolves as a sequence rather than a flash. */
+.u-stagger > * {
+	animation: u-fade-up var(--base) var(--ease) both;
+}
+.u-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.u-stagger > *:nth-child(2) { animation-delay: 40ms; }
+.u-stagger > *:nth-child(3) { animation-delay: 80ms; }
+.u-stagger > *:nth-child(4) { animation-delay: 120ms; }
+.u-stagger > *:nth-child(5) { animation-delay: 160ms; }
+.u-stagger > *:nth-child(6) { animation-delay: 200ms; }
+
+.u-skeleton {
+	background-color: var(--paper-sunk);
+	background-image: linear-gradient(
+		90deg,
+		transparent 0%,
+		rgba(0, 0, 0, 0.055) 45%,
+		transparent 90%
+	);
+	background-size: 180% 100%;
+	animation: u-shimmer 1.35s linear infinite;
+	border-radius: 6px;
 }
 
-.ticks {
-  position: relative;
-  width: 100%;
+.u-live {
+	animation: u-pulse-ring 2.2s var(--ease) infinite;
+}
 
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
+/* Route transition. */
+.page-enter-active {
+	transition: opacity var(--base) var(--ease), transform var(--base) var(--ease);
+}
+.page-leave-active {
+	transition: opacity var(--fast) var(--ease);
+	position: absolute;
+	inset: 0;
+}
+.page-enter-from {
+	opacity: 0;
+	transform: translateY(8px);
+}
+.page-leave-to {
+	opacity: 0;
+}
 
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
-  }
+/*
+ * Respect the OS setting. Vestibular disorders are real and a dashboard that
+ * ignores prefers-reduced-motion is simply broken for those users.
+ */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+	}
+}
+
+/* --------------------------------------------------------------- a11y */
+
+:where(a, button, [tabindex]):focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+.u-scroll::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+.u-scroll::-webkit-scrollbar-thumb {
+	background: var(--rule-strong);
+	border: 3px solid var(--paper);
+	border-radius: 99px;
+}
+.u-scroll::-webkit-scrollbar-track {
+	background: transparent;
 }
