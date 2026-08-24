@@ -9,6 +9,18 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
+    #
+    # Deliberately empty, and worth keeping that way. Everything this app does
+    # in Python uses the standard library: journalctl and git are driven through
+    # subprocess, GitHub through urllib, and log parsing through re. That means
+    # `bench get-app` can never fail here for a package that will not build, and
+    # the app runs on the bench's own interpreter with nothing added.
+    #
+    # What it DOES need is operating-system level and cannot be expressed here:
+    # git, ssh and (for the preferred log source) systemd's journalctl, plus a
+    # bench user that can read the authentication log — on Debian and Ubuntu,
+    # membership of the 'adm' group. `server/install.py` checks all of that at
+    # install time and prints what is missing.
 ]
 
 [build-system]

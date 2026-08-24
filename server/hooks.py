@@ -86,7 +86,11 @@ app_license = "mit"
 # ------------
 
 # before_install = "server.install.before_install"
-# after_install = "server.install.after_install"
+
+# Verifies the machine can actually do the job — a readable authentication log,
+# git, ssh, bench — and seeds the settings Single so its declared defaults are
+# real stored values rather than load-time ones. Reports; never aborts.
+after_install = "server.install.after_install"
 
 # Uninstallation
 # ------------
