@@ -60,6 +60,35 @@
 					</p>
 				</div>
 
+				<!-- Cloning over an app that is already here is the one case where
+				     the obvious action is probably the wrong one, so say so and
+				     offer the other one rather than letting the pre-flight refuse
+				     it after the job has been queued. -->
+				<div
+					v-if="installedApp"
+					class="flex items-start gap-2.5 rounded-md border border-[var(--ink)] bg-[var(--paper-sunk)] px-3 py-2.5"
+				>
+					<Icon name="alert" :size="15" class="mt-0.5 shrink-0" />
+					<div class="min-w-0 flex-1">
+						<p class="text-[12.5px] leading-relaxed">
+							<span class="u-mono">{{ installedApp.app_name }}</span> is already in
+							<span class="u-mono">{{ bench }}</span> on
+							<span class="u-mono">{{ installedApp.branch }}</span>, so the branch below is
+							pre-selected to match rather than defaulting to the repository's
+							<span class="u-mono">{{ repoDefaultBranch || "default" }}</span>.
+						</p>
+						<p class="mt-1 text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+							Cloning again needs “Overwrite if already present”, which archives the
+							current copy to archived/apps/ rather than deleting it.
+						</p>
+						<button
+							type="button"
+							class="mt-1.5 text-[12px] underline underline-offset-2"
+							@click="switchToPull"
+						>Update it in place instead →</button>
+					</div>
+				</div>
+
 				<div v-if="repo" class="flex flex-col gap-1.5">
 					<!-- The failure notice sits ABOVE the field on purpose. Below it,
 					     an open dropdown covers it and the only thing visible is
@@ -88,11 +117,14 @@
 						<span class="u-label">Branch</span>
 						<div class="flex items-center gap-3">
 							<button
-								v-if="branchValue && branchValue !== defaultBranch && defaultBranch"
+								v-if="preferredBranch && branchValue !== preferredBranch"
 								type="button"
 								class="text-[11.5px] text-[var(--ink-faint)] hover:text-[var(--ink)]"
 								@click="resetBranch"
-							>use default ({{ defaultBranch }})</button>
+							>
+								use {{ branchSource === "installed" ? "installed" : "default" }}
+								({{ preferredBranch }})
+							</button>
 							<button
 								v-if="branchOptions.length"
 								type="button"
@@ -110,7 +142,7 @@
 					<input
 						v-if="manualBranch || (!branchOptions.length && !branchesRes.loading)"
 						v-model.trim="typedBranch"
-						:placeholder="defaultBranch || 'branch name'"
+						:placeholder="preferredBranch || 'branch name'"
 						class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
 					/>
 					<Autocomplete
@@ -124,8 +156,21 @@
 					<p v-if="branchesRes.loading" class="text-[11.5px] text-[var(--ink-faint)]">
 						Default branch selected. Loading the full branch list…
 					</p>
+					<p
+						v-else-if="installedBranchMissing"
+						class="text-[11.5px] leading-relaxed text-[var(--ink)]"
+					>
+						<span class="u-mono">{{ installedApp.branch }}</span> is the branch in this bench
+						but no longer exists on the remote — it may have been renamed or deleted after a
+						merge. Pick another, or the clone will fail on it.
+					</p>
 					<p v-else-if="branchOptions.length" class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
-						Leave blank to use the repository default.
+						<template v-if="branchSource === 'installed'">
+							Pre-selected to match this bench.
+						</template>
+						<template v-else>
+							Leave blank to use the repository default.
+						</template>
 						{{ branchOptions.length }} branches available.
 						<span v-if="branchesRes.data?.truncated">
 							Only the first {{ branchOptions.length }} are listed — use “type a name” for
@@ -274,10 +319,50 @@ const open = computed({
 
 const verb = computed(() => (operation.value === "Pull" ? "Pull" : "Clone"));
 const profiles = computed(() => profilesRes.data || []);
-const defaultBranch = computed(
+const repoDefaultBranch = computed(
 	() => repo.value?.defaultBranch || branchesRes.data?.default_branch || "",
 );
 const branchError = computed(() => branchesRes.data?.error || "");
+
+/**
+ * The app in THIS bench that the selected repository corresponds to, if any.
+ *
+ * The repository name is the app directory name — that is how `derive_app_name`
+ * builds it — so the match is direct.
+ */
+const installedApp = computed(() => {
+	const name = repo.value?.value;
+	return name ? (appsRes.data || []).find((a) => a.app_name === name) || null : null;
+});
+
+/**
+ * What the branch field should start on.
+ *
+ * WHY THE INSTALLED BRANCH WINS OVER THE REPOSITORY DEFAULT. Re-cloning an app
+ * that is already in a bench almost always means matching what is there —
+ * fb-15-1 runs erpnext on version-15, and offering `develop` because that is
+ * what GitHub calls default would quietly replace a working checkout with a
+ * different major version. The repository default is the right answer only for
+ * an app the bench has never seen.
+ */
+const preferredBranch = computed(
+	() => installedApp.value?.branch || repoDefaultBranch.value || "",
+);
+
+/** Whether the pre-selected branch came from the bench or from GitHub. */
+const branchSource = computed(() =>
+	installedApp.value?.branch ? "installed" : repoDefaultBranch.value ? "repository" : "",
+);
+
+/**
+ * The installed branch may no longer exist upstream — renamed, or deleted after
+ * a merge. Worth saying, because the clone would fail on it minutes later.
+ */
+const installedBranchMissing = computed(() => {
+	const wanted = installedApp.value?.branch;
+	if (!wanted || !branchOptions.value.length) return false;
+	return !branchOptions.value.some((b) => b.value === wanted);
+});
 
 /**
  * The chosen branch, from whichever control is showing.
@@ -303,7 +388,14 @@ const branchOptions = computed(() =>
 	(branchesRes.data?.branches || []).map((b) => ({
 		label: b.name,
 		value: b.name,
-		description: b.name === defaultBranch.value ? "default" : b.protected ? "protected" : "",
+		description:
+			b.name === installedApp.value?.branch
+				? "in this bench"
+				: b.name === repoDefaultBranch.value
+					? "repository default"
+					: b.protected
+						? "protected"
+						: "",
 	})),
 );
 
@@ -364,22 +456,31 @@ watch(repo, async (value) => {
 	if (!value?.value || !profile.value) return;
 
 	manualBranch.value = false;
-	if (value.defaultBranch) {
-		branch.value = { label: value.defaultBranch, value: value.defaultBranch };
-		typedBranch.value = value.defaultBranch;
+	// preferredBranch already knows about the bench, so this is correct before
+	// the branch list has loaded and stays correct afterwards.
+	if (preferredBranch.value) {
+		setBranch(preferredBranch.value);
 	}
 	await branchesRes.submit({ profile: profile.value, repo: value.value });
-	if (!branch.value && defaultBranch.value) {
-		branch.value = { label: defaultBranch.value, value: defaultBranch.value };
-		typedBranch.value = defaultBranch.value;
+	if (!branch.value && preferredBranch.value) {
+		setBranch(preferredBranch.value);
 	}
 });
 
+/** Jump to the Pull tab with the app already chosen. */
+function switchToPull() {
+	const name = installedApp.value?.app_name;
+	operation.value = "Pull";
+	if (name) app.value = { label: name, value: name };
+}
+
+function setBranch(name) {
+	branch.value = name ? { label: name, value: name } : null;
+	typedBranch.value = name || "";
+}
+
 function resetBranch() {
-	branch.value = defaultBranch.value
-		? { label: defaultBranch.value, value: defaultBranch.value }
-		: null;
-	typedBranch.value = defaultBranch.value || "";
+	setBranch(preferredBranch.value);
 }
 
 async function sync() {
