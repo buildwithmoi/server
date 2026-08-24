@@ -14,6 +14,7 @@ declare module 'vue' {
     EmptyState: typeof import('./src/components/EmptyState.vue')['default']
     HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
     Icon: typeof import('./src/components/Icon.vue')['default']
+    InstallDialog: typeof import('./src/components/InstallDialog.vue')['default']
     OutcomeMark: typeof import('./src/components/OutcomeMark.vue')['default']
     RankBars: typeof import('./src/components/RankBars.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

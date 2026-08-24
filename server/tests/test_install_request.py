@@ -19,12 +19,30 @@ except Exception:  # pragma: no cover
 	_HAS_SITE = False
 
 
+TEST_PROFILE = "__test_profile"
+
+
+def _ensure_profile():
+	"""A throwaway profile, so these never depend on the operator's real ones."""
+	if not frappe.db.exists("GitHub Profile", TEST_PROFILE):
+		frappe.get_doc(
+			{
+				"doctype": "GitHub Profile",
+				"profile_name": TEST_PROFILE,
+				"account": "Carbonite-Solutions-Ltd",
+				"account_type": "Organisation",
+			}
+		).insert(ignore_permissions=True)
+	return TEST_PROFILE
+
+
 def _request(**overrides):
 	base = {
 		"doctype": "App Install Request",
+		"operation": "Clone",
 		"bench": "fb-16-server",
-		"source_type": "GitHub Org + Repo",
-		"github_org": "Carbonite-Solutions-Ltd",
+		"source_type": "GitHub Profile",
+		"github_profile": _ensure_profile(),
 		"repo": "server",
 		"branch": "version-16",
 		"skip_assets": 1,
@@ -40,7 +58,7 @@ class TestUrlResolution(unittest.TestCase):
 			self.skipTest("no bench discovered yet")
 		self.addCleanup(frappe.db.rollback)
 
-	def test_org_and_repo_build_an_ssh_url(self):
+	def test_profile_and_repo_build_an_ssh_url(self):
 		doc = _request()
 		doc.validate()
 		self.assertTrue(doc.resolved_git_url.startswith("git@"))
@@ -56,12 +74,15 @@ class TestUrlResolution(unittest.TestCase):
 		"""
 		from server.bench import doctor
 
+		profile = frappe.get_doc("GitHub Profile", _ensure_profile())
+		profile.ssh_host_alias = "github-nonexistent-alias"
+		profile.save(ignore_permissions=True)
+
+		doc = _request()
+		host = doc.resolve_git_url().split("@", 1)[1].split(":", 1)[0]
 		configured = doctor.read_ssh_config().get("hosts") or []
-		host = _request().resolve_git_url().split("@", 1)[1].split(":", 1)[0]
-		if "github-carbonite" in configured:
-			self.assertEqual(host, "github-carbonite")
-		else:
-			self.assertEqual(host, "github.com")
+		self.assertNotIn("github-nonexistent-alias", configured, "precondition")
+		self.assertEqual(host, "github.com", "an undefined alias must fall back, not be emitted")
 
 	def test_app_name_from_https_url(self):
 		doc = _request(source_type="Git URL", git_url="https://github.com/frappe/hrms.git", repo=None)
@@ -85,6 +106,10 @@ class TestValidationRefusals(unittest.TestCase):
 		"""Pasting a URL where a name belongs is the most likely user error."""
 		with self.assertRaises(frappe.ValidationError):
 			_request(repo="git@github.com:x/y.git").validate()
+
+	def test_missing_profile_is_refused(self):
+		with self.assertRaises(frappe.ValidationError):
+			_request(github_profile=None).validate()
 
 	def test_shell_metacharacters_in_branch_are_refused(self):
 		"""shell=False already makes this inert; refusing keeps typos cheap."""
@@ -146,6 +171,65 @@ class TestArgvConstruction(unittest.TestCase):
 		install = build_install_app_argv(doc, self.settings)
 		self.assertEqual(install[1:4], ["--site", "local.16.server", "install-app"])
 		self.assertIn("--force", install)
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestPullOperation(unittest.TestCase):
+	def setUp(self):
+		if not frappe.db.exists("Server Bench", "fb-16-server"):
+			self.skipTest("no bench discovered yet")
+		self.addCleanup(frappe.db.rollback)
+
+	def test_pull_requires_an_app_that_is_actually_in_the_bench(self):
+		"""Pull updates something already there; Clone brings it in.
+
+		Refusing here beats letting `git pull` fail inside a directory that does
+		not exist, which reports a path error rather than the real mistake.
+		"""
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			_request(operation="Pull", app_name="not-installed-here", repo=None).validate()
+		self.assertIn("Clone", str(ctx.exception), "the message should point at the right operation")
+
+	def test_pull_accepts_an_installed_app(self):
+		doc = _request(operation="Pull", app_name="frappe", repo=None, branch=None)
+		doc.validate()
+		self.assertTrue(doc.is_pull())
+		self.assertEqual(doc.app_name, "frappe")
+
+	def test_pull_argv_is_ff_only_by_default(self):
+		"""Without --ff-only, git invents a merge commit on divergence.
+
+		An unattended job quietly rewriting history in someone's checkout is not
+		something this should ever do; refusing and saying why is better.
+		"""
+		from server.bench import installer, scanner
+
+		doc = _request(operation="Pull", app_name="frappe", repo=None, branch=None)
+		doc.validate()
+		app = scanner.AppInfo(app_name="frappe", remote_name="upstream", branch="version-16")
+		argv = installer.build_pull_argv(doc, app)
+		self.assertEqual(argv[:2], ["git", "pull"])
+		self.assertIn("--ff-only", argv)
+		self.assertIn("upstream", argv)
+
+	def test_allow_merge_drops_ff_only(self):
+		from server.bench import installer, scanner
+
+		doc = _request(operation="Pull", app_name="frappe", repo=None, branch=None, allow_merge=1)
+		doc.validate()
+		app = scanner.AppInfo(app_name="frappe", remote_name="upstream", branch="version-16")
+		self.assertNotIn("--ff-only", installer.build_pull_argv(doc, app))
+
+	def test_pull_uses_the_remote_the_checkout_actually_has(self):
+		"""bench clones with --origin upstream, so assuming origin fails on
+		every app bench ever installed."""
+		from server.bench import installer, scanner
+
+		doc = _request(operation="Pull", app_name="frappe", repo=None, branch=None)
+		doc.validate()
+		app = scanner.AppInfo(app_name="frappe", remote_name="upstream", branch="version-16")
+		self.assertIn("upstream", installer.build_pull_argv(doc, app))
+		self.assertNotIn("origin", installer.build_pull_argv(doc, app))
 
 
 @unittest.skipUnless(_HAS_SITE, "requires a frappe site")

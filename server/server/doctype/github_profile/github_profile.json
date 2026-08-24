@@ -1,0 +1,139 @@
+{
+ "actions": [],
+ "autoname": "field:profile_name",
+ "creation": "2026-08-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "profile_name",
+  "account",
+  "account_type",
+  "is_default",
+  "column_break_head",
+  "access_token",
+  "ssh_host_alias",
+  "sync_section",
+  "last_synced_at",
+  "repo_count",
+  "column_break_sync",
+  "sync_error",
+  "repos_section",
+  "repos"
+ ],
+ "fields": [
+  {
+   "description": "A name for you, e.g. 'Carbonite' or 'Personal'. Used to pick the account when installing.",
+   "fieldname": "profile_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "The organisation or username exactly as it appears in a repository URL \u2014 Carbonite-Solutions-Ltd, buildwithmoi. Not an email address.",
+   "fieldname": "account",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "GitHub Account",
+   "reqd": 1
+  },
+  {
+   "default": "Organisation",
+   "description": "Organisations and users are different endpoints on GitHub's API, so this has to be right or the repository list comes back empty.",
+   "fieldname": "account_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Account Type",
+   "options": "Organisation\nUser"
+  },
+  {
+   "description": "Pre-selected when you open the install dialog.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "label": "Default"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "A GitHub personal access token with the 'repo' scope. Required to LIST private repositories \u2014 an SSH key cannot query GitHub's API, only clone over ssh. Leave blank if you only need public repositories. Cloning still uses your SSH key; this token is only ever used to read the repository and branch lists.",
+   "fieldname": "access_token",
+   "fieldtype": "Password",
+   "label": "Access Token"
+  },
+  {
+   "description": "Optional. If ~/.ssh/config defines a Host block for this account (e.g. github-carbonite), put it here and clones will use it, which pins the right key. Leave blank to use github.com.",
+   "fieldname": "ssh_host_alias",
+   "fieldtype": "Data",
+   "label": "SSH Host Alias"
+  },
+  {
+   "fieldname": "sync_section",
+   "fieldtype": "Section Break",
+   "label": "Repositories"
+  },
+  {
+   "fieldname": "last_synced_at",
+   "fieldtype": "Datetime",
+   "label": "Last Synced",
+   "read_only": 1
+  },
+  {
+   "fieldname": "repo_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Repositories",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_sync",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sync_error",
+   "fieldtype": "Small Text",
+   "label": "Sync Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "repos_section",
+   "fieldtype": "Section Break"
+  },
+  {
+   "description": "Cached from GitHub so the install dialog can search instantly. Re-sync after creating a new repository.",
+   "fieldname": "repos",
+   "fieldtype": "Table",
+   "label": "Repositories",
+   "options": "GitHub Profile Repo",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "GitHub Profile",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "profile_name",
+ "sort_order": "ASC",
+ "title_field": "profile_name",
+ "track_changes": 1
+}

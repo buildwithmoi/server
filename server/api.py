@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 import frappe
 
 from server import dashboard
-from server.bench import discovery, doctor, installer
+from server.bench import discovery, doctor, github, installer
 from server.geo import registry
 from server.server.doctype.server_settings.server_settings import get_settings
 from server.ssh import ingest, parser, sources
@@ -245,6 +245,151 @@ def set_monitoring_enabled(enabled: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# GitHub profiles
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def list_github_profiles() -> list[dict]:
+	"""Configured accounts. Never returns the token, only whether one is set."""
+	_assert_server_admin()
+	profiles = []
+	for name in frappe.get_all("GitHub Profile", pluck="name", order_by="profile_name asc"):
+		doc = frappe.get_doc("GitHub Profile", name)
+		profiles.append(
+			{
+				"name": doc.name,
+				"account": doc.account,
+				"account_type": doc.account_type,
+				"is_default": doc.is_default,
+				"ssh_host_alias": doc.ssh_host_alias,
+				"has_token": bool(doc.get_token()),
+				"repo_count": doc.repo_count or 0,
+				"last_synced_at": doc.last_synced_at,
+				"sync_error": doc.sync_error,
+			}
+		)
+	return profiles
+
+
+@frappe.whitelist(methods=["POST"])
+def save_github_profile(
+	profile_name: str,
+	account: str,
+	account_type: str = "Organisation",
+	access_token: str | None = None,
+	ssh_host_alias: str | None = None,
+	is_default: bool = False,
+	name: str | None = None,
+) -> dict:
+	"""Create or update a profile.
+
+	An omitted `access_token` LEAVES THE EXISTING ONE ALONE rather than clearing
+	it. The UI never receives the token back, so it cannot send it again on an
+	edit — treating "absent" as "delete it" would silently disconnect the
+	profile every time someone renamed it.
+	"""
+	_assert_server_admin()
+
+	doc = (
+		frappe.get_doc("GitHub Profile", name)
+		if name and frappe.db.exists("GitHub Profile", name)
+		else frappe.new_doc("GitHub Profile")
+	)
+	doc.profile_name = profile_name
+	doc.account = account
+	doc.account_type = account_type
+	doc.ssh_host_alias = ssh_host_alias
+	doc.is_default = 1 if frappe.parse_json(is_default) else 0
+	if access_token:
+		doc.access_token = access_token
+	doc.save()
+	frappe.db.commit()
+	return {"name": doc.name, "account": doc.account}
+
+
+@frappe.whitelist(methods=["POST"])
+def delete_github_profile(name: str) -> dict:
+	_assert_server_admin()
+	frappe.delete_doc("GitHub Profile", name)
+	frappe.db.commit()
+	return {"deleted": name}
+
+
+@frappe.whitelist(methods=["POST"])
+def sync_github_profile(name: str) -> dict:
+	"""Refresh the cached repository list for one profile."""
+	_assert_server_admin()
+	return frappe.get_doc("GitHub Profile", name).sync_repos()
+
+
+@frappe.whitelist()
+def list_profile_repos(profile: str) -> list[dict]:
+	"""Cached repositories, newest push first.
+
+	Served from the cache so the picker filters as you type without a network
+	round trip between each keystroke.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("GitHub Profile", profile)
+	rows = [
+		{
+			"repo_name": r.repo_name,
+			"default_branch": r.default_branch,
+			"is_private": r.is_private,
+			"is_archived": r.is_archived,
+			"description": r.description,
+			"pushed_at": r.pushed_at,
+		}
+		for r in doc.repos
+	]
+	# Python's sort is stable, so two obvious passes express this more clearly
+	# than one clever composite key: newest push first, archived sunk to the
+	# bottom rather than hidden, because occasionally an archived repo is
+	# genuinely the one being looked for.
+	rows.sort(key=lambda r: str(r["pushed_at"] or ""), reverse=True)
+	rows.sort(key=lambda r: bool(r["is_archived"]))
+	return rows
+
+
+@frappe.whitelist()
+def list_repo_branches(profile: str, repo: str) -> dict:
+	"""Live branch list for a repository.
+
+	Deliberately not cached: branches come and go constantly, and choosing one
+	that no longer exists fails minutes into a clone instead of immediately.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("GitHub Profile", profile)
+	try:
+		branches, truncated = doc.branches(repo)
+	except github.GitHubError as exc:
+		return {"branches": [], "truncated": False, "default_branch": None, "error": str(exc)}
+
+	default = next((r.default_branch for r in doc.repos if r.repo_name == repo), None)
+	return {"branches": branches, "truncated": truncated, "default_branch": default, "error": None}
+
+
+@frappe.whitelist()
+def list_bench_apps(bench: str) -> list[dict]:
+	"""Apps installed in a bench, for the Pull picker."""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	return [
+		{
+			"app_name": a.app_name,
+			"branch": a.branch,
+			"commit": a.commit,
+			"git_url": a.git_url,
+			"remote_name": a.remote_name,
+			"is_dirty": a.is_dirty,
+			"is_shallow": a.is_shallow,
+		}
+		for a in doc.apps
+	]
+
+
+# ---------------------------------------------------------------------------
 # Bench management
 # ---------------------------------------------------------------------------
 
@@ -424,33 +569,39 @@ def get_install_request(name: str) -> dict:
 @frappe.whitelist(methods=["POST"])
 def create_install_request(
 	bench: str,
-	source_type: str = "GitHub Org + Repo",
-	github_org: str | None = None,
+	operation: str = "Clone",
+	source_type: str = "GitHub Profile",
+	github_profile: str | None = None,
 	repo: str | None = None,
 	git_url: str | None = None,
 	branch: str | None = None,
+	app_name: str | None = None,
 	install_on_site: str | None = None,
 	skip_assets: bool = True,
 	overwrite_existing: bool = False,
 	force_install: bool = False,
+	allow_merge: bool = False,
 	run: bool = False,
 ) -> dict:
-	"""Create a request, optionally queueing it immediately."""
+	"""Create a Clone or Pull request, optionally queueing it immediately."""
 	_assert_server_admin()
 
 	doc = frappe.get_doc(
 		{
 			"doctype": "App Install Request",
+			"operation": operation,
 			"bench": bench,
 			"source_type": source_type,
-			"github_org": github_org,
+			"github_profile": github_profile,
 			"repo": repo,
 			"git_url": git_url,
 			"branch": branch,
+			"app_name": app_name,
 			"install_on_site": install_on_site,
 			"skip_assets": 1 if frappe.parse_json(skip_assets) else 0,
 			"overwrite_existing": 1 if frappe.parse_json(overwrite_existing) else 0,
 			"force_install": 1 if frappe.parse_json(force_install) else 0,
+			"allow_merge": 1 if frappe.parse_json(allow_merge) else 0,
 			"status": "Draft",
 		}
 	)

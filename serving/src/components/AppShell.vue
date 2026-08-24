@@ -126,6 +126,7 @@ const nav = [
 	{ name: "IpAddresses", label: "Addresses", icon: "globe" },
 	{ name: "Benches", label: "Benches", icon: "layers" },
 	{ name: "Installs", label: "App Installs", icon: "download" },
+	{ name: "GitHubProfiles", label: "GitHub Accounts", icon: "key" },
 	{ name: "Settings", label: "Settings", icon: "sliders" },
 ];
 

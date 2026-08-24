@@ -118,6 +118,57 @@ export function healthResource() {
 	return createResource({ url: `${M}.get_health` });
 }
 
+/* ----------------------------------------------------------- github profiles */
+
+export interface GitHubProfile {
+	name: string;
+	account: string;
+	account_type: string;
+	is_default: number;
+	ssh_host_alias: string | null;
+	has_token: boolean;
+	repo_count: number;
+	last_synced_at: string | null;
+	sync_error: string | null;
+}
+
+export interface ProfileRepo {
+	repo_name: string;
+	default_branch: string | null;
+	is_private: number;
+	is_archived: number;
+	description: string | null;
+	pushed_at: string | null;
+}
+
+export function githubProfilesResource() {
+	return createResource({ url: `${M}.list_github_profiles` });
+}
+
+export function saveGithubProfileResource() {
+	return createResource({ url: `${M}.save_github_profile` });
+}
+
+export function deleteGithubProfileResource() {
+	return createResource({ url: `${M}.delete_github_profile` });
+}
+
+export function syncGithubProfileResource() {
+	return createResource({ url: `${M}.sync_github_profile` });
+}
+
+export function profileReposResource() {
+	return createResource({ url: `${M}.list_profile_repos` });
+}
+
+export function repoBranchesResource() {
+	return createResource({ url: `${M}.list_repo_branches` });
+}
+
+export function benchAppsResource() {
+	return createResource({ url: `${M}.list_bench_apps` });
+}
+
 /* ------------------------------------------------------------------ benches */
 
 export interface BenchApp {

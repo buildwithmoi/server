@@ -4,6 +4,14 @@
 			<Dropdown :options="actions" :button="{ label: 'Actions', iconRight: null }" placement="right" />
 		</template>
 
+		<InstallDialog
+			v-model="showInstall"
+			:bench="name"
+			:sites="bench.sites.map((s) => s.site_name)"
+			:initial-operation="installMode"
+			@started="onStarted"
+		/>
+
 		<!-- breadcrumb back, since this page is reached by drilling in -->
 		<RouterLink
 			:to="{ name: 'Benches' }"
@@ -151,6 +159,7 @@ import AppShell from "../components/AppShell.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
+import InstallDialog from "../components/InstallDialog.vue";
 import Skeleton from "../components/Skeleton.vue";
 import { benchResource, rescanBenchesResource } from "../api";
 
@@ -158,6 +167,8 @@ const route = useRoute();
 const router = useRouter();
 const resource = benchResource();
 const rescanning = ref(false);
+const showInstall = ref(false);
+const installMode = ref("Clone");
 
 const name = computed(() => String(route.params.name || ""));
 const bench = computed(() => resource.data || { apps: [], sites: [], installs: [] });
@@ -188,9 +199,15 @@ const facts = computed(() => [
 const actions = computed(() => [
 	{
 		label: "Install an app…",
-		description: "Clone a repository into this bench",
-		onClick: () => router.push({ name: "Installs", query: { bench: name.value } }),
+		description: "Clone a repository from a GitHub account",
+		onClick: () => openInstall("Clone"),
 		condition: () => bench.value.exists_on_disk !== false,
+	},
+	{
+		label: "Update an app…",
+		description: "git pull inside an app already in this bench",
+		onClick: () => openInstall("Pull"),
+		condition: () => bench.value.exists_on_disk !== false && bench.value.apps.length > 0,
 	},
 	{
 		label: "Rescan this bench",
@@ -214,6 +231,16 @@ const actions = computed(() => [
 		onClick: () => router.push({ name: "Installs" }),
 	},
 ]);
+
+function openInstall(mode) {
+	installMode.value = mode;
+	showInstall.value = true;
+}
+
+/** A queued job belongs on the Installs page, where its log streams. */
+function onStarted() {
+	router.push({ name: "Installs" });
+}
 
 async function rescan() {
 	rescanning.value = true;

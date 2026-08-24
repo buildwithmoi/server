@@ -33,7 +33,7 @@ import time
 import frappe
 from frappe.utils.synchronization import LockTimeoutError, filelock
 
-from server.bench import doctor
+from server.bench import doctor, scanner
 from server.server.doctype.server_settings.server_settings import get_settings
 
 #: How often, at most, to push log lines to a watching browser.
@@ -65,9 +65,7 @@ class InstallAborted(Exception):
 
 
 def _preflight(request, bench_doc, settings) -> list[str]:
-	"""Everything that can be checked cheaply, before spending minutes on a clone."""
-	notes = []
-
+	"""Everything checkable cheaply, before spending minutes on a subprocess."""
 	settings.assert_installs_allowed()
 	bench_doc.assert_usable()
 
@@ -80,11 +78,18 @@ def _preflight(request, bench_doc, settings) -> list[str]:
 	if not os.path.isfile(bench_exe) or not os.access(bench_exe, os.X_OK):
 		raise InstallAborted(f"{bench_exe} is not an executable file.")
 
+	if request.is_pull():
+		return _preflight_pull(request)
+	return _preflight_clone(request, bench_doc)
+
+
+def _preflight_clone(request, bench_doc) -> list[str]:
 	app_path = request.app_path
 	if os.path.isdir(app_path) and not request.overwrite_existing:
 		raise InstallAborted(
 			f"{app_path} already exists. Tick 'Overwrite If Present' to replace it — "
-			"bench archives the old copy to archived/apps/ rather than deleting it."
+			"bench archives the old copy to archived/apps/ rather than deleting it. "
+			"To update it in place instead, use a Pull."
 		)
 
 	if request.install_on_site and request.install_on_site not in bench_doc.site_names():
@@ -101,8 +106,40 @@ def _preflight(request, bench_doc, settings) -> list[str]:
 		raise InstallAborted(f"Cannot reach {request.resolved_git_url}. {probe['error']}")
 	if not probe["branch_exists"]:
 		raise InstallAborted(probe["error"] or f"Branch {request.branch!r} not found.")
-	notes.append(f"Remote reachable; branch {request.branch or '(default)'} present.")
+	return [f"Remote reachable; branch {request.branch or '(default)'} present."]
 
+
+def _preflight_pull(request) -> list[str]:
+	"""Checks specific to updating an app that is already on disk."""
+	app_path = request.app_path
+	if not os.path.isdir(app_path):
+		raise InstallAborted(f"{app_path} does not exist. Use a Clone to bring the app in first.")
+	if not os.path.isdir(os.path.join(app_path, ".git")):
+		raise InstallAborted(f"{app_path} is not a git checkout, so there is nothing to pull.")
+
+	app = scanner.read_app(app_path)
+	if not app.remote_name:
+		raise InstallAborted(
+			f"{request.app_name} has no git remote configured, so there is nowhere to pull from."
+		)
+
+	# A pull into a dirty tree is how you get a conflicted checkout that nobody
+	# expected and that this job cannot resolve. Refusing is the kind thing.
+	if app.is_dirty:
+		raise InstallAborted(
+			f"{app_path} has uncommitted or untracked changes. Commit, stash or discard them "
+			"before pulling — pulling over them would leave the checkout in a conflicted state "
+			"that this job cannot resolve for you."
+		)
+
+	notes = [f"{request.app_name} is on {app.branch or 'an unknown branch'} via '{app.remote_name}'."]
+	if app.is_shallow:
+		# bench clones --depth 1. A pull still works, but the history is not
+		# there, so say so rather than letting a confusing git error do it.
+		notes.append(
+			"This is a shallow clone (bench uses --depth 1). A pull works, but git may refuse if "
+			"the branch has been force-pushed."
+		)
 	return notes
 
 
@@ -130,6 +167,29 @@ def build_get_app_argv(request, settings) -> list[str]:
 		argv.append("--skip-assets")
 	if request.overwrite_existing:
 		argv.append("--overwrite")
+	return argv
+
+
+def build_pull_argv(request, app) -> list[str]:
+	"""`git pull` inside the app directory.
+
+	`--ff-only` by default, and that is the important part: without it, git
+	invents a merge commit whenever the local branch has diverged, and an
+	unattended job silently rewriting history in someone's app checkout is not
+	a thing this should ever do quietly. Refusing and saying why is better.
+
+	The remote comes from what the checkout actually has — bench clones with
+	`--origin upstream`, so assuming `origin` would fail on every app bench
+	installed.
+	"""
+	argv = ["git", "pull"]
+	if not request.allow_merge:
+		argv.append("--ff-only")
+	argv.append(app.remote_name)
+	if request.branch:
+		argv.append(request.branch)
+	elif app.branch and app.branch != "HEAD":
+		argv.append(app.branch)
 	return argv
 
 
@@ -242,7 +302,11 @@ def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
 
 
 def run_install_request(name: str) -> dict:
-	"""Execute one App Install Request. Never raises out to the worker."""
+	"""Execute one App Install Request — a clone or a pull.
+
+	Never raises out to the worker: a failure has to end up on the record, not
+	only in an error log nobody opens.
+	"""
 	request = frappe.get_doc("App Install Request", name)
 	settings = get_settings()
 	buffer: list[str] = []
@@ -314,21 +378,38 @@ def run_install_request(name: str) -> dict:
 		# parallel while one bench never sees concurrent get-app calls.
 		try:
 			with filelock(f"server_bench_install::{bench_doc.name}", timeout=5, is_global=True):
-				argv = build_get_app_argv(request, settings)
-				request.db_set("command", " ".join(argv), update_modified=False)
-				emit(f"$ {' '.join(argv)}")
-
-				code = _stream(argv, bench_doc.bench_path, env, timeout, emit)
-				if code != 0:
-					return finish("Failed", exit_code=code, error=f"bench get-app exited {code}")
-
-				if request.install_on_site:
-					argv = build_install_app_argv(request, settings)
-					emit("")
+				if request.is_pull():
+					app = scanner.read_app(request.app_path)
+					argv = build_pull_argv(request, app)
+					request.db_set("command", " ".join(argv), update_modified=False)
+					emit(f"$ cd {request.app_path}")
 					emit(f"$ {' '.join(argv)}")
+
+					# cwd is the APP, not the bench: git has to run inside the
+					# checkout it is updating.
+					code = _stream(argv, request.app_path, env, timeout, emit)
+					if code != 0:
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_pull_failure(code, request),
+						)
+				else:
+					argv = build_get_app_argv(request, settings)
+					request.db_set("command", " ".join(argv), update_modified=False)
+					emit(f"$ {' '.join(argv)}")
+
 					code = _stream(argv, bench_doc.bench_path, env, timeout, emit)
 					if code != 0:
-						return finish("Failed", exit_code=code, error=f"bench install-app exited {code}")
+						return finish("Failed", exit_code=code, error=f"bench get-app exited {code}")
+
+					if request.install_on_site:
+						argv = build_install_app_argv(request, settings)
+						emit("")
+						emit(f"$ {' '.join(argv)}")
+						code = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+						if code != 0:
+							return finish("Failed", exit_code=code, error=f"bench install-app exited {code}")
 		except LockTimeoutError:
 			message = f"Another install is already running on {bench_doc.name}. Try again when it finishes."
 			emit(f"[lock] {message}")
@@ -365,6 +446,21 @@ def run_install_request(name: str) -> dict:
 			)
 			frappe.db.commit()
 			return {"name": name, "status": "Failed", "error": str(exc)}
+
+
+def _explain_pull_failure(code: int, request) -> str:
+	"""Name the likely cause rather than echoing an exit code.
+
+	A non-fast-forward is by far the most common way a pull fails on a bench,
+	and "git pull exited 1" tells nobody what to do about it.
+	"""
+	if not request.allow_merge:
+		return (
+			f"git pull exited {code}. The most likely cause is that the branch has diverged from "
+			"the remote, which --ff-only refuses rather than merging. Check the log: if a merge is "
+			"genuinely what you want, tick 'Allow Merge Commit' and run it again."
+		)
+	return f"git pull exited {code}."
 
 
 def _tail(lines: list[str], count: int = 12) -> str:

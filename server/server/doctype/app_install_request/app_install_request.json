@@ -5,18 +5,22 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "operation",
   "bench",
-  "source_type",
-  "github_org",
-  "repo",
-  "git_url",
-  "column_break_source",
-  "branch",
+  "column_break_head",
   "app_name",
+  "branch",
+  "source_section",
+  "source_type",
+  "github_profile",
+  "repo",
+  "column_break_source",
+  "git_url",
   "resolved_git_url",
   "options_section",
   "skip_assets",
   "overwrite_existing",
+  "allow_merge",
   "column_break_options",
   "install_on_site",
   "force_install",
@@ -35,7 +39,17 @@
  ],
  "fields": [
   {
-   "description": "Which bench to install into. Only benches found by the last scan appear here.",
+   "default": "Clone",
+   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app that is already there, to bring it up to date. They are different enough that mixing them into one button would hide which one is about to happen.",
+   "fieldname": "operation",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Operation",
+   "options": "Clone\nPull",
+   "reqd": 1
+  },
+  {
    "fieldname": "bench",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -45,57 +59,65 @@
    "reqd": 1
   },
   {
-   "default": "GitHub Org + Repo",
-   "description": "Org + Repo builds an SSH URL through the configured host alias for that organisation, which is what pins the right key. Use Git URL only for a remote that is not one of yours.",
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "For a Pull this is the app directory inside the bench. For a Clone it is derived from the repository name and passed to bench explicitly, so bench never has to guess it from a URL carrying an SSH host alias.",
+   "fieldname": "app_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "App"
+  },
+  {
+   "description": "Leave blank to use the repository's default branch for a Clone, or the branch the app is already on for a Pull.",
+   "fieldname": "branch",
+   "fieldtype": "Data",
+   "label": "Branch"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Clone\"",
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "default": "GitHub Profile",
+   "depends_on": "eval:doc.operation==\"Clone\"",
+   "description": "A profile supplies the account, the SSH host alias and the token used to list repositories. Use Git URL for a remote that is not on one of your profiles.",
    "fieldname": "source_type",
    "fieldtype": "Select",
-   "label": "Source",
-   "options": "GitHub Org + Repo\nGit URL",
-   "reqd": 1
+   "label": "Source Type",
+   "options": "GitHub Profile\nGit URL"
   },
   {
-   "default": "Carbonite-Solutions-Ltd",
-   "depends_on": "eval:doc.source_type=='GitHub Org + Repo'",
-   "description": "Determines which SSH key is offered. Getting this wrong produces 'Repository not found' on a repository you can definitely see in a browser.",
-   "fieldname": "github_org",
-   "fieldtype": "Select",
-   "label": "Organisation",
-   "options": "Carbonite-Solutions-Ltd\nbuildwithmoi"
+   "depends_on": "eval:doc.operation==\"Clone\" && doc.source_type==\"GitHub Profile\"",
+   "fieldname": "github_profile",
+   "fieldtype": "Link",
+   "label": "GitHub Profile",
+   "options": "GitHub Profile"
   },
   {
-   "depends_on": "eval:doc.source_type=='GitHub Org + Repo'",
+   "depends_on": "eval:doc.operation==\"Clone\" && doc.source_type==\"GitHub Profile\"",
    "description": "Just the repository name, e.g. gh_erp \u2014 not the full URL.",
    "fieldname": "repo",
    "fieldtype": "Data",
    "label": "Repository"
   },
   {
-   "depends_on": "eval:doc.source_type=='Git URL'",
-   "description": "A full git remote, e.g. git@github.com:org/repo.git or https://github.com/org/repo.git",
+   "fieldname": "column_break_source",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Clone\" && doc.source_type==\"Git URL\"",
+   "description": "A full git remote, e.g. git@github.com:org/repo.git",
    "fieldname": "git_url",
    "fieldtype": "Data",
    "label": "Git URL"
   },
   {
-   "fieldname": "column_break_source",
-   "fieldtype": "Column Break"
-  },
-  {
-   "description": "Leave blank for the repository's default branch.",
-   "fieldname": "branch",
-   "fieldtype": "Data",
-   "label": "Branch"
-  },
-  {
-   "description": "Derived from the repository name and passed to bench explicitly, so it never has to guess the app name out of an SSH host alias.",
-   "fieldname": "app_name",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "App Name",
-   "read_only": 1
-  },
-  {
-   "description": "The exact remote that will be cloned, after the organisation alias is applied.",
+   "depends_on": "eval:doc.operation==\"Clone\"",
+   "description": "The exact remote that will be cloned, after any host alias is applied.",
    "fieldname": "resolved_git_url",
    "fieldtype": "Data",
    "label": "Resolved URL",
@@ -108,29 +130,39 @@
   },
   {
    "default": "1",
-   "description": "Leave this on. Building assets is by far the largest memory consumer in a bench operation, and on a small server it is the step most likely to take the machine down. Run `bench build --app <name>` by hand when the box is idle.",
+   "depends_on": "eval:doc.operation==\"Clone\"",
+   "description": "Leave this on. Building assets is by far the largest memory consumer in a bench operation and the step most likely to take a small server down. Run `bench build --app <name>` by hand when the box is idle.",
    "fieldname": "skip_assets",
    "fieldtype": "Check",
    "label": "Skip Asset Build"
   },
   {
+   "depends_on": "eval:doc.operation==\"Clone\"",
    "description": "If the app directory already exists, replace it. bench ARCHIVES the old copy to archived/apps/<name>-<date> rather than deleting it, so nothing is lost.",
    "fieldname": "overwrite_existing",
    "fieldtype": "Check",
    "label": "Overwrite If Present"
   },
   {
+   "depends_on": "eval:doc.operation==\"Pull\"",
+   "description": "By default a Pull is --ff-only, so it refuses rather than inventing a merge commit when the branch has diverged. Tick this only if you know the divergence is expected and a merge is what you want.",
+   "fieldname": "allow_merge",
+   "fieldtype": "Check",
+   "label": "Allow Merge Commit"
+  },
+  {
    "fieldname": "column_break_options",
    "fieldtype": "Column Break"
   },
   {
+   "depends_on": "eval:doc.operation==\"Clone\"",
    "description": "Optional. After a successful clone, run bench --site <site> install-app. Leave blank to only place the code on disk.",
    "fieldname": "install_on_site",
    "fieldtype": "Data",
    "label": "Install On Site"
   },
   {
-   "depends_on": "install_on_site",
+   "depends_on": "eval:doc.operation==\"Clone\" && doc.install_on_site",
    "description": "Passes --force to install-app. Only needed when reinstalling an app the site already has.",
    "fieldname": "force_install",
    "fieldtype": "Check",
