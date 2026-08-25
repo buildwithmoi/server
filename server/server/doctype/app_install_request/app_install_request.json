@@ -44,6 +44,17 @@
   "force_install",
   "console_section",
   "console_command",
+  "provision_section",
+  "provision_frappe_version",
+  "provision_bench_name",
+  "provision_site_name",
+  "provision_apps",
+  "provision_port_index",
+  "provision_skip_assets",
+  "provision_domain",
+  "provision_domain_provider",
+  "provision_db_password",
+  "provision_admin_password",
   "status_section",
   "status",
   "exit_code",
@@ -67,7 +78,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Operation",
-   "options": "Clone\nPull\nCommand\nSSL\nRestore\nConsole",
+   "options": "Clone\nPull\nCommand\nSSL\nRestore\nConsole\nProvision",
    "reqd": 1
   },
   {
@@ -77,7 +88,8 @@
    "in_standard_filter": 1,
    "label": "Bench",
    "options": "Server Bench",
-   "reqd": 1
+   "reqd": 0,
+   "description": "Empty only while a Provision request is building the bench it will point at \u2014 every other operation acts on a bench that already exists."
   },
   {
    "fieldname": "column_break_head",
@@ -420,6 +432,93 @@
    "depends_on": "eval:doc.operation==\"Console\"",
    "description": "Run verbatim by `bash -lc` in the bench directory. stdin is closed, so anything interactive (vim, top, mariadb, bench console) fails immediately rather than hanging. Small Text rather than Data because a real one-liner with a pipeline exceeds Data's 140 characters.",
    "read_only": 1
+  },
+  {
+   "fieldname": "provision_section",
+   "fieldtype": "Section Break",
+   "label": "Provision",
+   "depends_on": "eval:doc.operation==\"Provision\""
+  },
+  {
+   "fieldname": "provision_frappe_version",
+   "fieldtype": "Select",
+   "label": "Frappe Version",
+   "options": "16\n15",
+   "default": "16",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "Decides the branch cloned and the Python needed. v16 pins 3.14; v15 runs on 3.12."
+  },
+  {
+   "fieldname": "provision_bench_name",
+   "fieldtype": "Data",
+   "label": "Bench Name",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "Becomes a directory under the bench root."
+  },
+  {
+   "fieldname": "provision_site_name",
+   "fieldtype": "Data",
+   "label": "Site Name",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "Optional. Left empty the bench is built with no site on it."
+  },
+  {
+   "fieldname": "provision_apps",
+   "fieldtype": "Small Text",
+   "label": "Apps",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "One per line, as profile|repo|branch. Fetched in order, then installed on the site in the same order \u2014 an app that depends on another has to come after it."
+  },
+  {
+   "fieldname": "provision_port_index",
+   "fieldtype": "Int",
+   "label": "Port Block",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "The index this bench occupies: 5 means 8005, 9005, 11005 and 13005. Allocated at run time from what is already in use."
+  },
+  {
+   "fieldname": "provision_skip_assets",
+   "fieldtype": "Check",
+   "label": "Skip Assets",
+   "default": "1",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "On by default. An asset build is the largest memory consumer in the whole process, and a bench that dies at the last step has still spent four gigabytes."
+  },
+  {
+   "fieldname": "provision_domain",
+   "fieldtype": "Data",
+   "label": "Domain",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1
+  },
+  {
+   "fieldname": "provision_domain_provider",
+   "fieldtype": "Link",
+   "options": "Domain Provider",
+   "label": "Domain Provider",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "read_only": 1,
+   "description": "Left empty the DNS record is not written and the wizard tells you what to create by hand."
+  },
+  {
+   "fieldname": "provision_db_password",
+   "fieldtype": "Password",
+   "label": "Database Root Password",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "description": "bench new-site has no way to take this other than on the command line. Stored encrypted, redacted out of the logged command, and cleared once the job finishes."
+  },
+  {
+   "fieldname": "provision_admin_password",
+   "fieldtype": "Password",
+   "label": "Administrator Password",
+   "depends_on": "eval:doc.operation==\"Provision\"",
+   "description": "For the new site's Administrator. Left empty frappe generates one and prints it in the log."
   }
  ],
  "index_web_pages_for_search": 0,

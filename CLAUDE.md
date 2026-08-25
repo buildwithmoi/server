@@ -100,9 +100,13 @@ The rules that path exists to enforce, each learned from a real failure:
   is why `bench setup lets-encrypt` gets `-n`, and why `bench renew-lets-encrypt` is *never* used —
   it calls `click.confirm(abort=True)` with no non-interactive escape, so it would abort every time.
   Renewal drives `certbot renew` directly, which is what bench's own cron entry does.
-- **Exit code 0 is not proof of success.** `bench setup lets-encrypt` prints "You cannot setup SSL
-  without DNS Multitenancy" and exits 0; `bench get-app` exits 1 from a trailing `supervisorctl` call
-  after the app is already installed. Hence `ssl.quiet_failure()` and `installer._clone_landed()`.
+- **Exit code 0 is not proof of success, and exit code 1 is not proof of failure.**
+  `bench setup lets-encrypt` prints "You cannot setup SSL without DNS Multitenancy" and exits 0.
+  In the other direction, `bench get-app` exits 1 from a trailing `supervisorctl` call after the
+  app is already installed — and `bench init` does the same thing after cloning frappe, building
+  the virtualenv and installing every dependency, which costs four gigabytes and several minutes
+  before it reports a failure that did not happen. Ask the disk, not the exit code:
+  `ssl.quiet_failure()`, `installer._clone_landed()`, `provision.bench_landed()`.
 - **Secrets never reach `command` or `output`.** `bench restore` only accepts the database root password
   on the command line, so `restore.redact()` produces the copy that is stored and displayed. Credentials
   live in `Password` fields and are cleared in `finish()`, which every terminal path runs through.
@@ -135,6 +139,26 @@ a site had.
 `bench/ssl.py`, `bench/restore.py`, `bench/inspect.py`, `bench/backups.py`, `bench/steps.py`, `bench/logs.py`,
 `bench/siteconfig.py` and `system.py` are frappe-free, like `ssh/parser.py`, so they unit-test with no
 site and no database. That is most of the app's logic; keep it that way.
+
+### Provisioning a bench
+
+`bench init` is not one command, it is five, and four of them have a trap. All of these were
+found by running it, each after minutes of work had already been spent.
+
+- **`--python` takes a PATH, not a name.** There is no `python3.14` on this machine's `PATH`;
+  the interpreter v16 needs is uv-managed. `provision.resolve_interpreter()` asks
+  `uv python find`.
+- **`bench config set-common-config` runs `ast.literal_eval` on the value.** `8009` is a valid
+  literal so the ports work unquoted; `redis://127.0.0.1:11009` is parsed as Python source and
+  dies with `SyntaxError` pointing at the `//`. String values must be sent WITH quotes.
+- **`bench setup procfile` has no `--yes`** and asks before overwriting — and `bench init`
+  always writes a Procfile, so it prompts every time and aborts on closed stdin. Remove the old
+  one first. It has to be regenerated: the Procfile carries the web port in its own command line.
+- **Ports live in three places** — `common_site_config.json`, `config/redis_*.conf`, and the
+  Procfile. Setting only the first leaves redis listening on the old port, silently sharing
+  another bench's cache and queue.
+- **`bench init` and `get-app` both exit non-zero from a trailing `sudo supervisorctl`** on any
+  box without passwordless sudo, after the work is done. See the invariant below.
 
 ### Steps
 

@@ -519,6 +519,134 @@ def run_bench_command(
 
 
 @frappe.whitelist()
+def provision_preflight(
+	bench_name: str,
+	site_name: str | None = None,
+	frappe_version: str = "16",
+	has_password: int | bool = 0,
+) -> dict:
+	"""Answer everything about a proposed bench before anything is spent.
+
+	Called as the wizard is filled in, so it must be cheap and must not need
+	the password itself — `has_password` is the tick, not the value. A password
+	typed into a form should not travel to the server until the moment it is
+	needed.
+	"""
+	_assert_server_admin()
+
+	from server.bench import provision
+
+	settings = get_settings()
+	root = settings.get_bench_root()
+
+	checks = provision.preflight(
+		bench_root=root,
+		bench_name=bench_name,
+		site_name=site_name or "",
+		db_root_password="x" if frappe.parse_json(has_password) else "",
+		frappe_version=frappe_version,
+	)
+
+	used = frappe.get_all("Server Bench", filters={"is_active": 1}, pluck="webserver_port")
+	try:
+		index = provision.allocate_index([p for p in used if p])
+		ports = provision.ports_for(index).as_dict()
+		port_error = ""
+	except provision.Refusal as exc:
+		ports, port_error = {}, str(exc)
+
+	return {
+		"bench_root": root,
+		"checks": [check.__dict__ for check in checks],
+		"ready": all(check.ok for check in checks if check.blocking) and not port_error,
+		"ports": ports,
+		"port_error": port_error,
+		"versions": list(provision.VERSIONS),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def run_provision(
+	bench_name: str,
+	frappe_version: str = "16",
+	site_name: str | None = None,
+	apps: list | str | None = None,
+	db_root_password: str | None = None,
+	admin_password: str | None = None,
+	domain: str | None = None,
+	domain_provider: str | None = None,
+	skip_assets: int | bool = 1,
+	confirm: str | None = None,
+) -> dict:
+	"""Queue the build of a new bench.
+
+	`confirm` must equal the bench name. This spends several minutes and about
+	four gigabytes, creates a database, and cannot be undone by pressing
+	cancel — the row would stop, but a half-built bench stays on the disk.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	from server.bench import provision
+
+	try:
+		bench_name, site_name = provision.validate_names(bench_name, site_name or "")
+	except provision.Refusal as exc:
+		frappe.throw(str(exc), title="Cannot Build That")
+
+	if (confirm or "").strip() != bench_name:
+		frappe.throw(
+			f"This builds a new bench and can take several minutes. Type “{bench_name}” to confirm.",
+			title="Confirmation Required",
+		)
+
+	# Allocated here rather than in the job, so two requests queued in the same
+	# minute cannot be handed the same block.
+	used = frappe.get_all("Server Bench", filters={"is_active": 1}, pluck="webserver_port")
+	try:
+		index = provision.allocate_index([p for p in used if p])
+	except provision.Refusal as exc:
+		frappe.throw(str(exc), title="No Ports Left")
+
+	chosen = frappe.parse_json(apps) if isinstance(apps, str) else (apps or [])
+	lines = []
+	for entry in chosen:
+		if isinstance(entry, dict):
+			lines.append(
+				"|".join(
+					[
+						str(entry.get("profile") or ""),
+						str(entry.get("repo") or ""),
+						str(entry.get("branch") or ""),
+					]
+				)
+			)
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "App Install Request",
+			"operation": "Provision",
+			"provision_bench_name": bench_name,
+			"provision_site_name": site_name,
+			"provision_frappe_version": str(frappe_version),
+			"provision_apps": "\n".join(lines),
+			"provision_port_index": index,
+			"provision_skip_assets": 1 if frappe.parse_json(skip_assets) else 0,
+			"provision_domain": (domain or "").strip().lower() or None,
+			"provision_domain_provider": domain_provider or None,
+			"status": "Draft",
+		}
+	)
+	if db_root_password:
+		doc.provision_db_password = db_root_password
+	if admin_password:
+		doc.provision_admin_password = admin_password
+	doc.insert()
+	frappe.db.commit()
+	return run_install_request(doc.name)
+
+
+@frappe.whitelist()
 def list_domain_providers() -> dict:
 	"""Every stored registrar credential, without the credentials.
 
@@ -1946,6 +2074,11 @@ def list_install_requests(start: int = 0, page_length: int = 20) -> dict:
 			fields=[
 				"name",
 				"bench",
+				# `adoptRunningJobs` re-adopts from THIS listing after a page
+				# reload, and the dock picks its verb from `operation`. Without
+				# it every adopted job fell back to the default and a restore,
+				# an SSL run and a bench build all displayed as "Cloning".
+				"operation",
 				"app_name",
 				"branch",
 				"status",

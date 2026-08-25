@@ -242,6 +242,31 @@ def for_command(label: str) -> list[Step]:
 	return make(CHECK, ("run", label, "Run the command and stream its output."))
 
 
+def for_provision(apps: list[str], with_site: bool, with_domain: bool) -> list[Step]:
+	"""Building a bench, announced in full before anything is spent.
+
+	One step per app rather than a single "install the apps": these are the
+	slowest parts and the ones most likely to fail individually, and "failed
+	while cloning erpnext" is a different problem from "failed while cloning
+	the private one nobody has access to".
+	"""
+	specs = [
+		("check", "Check before building", "Disk, memory, the interpreter, and that the name is free."),
+		("init", "Create the bench", "bench init — clones frappe and builds the environment. The long one."),
+		("ports", "Move it off the default ports", "So it does not share redis with an existing bench."),
+	]
+	for app in apps:
+		specs.append((f"get:{app}", f"Fetch {app}", "bench get-app"))
+	if with_site:
+		specs.append(("site", "Create the site", "bench new-site — the database is created here."))
+		for app in apps:
+			specs.append((f"install:{app}", f"Install {app}", "bench --site <site> install-app"))
+	if with_domain:
+		specs.append(("domain", "Point the domain here", "Write the DNS record and tell frappe about it."))
+	specs.append(RESCAN)
+	return make(*specs)
+
+
 def for_console(label: str) -> list[Step]:
 	"""A console command: check, run, then re-read the bench.
 

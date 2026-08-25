@@ -1,11 +1,20 @@
 <template>
 	<AppShell title="Benches" :subtitle="subtitle">
 		<template #actions>
-			<Button :loading="rescanning" @click="rescan">
-				<template #prefix><Icon name="refresh" :size="14" /></template>
-				Rescan
+			<!--
+				Rescan moves into the menu rather than disappearing. It is still
+				the right thing after changing something on disk by hand, but it
+				is a maintenance action — and it was occupying the one prominent
+				button on a page whose obvious missing verb was "make one".
+			-->
+			<ActionMenu label="Actions" :options="actions" />
+			<Button variant="solid" @click="showProvision = true">
+				<template #prefix><Icon name="layers" :size="14" /></template>
+				Build a bench
 			</Button>
 		</template>
+
+		<ProvisionDialog v-model="showProvision" @started="onProvisionStarted" />
 
 		<!-- Git access is a one-line summary here and the full report lives on a
 		     bench, because this page is now a list you scan rather than read. -->
@@ -121,6 +130,8 @@ import DataTable from "../components/DataTable.vue";
 import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import Skeleton from "../components/Skeleton.vue";
+import ActionMenu from "../components/ActionMenu.vue";
+import ProvisionDialog from "../components/ProvisionDialog.vue";
 import { benchesResource, gitAuthResource, rescanBenchesResource } from "../api";
 
 const COLUMNS = [
@@ -148,6 +159,23 @@ const subtitle = computed(() =>
 
 const dirtyCount = (bench) => bench.apps.filter((a) => a.is_dirty).length;
 const open = (bench) => router.push({ name: "BenchDetail", params: { name: bench.name } });
+
+const showProvision = ref(false);
+
+const actions = computed(() => [
+	{
+		label: "Rescan benches",
+		icon: "refresh",
+		description: "Re-read every bench from disk — after changing one by hand.",
+		onClick: rescan,
+	},
+]);
+
+function onProvisionStarted() {
+	// The dock owns the job from here. A rescan once it is likely to have
+	// finished is cosmetic; the job's own last step does the real one.
+	setTimeout(() => resource.fetch(), 4000);
+}
 
 async function rescan() {
 	rescanning.value = true;

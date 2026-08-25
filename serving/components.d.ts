@@ -25,6 +25,7 @@ declare module 'vue' {
     JobSteps: typeof import('./src/components/JobSteps.vue')['default']
     LogsDialog: typeof import('./src/components/LogsDialog.vue')['default']
     OutcomeMark: typeof import('./src/components/OutcomeMark.vue')['default']
+    ProvisionDialog: typeof import('./src/components/ProvisionDialog.vue')['default']
     RankBars: typeof import('./src/components/RankBars.vue')['default']
     RestoreDialog: typeof import('./src/components/RestoreDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

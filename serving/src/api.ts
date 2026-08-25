@@ -543,6 +543,16 @@ export function runInstallResource() {
 	return createResource({ url: `${M}.run_install_request` });
 }
 
+/* ------------------------------------------------------------- provisioning */
+
+export function provisionPreflightResource() {
+	return createResource({ url: `${M}.provision_preflight` });
+}
+
+export function runProvisionResource() {
+	return createResource({ url: `${M}.run_provision` });
+}
+
 /* --------------------------------------------------------- domain providers */
 
 export function domainProvidersResource() {

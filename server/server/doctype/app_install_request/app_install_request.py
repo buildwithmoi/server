@@ -37,6 +37,7 @@ OP_COMMAND = "Command"
 OP_SSL = "SSL"
 OP_RESTORE = "Restore"
 OP_CONSOLE = "Console"
+OP_PROVISION = "Provision"
 
 #: Form labels for the two SSL operations, mapped to the modes `bench.ssl` uses.
 SSL_MODES = {"Issue Or Reinstall": "issue", "Renew": "renew"}
@@ -54,6 +55,8 @@ class AppInstallRequest(Document):
 			self._validate_restore()
 		elif self.operation == OP_CONSOLE:
 			self._validate_console()
+		elif self.operation == OP_PROVISION:
+			self._validate_provision()
 		elif self.operation == OP_PULL:
 			self._validate_pull()
 		else:
@@ -66,6 +69,40 @@ class AppInstallRequest(Document):
 			frappe.throw(f"{self.branch!r} is not a valid branch name.")
 		if self.install_on_site and not VALID_SITE.match(self.install_on_site):
 			frappe.throw(f"{self.install_on_site!r} is not a valid site name.")
+
+	def _validate_provision(self):
+		"""A bench to build, checked before four gigabytes are spent on it.
+
+		`bench` is the only field on this request that names something which
+		does not exist yet, so `_validate_common`'s usual bench check does not
+		apply — the row records the bench it is CREATING.
+		"""
+		from server.bench import provision
+
+		try:
+			bench_name, site_name = provision.validate_names(
+				self.provision_bench_name, self.provision_site_name
+			)
+		except provision.Refusal as exc:
+			frappe.throw(str(exc), title="Cannot Build That")
+
+		self.provision_bench_name = bench_name
+		self.provision_site_name = site_name
+
+		if str(self.provision_frappe_version or "16") not in provision.VERSIONS:
+			frappe.throw(
+				f"Frappe {self.provision_frappe_version!r} is not one this app builds.",
+				title="Unknown Version",
+			)
+
+		if site_name and not self.get_password("provision_db_password", raise_exception=False):
+			frappe.throw(
+				"Creating a site needs the database root password — bench has no way to take it "
+				"other than on the command line.",
+				title="Password Required",
+			)
+
+		self.app_name = f"Provision · {bench_name}"
 
 	def _validate_console(self):
 		"""An arbitrary command, refused only when it is not a command at all.
@@ -281,6 +318,29 @@ class AppInstallRequest(Document):
 	def is_console(self) -> bool:
 		return self.operation == OP_CONSOLE
 
+	def is_provision(self) -> bool:
+		return self.operation == OP_PROVISION
+
+	def provision_app_list(self) -> list[tuple[str, str, str]]:
+		"""The apps to fetch, as (profile, repo, branch) triples.
+
+		Stored as text rather than a child table because the request is a
+		record of what was asked for, not a live relationship — a GitHub
+		profile deleted later must not rewrite the history of a bench that was
+		already built from it.
+		"""
+		found = []
+		for line in (self.provision_apps or "").splitlines():
+			parts = [part.strip() for part in line.split("|")]
+			if not parts or not parts[0]:
+				continue
+			profile = parts[0]
+			repo = parts[1] if len(parts) > 1 else ""
+			branch = parts[2] if len(parts) > 2 else ""
+			if repo:
+				found.append((profile, repo, branch))
+		return found
+
 	def resolve_backup(self, bench_path: str):
 		"""The backup this request restores, however it was chosen.
 
@@ -302,7 +362,17 @@ class AppInstallRequest(Document):
 			raise restore.RestoreRefused("Choose which backup to restore.")
 		return restore.find(bench_path, self.install_on_site, self.restore_backup_key)
 
-	def clear_restore_secrets(self) -> None:
+	#: Every Password field on this doctype. Listed in one place so adding a
+	#: sixth operation with a credential cannot quietly leave it behind — the
+	#: clearing is what makes it safe to take a database root password at all.
+	SECRET_FIELDS = (
+		"restore_db_password",
+		"restore_encryption_key",
+		"provision_db_password",
+		"provision_admin_password",
+	)
+
+	def clear_secrets(self) -> None:
 		"""Drop the credentials once the job is over.
 
 		They are only ever needed for the length of one subprocess. Keeping a
@@ -317,10 +387,14 @@ class AppInstallRequest(Document):
 		"""
 		from frappe.utils.password import remove_encrypted_password
 
-		for field in ("restore_db_password", "restore_encryption_key"):
+		for field in self.SECRET_FIELDS:
 			remove_encrypted_password(self.doctype, self.name, field)
 			if self.get(field):
 				self.db_set(field, None, update_modified=False)
+
+	#: The old name, kept so nothing that already calls it breaks. It never
+	#: only cleared restore secrets anyway once a second operation grew one.
+	clear_restore_secrets = clear_secrets
 
 	def ssl_mode_key(self) -> str:
 		return SSL_MODES.get(self.ssl_mode or "", "")

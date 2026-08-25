@@ -118,7 +118,16 @@ class InstallAborted(Exception):
 def _preflight(request, bench_doc, settings, on_step=None) -> list[str]:
 	"""Everything checkable cheaply, before spending minutes on a subprocess."""
 	settings.assert_installs_allowed()
-	bench_doc.assert_usable()
+
+	# A Provision request is the one shape with no bench to check: it is
+	# building the bench. Everything else acts on one that already exists, and
+	# the usability check is re-run here rather than trusted from validate
+	# time because a directory can disappear between the two.
+	if bench_doc is not None:
+		bench_doc.assert_usable()
+
+	if request.is_provision():
+		return _preflight_provision(request, settings)
 
 	if not request.app_name:
 		raise InstallAborted("No app name could be derived from the source.")
@@ -232,6 +241,108 @@ def _preflight_ssl(request, bench_doc) -> list[str]:
 		"Renew certificates" + (" (dry run — nothing installed)" if request.ssl_dry_run else ""),
 		"nginx stops for the check and starts again afterwards, even if renewal fails.",
 	]
+
+
+def _app_landed(bench_path: str, app_name: str, branch: str = "") -> bool:
+	"""Is the app actually checked out, whatever `get-app` exited with?
+
+	The provisioning equivalent of `_clone_landed`, which cannot be reused
+	directly because that one reads `request.app_path` — a Provision request
+	has many apps and none of them is `app_name`.
+	"""
+	try:
+		app = scanner.read_app(os.path.join(bench_path, "apps", app_name))
+	except Exception:  # noqa: BLE001
+		return False
+	if not app.git_url:
+		return False
+	if branch and app.branch and app.branch != branch:
+		return False
+	return True
+
+
+def _provision_git_url(profile_name: str, repo: str) -> str:
+	"""The clone URL for an app, from the GitHub Profile that owns it.
+
+	Resolved here rather than stored on the request so a profile whose SSH
+	alias changed since the request was queued still clones correctly.
+	"""
+	if not profile_name or not frappe.db.exists("GitHub Profile", profile_name):
+		# A bare repo name with no profile is treated as a plain git URL, which
+		# is what somebody pasting one would expect.
+		return repo
+	return frappe.get_doc("GitHub Profile", profile_name).git_url(repo)
+
+
+def _provision_domain(request, bench_path: str, site: str) -> list[str]:
+	"""Write the DNS record and report what is still manual.
+
+	Never raises and never fails the job. The bench and the site are built by
+	this point, and a registrar having a bad afternoon is not a reason to
+	report that as a failure — it is a reason to say which step is left.
+	"""
+	notes = []
+	try:
+		from server.server.doctype.domain_provider.domain_provider import DomainProvider  # noqa: F401
+
+		result = frappe.call(
+			"server.api.point_domain_at_this_host",
+			name=request.provision_domain_provider,
+			domain=request.provision_domain,
+			confirm=request.provision_domain,
+		)
+	except Exception as exc:  # noqa: BLE001
+		notes.append(f"Could not write the DNS record: {exc}")
+		result = {"ok": False}
+
+	if result.get("ok"):
+		notes.append(
+			f"{request.provision_domain} now points at {result.get('address')} "
+			f"(zone {result.get('zone')})."
+		)
+	elif result.get("error"):
+		notes.append(f"DNS was not written: {result['error']}")
+
+	# The half everybody forgets. A record alone does not make frappe serve the
+	# name, and two of the remaining steps need root this app does not have.
+	if site:
+		notes.append(
+			"Still to do, and these need root: "
+			f"bench setup add-domain --site {site} {request.provision_domain}; "
+			"bench config dns_multitenant on; bench setup nginx --yes; "
+			"sudo bench setup reload-nginx"
+		)
+	return notes
+
+
+def _preflight_provision(request, settings) -> list[str]:
+	"""Answer everything before four gigabytes are spent on a clone.
+
+	The checks themselves live in the frappe-free `provision.preflight`, which
+	returns the same `ssl.Check` rows the SSL readiness panel uses. Anything
+	blocking that failed stops the run here, with the check's own detail as the
+	message — those are written to name the command that fixes them.
+	"""
+	from server.bench import provision
+
+	root = settings.get_bench_root()
+	checks = provision.preflight(
+		bench_root=root,
+		bench_name=request.provision_bench_name,
+		site_name=request.provision_site_name or "",
+		db_root_password=request.get_password("provision_db_password", raise_exception=False) or "",
+		frappe_version=str(request.provision_frappe_version or "16"),
+		skip_assets=bool(request.provision_skip_assets),
+	)
+
+	failed = [check for check in checks if check.blocking and not check.ok]
+	if failed:
+		raise InstallAborted("; ".join(f"{check.label}: {check.detail}" for check in failed))
+
+	notes = [f"{check.label}: {check.detail}" for check in checks]
+	advisory = [check for check in checks if not check.blocking and not check.ok]
+	notes += [f"Warning — {check.label}: {check.detail}" for check in advisory]
+	return notes
 
 
 def _preflight_console(request) -> list[str]:
@@ -739,29 +850,40 @@ def _close_stale(request, was: str, limit: int) -> bool:
 
 
 def _scrub_orphan_secrets() -> int:
-	"""Clear restore credentials from requests that have finished.
+	"""Clear credentials from requests that have finished.
 
 	`finish()` is meant to be the one place these are cleared, but it is not
 	reachable when the process dies inside it — and the last-resort handler that
 	runs then could not clear them either. A finished row has no use for a
 	database root password under any circumstances, so anything terminal with
 	one still attached is scrubbed here.
+
+	THE FIELD LIST COMES FROM THE DOCTYPE, not from a copy kept here. It was a
+	copy, naming only the two restore fields, and when provisioning added a
+	database root password of its own this would have walked straight past it —
+	leaving exactly the credential this function exists to remove.
 	"""
 	from frappe.utils.password import remove_encrypted_password
 
+	from server.server.doctype.app_install_request.app_install_request import AppInstallRequest
+
+	fields = list(AppInstallRequest.SECRET_FIELDS)
+	placeholders = ", ".join(["%s"] * len(fields))
+
 	rows = frappe.db.sql(
-		"""
+		f"""
 		SELECT DISTINCT a.name
 		FROM `__Auth` a
 		JOIN `tabApp Install Request` r ON r.name = a.name
 		WHERE a.doctype = 'App Install Request'
-		  AND a.fieldname IN ('restore_db_password', 'restore_encryption_key')
+		  AND a.fieldname IN ({placeholders})
 		  AND r.status IN ('Success', 'Completed With Warnings', 'Failed', 'Cancelled')
 		""",
+		fields,
 		as_dict=True,
 	)
 	for row in rows:
-		for field in ("restore_db_password", "restore_encryption_key"):
+		for field in fields:
 			remove_encrypted_password("App Install Request", row.name, field)
 	return len(rows)
 
@@ -771,6 +893,12 @@ def _plan_for(request) -> list:
 	if request.is_command():
 		command = commands.get(request.bench_command or "")
 		return step_plan.for_command(command.label if command else "Run the command")
+	if request.is_provision():
+		return step_plan.for_provision(
+			[repo for _, repo, _ in request.provision_app_list()],
+			bool(request.provision_site_name),
+			bool(request.provision_domain and request.provision_domain_provider),
+		)
 	if request.is_console():
 		from server.bench import console
 
@@ -976,7 +1104,16 @@ def run_install_request(name: str) -> dict:
 				frappe.db.commit()
 			return {"name": name, "status": request.status, "exit_code": NEVER_RAN}
 
-		bench_doc = frappe.get_doc("Server Bench", request.bench)
+		# A Provision request has no bench yet — it is building one. Everything
+		# that would normally come off the bench document comes from settings
+		# instead, and the row is linked to the bench once it exists.
+		bench_doc = (
+			None if request.is_provision() else frappe.get_doc("Server Bench", request.bench)
+		)
+		lock_name = request.provision_bench_name if request.is_provision() else request.bench
+		work_dir = (
+			settings.get_bench_root() if request.is_provision() else bench_doc.bench_path
+		)
 		request.db_set(
 			{
 				"status": "Running",
@@ -1004,15 +1141,19 @@ def run_install_request(name: str) -> dict:
 		env = settings.get_bench_env()
 		timeout = settings.get_install_timeout()
 
-		#: Set when the clone succeeded but bench's own post-step did not. The
-		#: run still continues — install-app has to happen — and the outcome is
-		#: reported as a warning rather than a failure at the end.
+		#: Set when the real work succeeded but bench's own post-step did not.
+		#: The run still continues — install-app has to happen — and the outcome
+		#: is reported as a warning rather than a failure at the end.
+		#:
+		#: Used by both `get-app` and `bench init`, which fail the same way: the
+		#: thing was done, and a trailing `supervisorctl` call that needs root
+		#: took the exit code down with it.
 		clone_warning = None
 
 		# Scoped to this bench, so two different benches can install in
 		# parallel while one bench never sees concurrent get-app calls.
 		try:
-			with filelock(f"server_bench_install::{bench_doc.name}", timeout=5, is_global=True):
+			with filelock(f"server_bench_install::{lock_name}", timeout=5, is_global=True):
 				if request.is_command():
 					step("run")
 					command = commands.get(request.bench_command)
@@ -1037,6 +1178,176 @@ def run_install_request(name: str) -> dict:
 								code, timed_out, command.timeout, request, f"bench {command.label.lower()}"
 							),
 						)
+				elif request.is_provision():
+					from server.bench import provision
+
+					new_bench = request.provision_bench_name
+					new_path = os.path.join(work_dir, new_bench)
+					version = str(request.provision_frappe_version or "16")
+					skip_assets = bool(request.provision_skip_assets)
+
+					def run(argv, cwd, what, budget=None):
+						"""One phase. Returns None on success, or a finish()."""
+						shown = " ".join(restore.redact(argv))
+						request.db_set("command", shown, update_modified=False)
+						frappe.db.commit()
+						emit(f"$ {shown}")
+						code, timed_out = _stream(
+							argv, cwd, env, budget or timeout, emit, should_cancel
+						)
+						if code != 0:
+							return finish(
+								"Failed",
+								exit_code=code,
+								error=_explain_failure(code, timed_out, budget or timeout, request, what),
+							)
+						return None
+
+					step("init")
+					interpreter = provision.resolve_interpreter(version)
+					emit(f"Using {interpreter}")
+					init_argv = provision.build_init_argv(
+						settings.bench_executable, new_bench, interpreter, version, skip_assets
+					)
+					shown = " ".join(init_argv)
+					request.db_set("command", shown, update_modified=False)
+					frappe.db.commit()
+					emit(f"$ {shown}")
+					# A cold clone of frappe plus a virtualenv is the longest
+					# single thing this app runs.
+					init_budget = max(timeout, 3600)
+					code, timed_out = _stream(
+						init_argv, work_dir, env, init_budget, emit, should_cancel
+					)
+
+					if code != 0 and not timed_out and provision.bench_landed(new_path):
+						# `bench init` finishes its actual work and THEN runs
+						# `sudo supervisorctl status`, which fails on any box
+						# without passwordless sudo and takes the exit code
+						# with it. The same shape as the `get-app` quirk this
+						# app already handles — so ask the disk, not the code.
+						clone_warning = (
+							"bench init exited non-zero, but the bench is on disk and frappe "
+							"imports — almost always its trailing `sudo supervisorctl status`, "
+							"which needs root this app does not have. Continuing."
+						)
+						emit(clone_warning)
+						plan.succeed("init", "Built; bench's own exit code was non-zero.")
+					elif code != 0:
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_failure(code, timed_out, init_budget, request, "bench init"),
+						)
+
+					# From here the bench exists on disk, so everything runs
+					# inside it and a failure leaves something to inspect
+					# rather than a half-written directory.
+					step("ports")
+					ports = provision.ports_for(int(request.provision_port_index or 0) or 1)
+					emit(
+						f"web {ports.webserver}, socketio {ports.socketio}, "
+						f"redis {ports.redis_queue}/{ports.redis_cache}"
+					)
+					for argv, what in (
+						(provision.build_port_argv(settings.bench_executable, ports), "setting the ports"),
+						(provision.build_redis_argv(settings.bench_executable), "bench setup redis"),
+					):
+						failure = run(argv, new_path, what, budget=300)
+						if failure:
+							return failure
+
+					# `bench setup procfile` has no --yes and asks "A Procfile
+					# already exists and this will overwrite it. Continue?" —
+					# and `bench init` always writes one, so it would prompt
+					# every time and abort on closed stdin. Removing it first
+					# is what answering the prompt would have done anyway, and
+					# it has to be regenerated because the Procfile carries the
+					# web port in its own command line.
+					stale = os.path.join(new_path, "Procfile")
+					try:
+						if os.path.exists(stale):
+							os.remove(stale)
+					except OSError as exc:
+						emit(f"Could not remove the old Procfile: {exc}")
+
+					failure = run(
+						provision.build_procfile_argv(settings.bench_executable),
+						new_path,
+						"bench setup procfile",
+						budget=300,
+					)
+					if failure:
+						return failure
+
+					apps = request.provision_app_list()
+					for profile_name, repo, branch in apps:
+						step(f"get:{repo}")
+						git_url = _provision_git_url(profile_name, repo)
+						get_argv = provision.build_get_app_argv(
+							settings.bench_executable, repo, git_url, branch
+						)
+						shown = " ".join(get_argv)
+						request.db_set("command", shown, update_modified=False)
+						frappe.db.commit()
+						emit(f"$ {shown}")
+						get_budget = max(timeout, 3600)
+						code, timed_out = _stream(
+							get_argv, new_path, env, get_budget, emit, should_cancel
+						)
+
+						# `get-app` has the SAME trailing-supervisorctl quirk as
+						# `bench init` — it is the reason `_clone_landed` exists
+						# for the ordinary install path. Without this, fetching
+						# an app during provisioning would fail on any machine
+						# without passwordless sudo, having already cloned it.
+						if code != 0 and not timed_out and _app_landed(new_path, repo, branch):
+							clone_warning = (
+								f"{repo} is on disk but bench exited non-zero — usually its "
+								"trailing `sudo supervisorctl` call. Continuing."
+							)
+							emit(clone_warning)
+							plan.succeed(f"get:{repo}", "Fetched; bench's own exit code was non-zero.")
+						elif code != 0:
+							return finish(
+								"Failed",
+								exit_code=code,
+								error=_explain_failure(
+									code, timed_out, get_budget, request, f"fetching {repo}"
+								),
+							)
+
+					site = request.provision_site_name
+					if site:
+						step("site")
+						failure = run(
+							provision.build_new_site_argv(
+								settings.bench_executable,
+								site,
+								request.get_password("provision_db_password", raise_exception=False) or "",
+								request.get_password("provision_admin_password", raise_exception=False) or "",
+							),
+							new_path,
+							"bench new-site",
+						)
+						if failure:
+							return failure
+
+						for _, repo, _ in apps:
+							step(f"install:{repo}")
+							failure = run(
+								provision.build_install_app_argv(settings.bench_executable, site, repo),
+								new_path,
+								f"installing {repo}",
+							)
+							if failure:
+								return failure
+
+					if request.provision_domain and request.provision_domain_provider:
+						step("domain")
+						for line in _provision_domain(request, new_path, site):
+							emit(line)
+
 				elif request.is_console():
 					from server.bench import console
 
@@ -1251,6 +1562,16 @@ def run_install_request(name: str) -> dict:
 
 			discovery.scan_benches()
 			emit("Bench re-read from disk.")
+
+			# A Provision request starts with no bench and ends having made
+			# one. Linking it now is what makes the row findable from the
+			# bench it created, rather than being the only job in the list
+			# with an empty Bench column.
+			if request.is_provision() and not request.bench:
+				created = request.provision_bench_name
+				if frappe.db.exists("Server Bench", created):
+					request.db_set("bench", created, update_modified=False)
+					emit(f"Linked this request to {created}.")
 		except Exception as exc:
 			# A stale app list is a cosmetic problem; the operation itself
 			# already succeeded. Say so and carry on.
@@ -1340,6 +1661,9 @@ def _explain_failure(code: int, timed_out: bool, timeout: int, request, what: st
 	if code < 0:
 		return f"{what} was killed by signal {abs(code)} before it finished."
 
+	if what == "bench init":
+		return _explain_init_failure(code, request)
+
 	if what == "git pull" and not request.allow_merge:
 		return (
 			f"{what} exited {code}. The most likely cause is that the branch has diverged from the "
@@ -1348,6 +1672,77 @@ def _explain_failure(code: int, timed_out: bool, timeout: int, request, what: st
 		)
 
 	return f"{what} exited {code}."
+
+
+#: What a failed `bench init` usually means, matched against its own output.
+#: Each entry is (substring, explanation). Order matters: the first match wins,
+#: so the specific causes come before the general ones.
+_INIT_CAUSES = (
+	(
+		"invalid index-pack output",
+		"git ran out of memory unpacking the clone. This is the most common way `bench init` "
+		"fails on a machine that is otherwise fine — index-pack is the memory spike, and it is "
+		"killed rather than told to slow down. Free some memory and try again; the same clone "
+		"usually succeeds on a quieter box.",
+	),
+	(
+		"fetch-pack",
+		"the clone did not complete. Either the connection dropped part way, or git ran out of "
+		"memory unpacking it — both surface here identically.",
+	),
+	(
+		"Could not resolve host",
+		"this machine could not reach github.com. Check DNS and outbound access.",
+	),
+	(
+		"Permission denied (publickey)",
+		"git was refused. `bench init` clones frappe over HTTPS, so this is unusual — check "
+		"whether a global git insteadOf rule is rewriting the URL to SSH.",
+	),
+	(
+		"No space left on device",
+		"the disk filled up during the build.",
+	),
+)
+
+
+def _explain_init_failure(code: int, request) -> str:
+	"""Why `bench init` failed, and the thing nobody is told otherwise.
+
+	TWO PROBLEMS THIS SOLVES, both seen on the first real run.
+
+	The cause is buried. bench prints a Python traceback wrapping a
+	`CommandFailedError`, and the line that says what actually went wrong —
+	`fatal: fetch-pack: invalid index-pack output` — is a hundred lines above
+	it. "bench init exited 1" is true and useless.
+
+	The directory is left behind. On failure bench asks "Do you want to
+	rollback these changes? [y/N]" and a job has no stdin, so it aborts and
+	the half-built directory stays. The next attempt then fails the pre-flight
+	with "already exists", which reads as a different problem entirely. Saying
+	so here is the difference between one confusing failure and two.
+	"""
+	from server.bench import provision  # noqa: F401  (kept for symmetry/imports)
+
+	tail = "\n".join((request.output or "").strip().splitlines()[-80:])
+	cause = ""
+	for needle, explanation in _INIT_CAUSES:
+		if needle in tail:
+			cause = explanation
+			break
+
+	leftover = (
+		f"The partly-built directory has been left in place — bench asks whether to roll back and "
+		f"a job has no way to answer, so it aborts. Remove it before trying again: "
+		f"rm -rf <bench root>/{request.provision_bench_name}"
+	)
+
+	if cause:
+		return f"bench init exited {code}: {cause} {leftover}"
+	return (
+		f"bench init exited {code}. The reason is in the log above, usually a hundred lines up "
+		f"from the traceback. {leftover}"
+	)
 
 
 def _tail(lines: list[str], count: int = 12) -> str:
@@ -1373,6 +1768,13 @@ def _worst_case_seconds(request, settings) -> int:
 	if request.is_command():
 		command = commands.get(request.bench_command or "")
 		return command.timeout if command else budget
+	if request.is_provision():
+		# A clone of frappe, a virtualenv, one clone per app, a site, and an
+		# install per app. Budgeted generously because the failure mode of
+		# guessing low is RQ killing the job with its own opaque error instead
+		# of this file's actionable one.
+		apps = max(1, len(request.provision_app_list()))
+		return max(budget, 3600) * (2 + apps)
 	if request.is_console():
 		from server.bench import console
 
