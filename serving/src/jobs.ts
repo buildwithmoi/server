@@ -51,6 +51,38 @@ export interface Job {
 
 const POLL_MS = 1500;
 
+/**
+ * Frappe writes datetimes as naive strings in the SITE's timezone, with no
+ * offset. `new Date("2026-08-25 09:00:00")` then interprets them in the
+ * BROWSER's timezone — so an operator in a different timezone from the server
+ * saw a job that started "3 hours ago" the instant it began, or a negative
+ * elapsed time.
+ *
+ * The boot payload carries the site timezone, so the offset between the two is
+ * measurable and can simply be removed.
+ */
+function siteOffsetMinutes(): number {
+	const zone = (window as any).boot?.time_zone || (window as any).boot?.sysdefaults?.time_zone;
+	if (!zone) return 0;
+	try {
+		const now = new Date();
+		// The same instant, formatted in each zone, differ by exactly the offset.
+		const inSite = new Date(now.toLocaleString("en-US", { timeZone: zone }));
+		const inBrowser = new Date(now.toLocaleString("en-US"));
+		return Math.round((inSite.getTime() - inBrowser.getTime()) / 60000);
+	} catch {
+		return 0;
+	}
+}
+
+/** Parse a frappe datetime string into a real instant. */
+export function parseServerTime(value: string | null): number | null {
+	if (!value) return null;
+	const parsed = new Date(String(value).replace(" ", "T"));
+	if (Number.isNaN(parsed.getTime())) return null;
+	return parsed.getTime() - siteOffsetMinutes() * 60000;
+}
+
 /** How long a finished job stays on screen so the outcome is actually seen. */
 const LINGER_MS = 20000;
 
@@ -201,8 +233,7 @@ function stopPolling() {
  * you are checking whether it is stuck.
  */
 export function elapsed(job: Job): number {
-	const started = job.started_at ? Date.parse(job.started_at.replace(" ", "T")) : job.adoptedAt;
-	const from = Number.isNaN(started) ? job.adoptedAt : started;
+	const from = parseServerTime(job.started_at) ?? job.adoptedAt;
 	return Math.max(0, Math.round((Date.now() - from) / 1000));
 }
 

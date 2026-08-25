@@ -143,16 +143,58 @@ def _insert(doc: dict, stats: IngestStats) -> None:
 	savepoint = f"ingest_{stats.read}"
 	try:
 		frappe.db.savepoint(savepoint)
-		frappe.get_doc(doc).insert(ignore_permissions=True)
+		frappe.get_doc(_fit_to_columns(doc)).insert(ignore_permissions=True)
 		stats.inserted += 1
 	except (frappe.UniqueValidationError, frappe.DuplicateEntryError):
 		frappe.db.rollback(save_point=savepoint)
 		stats.skipped += 1
+	except Exception:
+		# Backstop. One unusable record must never stop collection.
+		#
+		# Every capture in the parser is unbounded while the columns are
+		# varchar(140), so a 300-character username — which an attacker chooses
+		# freely — raised CharacterLengthExceededError. That is a SIBLING of
+		# UniqueValidationError, not a subclass, so it escaped this handler,
+		# unwound the whole batch, and left the checkpoint unadvanced: the same
+		# record was re-read and failed again every five minutes, and SSH
+		# monitoring stopped for good. Blinding the audit log was one `logger`
+		# command away.
+		frappe.db.rollback(save_point=savepoint)
+		stats.skipped += 1
+		frappe.logger("server").warning(
+			f"could not store a {doc.get('doctype')} record; skipping it", exc_info=True
+		)
 
 
 # ---------------------------------------------------------------------------
 # The shared pipeline
 # ---------------------------------------------------------------------------
+
+
+#: Frappe `Data` columns are varchar(140). Parser captures are unbounded by
+#: design — the raw line is always kept in full — so anything destined for a
+#: Data column is trimmed to fit rather than allowed to reject the row.
+DATA_COLUMN_LIMIT = 140
+
+#: Fields that are Small Text or Long Text and must not be trimmed.
+_UNBOUNDED_FIELDS = frozenset({"raw_message", "command", "output", "doctype"})
+
+
+def _fit_to_columns(doc: dict) -> dict:
+	"""Trim values that would overflow their column.
+
+	Truncating loses a few characters of a username nobody legitimately has;
+	rejecting the row loses the fact that the attempt happened at all, and
+	rejecting it by exception used to lose every event after it too. The full
+	line is preserved in `raw_message` either way, so nothing is actually gone.
+	"""
+	fitted = {}
+	for key, value in doc.items():
+		if key in _UNBOUNDED_FIELDS or not isinstance(value, str) or len(value) <= DATA_COLUMN_LIMIT:
+			fitted[key] = value
+			continue
+		fitted[key] = value[: DATA_COLUMN_LIMIT - 1] + "…"
+	return fitted
 
 
 def ingest_syslog_lines(lines: list[parser.SyslogLine], ingest_source: str) -> IngestStats:

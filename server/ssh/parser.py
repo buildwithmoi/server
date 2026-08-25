@@ -631,6 +631,29 @@ def journal_record_to_syslog_line(record: dict) -> SyslogLine | None:
 	- `SYSLOG_IDENTIFIER` is absent for anything logged over the native journal
 	  protocol rather than syslog, where `_COMM` carries the program name.
 	- `MESSAGE` is a list of byte values when the record contains non-UTF8 data.
+
+	`_COMM` IS PREFERRED OVER `SYSLOG_IDENTIFIER`, and that ordering is the
+	whole security of this function. `SYSLOG_IDENTIFIER` is a label the writer
+	chooses, so any local account can run
+
+	    logger -p authpriv.notice -t sshd "Accepted publickey for root from 8.8.8.8 port 22 ssh2"
+
+	and, trusting the tag, this app would store a fully-formed successful root
+	login from an address of the attacker's choosing — indistinguishable in the
+	interface from a real one, and enough to fire the root-login alert. In a
+	tool whose purpose is to say who logged in, a forgeable audit trail is
+	worse than no audit trail.
+
+	`_COMM` is filled in by journald from the sending process's credentials and
+	cannot be set by the sender: the forged record above arrives with
+	`_COMM=logger`, which matches no rule in either table and is discarded as
+	noise. Filtering on `_UID=0` instead would be wrong — verified on this box,
+	real sudo records carry the INVOKING user's uid, so it would drop every
+	genuine sudo event, which is half of what this app collects.
+
+	The fallback to `SYSLOG_IDENTIFIER` remains for the records that genuinely
+	have no `_COMM`: `_TRANSPORT=syslog` entries whose process had already
+	exited when journald read them, which is a real and legitimate shape here.
 	"""
 	message = record.get("MESSAGE")
 	if isinstance(message, list):
@@ -638,7 +661,7 @@ def journal_record_to_syslog_line(record: dict) -> SyslogLine | None:
 	if not isinstance(message, str):
 		return None
 
-	program = record.get("SYSLOG_IDENTIFIER") or record.get("_COMM") or ""
+	program = record.get("_COMM") or record.get("SYSLOG_IDENTIFIER") or ""
 	raw_pid = record.get("SYSLOG_PID") or record.get("_PID")
 	try:
 		pid = int(raw_pid) if raw_pid is not None else None

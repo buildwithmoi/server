@@ -10,6 +10,8 @@ reviewed by reading one file. Every function starts with an `_assert_*` guard.
 
 import os
 import re
+import shutil
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -548,6 +550,20 @@ def update_site_config(bench: str, site: str, changes: dict | str) -> dict:
 	if not wanted:
 		frappe.throw("Nothing to change.")
 
+	# Refuse to take THIS app's own site off the air from inside this app.
+	#
+	# Maintenance mode makes frappe return 503 for every request, including the
+	# ones this interface makes — so turning it on here would work, and then
+	# there would be no way to turn it off again short of an SSH session and a
+	# text editor. Every other site on the bench is fair game.
+	if site == frappe.local.site and frappe.parse_json(wanted.get("maintenance_mode") or 0):
+		frappe.throw(
+			f"{site} is the site this app runs on. Turning maintenance mode on here would take "
+			"this interface down with it, and it could not be turned off again from inside. Use "
+			f"<code>bench --site {site} set-config maintenance_mode 1</code> if you really mean it.",
+			title="That Would Lock You Out",
+		)
+
 	try:
 		result = bench_siteconfig.write(doc.bench_path, site, wanted)
 	except bench_siteconfig.ConfigRefused as exc:
@@ -891,37 +907,41 @@ UPLOAD_EXTENSIONS = (".sql", ".sql.gz", ".tar", ".tar.gz", ".tgz", ".json")
 UPLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 
 
-@frappe.whitelist(methods=["POST"])
-def upload_backup(bench: str) -> dict:
-	"""Receive a backup file from the browser into the bench's drop zone.
+#: Uploads arrive in pieces.
+#:
+#: frappe caps the request body at 25 MB for every path except its own
+#: `/api/method/upload_file` (frappe/app.py), and it reads the whole body into
+#: memory in `before_request` regardless — so a single-request upload of a real
+#: dump was rejected with an HTML 413 before this endpoint's first line ran,
+#: and raising the cap would only move the failure to the worker's RAM. Chunks
+#: stay far below the limit and give the browser something real to show.
+CHUNK_LIMIT = 16 * 1024 * 1024
 
-	Streamed to disk rather than read into memory: a production dump is
-	routinely gigabytes and buffering one would take the worker out.
+#: Identifies one upload in progress. Becomes part of a filename.
+UPLOAD_ID = re.compile(r"^[A-Za-z0-9]{8,64}$")
 
-	The uploaded name is validated, not escaped — it becomes a path on the
-	server, and the drop zone sits beside `sites/`, so a name containing a
-	slash would be a way to write anywhere the bench user can reach.
+#: A part file older than this is abandoned and swept away.
+PART_MAX_AGE = 24 * 3600
+
+
+def _upload_target(bench_doc, name: str) -> tuple[str, str]:
+	"""Where a named upload lands, and its in-progress partner."""
+	directory = os.path.join(bench_doc.bench_path, "backups")
+	os.makedirs(directory, exist_ok=True)
+	return directory, os.path.join(directory, name)
+
+
+def _validate_upload_name(raw: str) -> str:
+	"""The uploaded name becomes a path on the server, so it is matched.
+
+	Refused, not quietly renamed: `basename` alone would neutralise a traversal
+	but save it under a different name, telling the operator nothing about what
+	just happened. A filename containing a path was never a browser's own doing.
 	"""
-	_assert_server_admin()
-	get_settings().assert_installs_allowed()
-
-	doc = frappe.get_doc("Server Bench", bench)
-	incoming = (frappe.request.files or {}).get("file") if frappe.request else None
-	if incoming is None:
-		frappe.throw("No file was uploaded.", title="Nothing Received")
-
-	raw = (incoming.filename or "").strip()
+	raw = (raw or "").strip()
 	name = os.path.basename(raw)
-
-	# Refused, not quietly renamed. `basename` already neutralises a traversal
-	# attempt, but silently saving `../../etc/cron.d/x.sql.gz` as `x.sql.gz`
-	# tells the operator nothing about what just happened — and a filename that
-	# contains a path was never a browser's own doing.
 	if raw != name or "\\" in raw:
-		frappe.throw(
-			f"{raw!r} contains a path. Upload the file by name only.", title="Not A Plain Filename"
-		)
-
+		frappe.throw(f"{raw!r} contains a path. Upload the file by name only.", title="Not A Plain Filename")
 	if not UPLOAD_NAME.match(name) or not name.lower().endswith(UPLOAD_EXTENSIONS):
 		frappe.throw(
 			f"{name!r} is not a backup file. Upload the .sql.gz dump, or a files tar, exactly as "
@@ -929,37 +949,110 @@ def upload_backup(bench: str) -> dict:
 			"belongs to.",
 			title="Not A Backup File",
 		)
+	return name
 
-	target_dir = os.path.join(doc.bench_path, "backups")
-	os.makedirs(target_dir, exist_ok=True)
-	target = os.path.join(target_dir, name)
-	if os.path.exists(target):
-		frappe.throw(f"{name} is already in {target_dir}.", title="Already There")
 
-	# Written to a temporary name first, then renamed. A half-uploaded file
-	# under the real name would be offered in the restore picker as though it
-	# were complete.
-	partial = f"{target}.uploading"
+@frappe.whitelist(methods=["POST"])
+def upload_backup_chunk(
+	bench: str,
+	upload_id: str,
+	filename: str,
+	chunk_index: int,
+	total_chunks: int,
+) -> dict:
+	"""Receive one piece of a backup into the bench's drop zone.
+
+	Appended to a `.part` file and renamed into place only when the last piece
+	lands, so a half-uploaded file is never offered in the restore picker as
+	though it were complete.
+
+	Pieces must arrive in order. Accepting them out of order would mean either
+	holding them all somewhere or seeking into a file whose final size is not
+	yet known, and a browser has no reason to send them out of order.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	doc = frappe.get_doc("Server Bench", bench)
+	name = _validate_upload_name(filename)
+	if not UPLOAD_ID.match(upload_id or ""):
+		frappe.throw("Bad upload id.", title="Upload Failed")
+
+	index, total = int(chunk_index), int(total_chunks)
+	if index < 0 or total < 1 or index >= total:
+		frappe.throw("Bad chunk numbering.", title="Upload Failed")
+
+	incoming = (frappe.request.files or {}).get("file") if frappe.request else None
+	if incoming is None:
+		frappe.throw("No data was uploaded.", title="Nothing Received")
+
+	directory, target = _upload_target(doc, name)
+	partial = os.path.join(directory, f".{upload_id}.part")
+
+	if index == 0:
+		if os.path.exists(target):
+			frappe.throw(f"{name} is already in {directory}.", title="Already There")
+		_sweep_stale_parts(directory)
+		mode = "wb"
+	else:
+		if not os.path.exists(partial):
+			frappe.throw(
+				"This upload was interrupted. Start it again.", title="Upload Lost"
+			)
+		mode = "ab"
+
 	try:
-		incoming.save(partial)
+		with open(partial, mode) as handle:
+			# Copied in blocks rather than read() in one go: the point of
+			# chunking is that nothing holds a whole file in memory.
+			shutil.copyfileobj(incoming.stream, handle, length=1024 * 1024)
+	except OSError as exc:
+		frappe.throw(f"Could not write the upload: {exc}", title="Upload Failed")
+
+	if index + 1 < total:
+		return {"received": index + 1, "of": total, "done": False}
+
+	try:
 		os.replace(partial, target)
 	except OSError as exc:
-		for path in (partial, target):
-			try:
-				os.unlink(path)
-			except OSError:
-				pass
-		frappe.throw(f"Could not save the upload: {exc}", title="Upload Failed")
+		frappe.throw(f"Could not finish the upload: {exc}", title="Upload Failed")
 
 	size = os.path.getsize(target)
-	frappe.logger("server").info(f"uploaded {name} ({size} bytes) to {bench} by {frappe.session.user}")
+	frappe.logger("server").info(
+		f"uploaded {name} ({size} bytes, {total} chunks) to {bench} by {frappe.session.user}"
+	)
 	return {
+		"received": total,
+		"of": total,
+		"done": True,
 		"name": name,
 		"path": target,
 		"size": size,
 		"size_text": system.human(size),
-		"directory": target_dir,
+		"directory": directory,
 	}
+
+
+def _sweep_stale_parts(directory: str) -> None:
+	"""Remove abandoned part files.
+
+	A browser tab closed mid-upload leaves one behind, and they are invisible
+	in the picker (the leading dot) — so without this they accumulate as disk
+	nobody can account for, on the machine whose disk this app watches.
+	"""
+	cutoff = time.time() - PART_MAX_AGE
+	try:
+		entries = list(os.scandir(directory))
+	except OSError:
+		return
+	for entry in entries:
+		if not entry.name.endswith(".part"):
+			continue
+		try:
+			if entry.stat().st_mtime < cutoff:
+				os.unlink(entry.path)
+		except OSError:
+			continue
 
 
 @frappe.whitelist()

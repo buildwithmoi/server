@@ -378,23 +378,23 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
-   "description": "Absolute path to the database dump. Must be inside the bench directory — restoring from anywhere else on the server is refused, because this path arrives from a browser.",
+   "description": "Absolute path to the database dump. Must be inside the bench directory — restoring from anywhere else on the server is refused, because this path arrives from a browser. Stored as Small Text rather than Data: a real backup path on a bench with a long site name exceeds the 140 characters a Data column holds, and the insert failed before the job could even be queued.",
    "fieldname": "restore_database_file",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Database File"
   },
   {
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
-   "description": "Optional. Absolute path to the public files tar, inside the bench directory.",
+   "description": "Optional. Absolute path to the public files tar, inside the bench directory. Stored as Small Text rather than Data: a real backup path on a bench with a long site name exceeds the 140 characters a Data column holds, and the insert failed before the job could even be queued.",
    "fieldname": "restore_public_file",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Public Files Tar"
   },
   {
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
-   "description": "Optional. Absolute path to the private files tar, inside the bench directory.",
+   "description": "Optional. Absolute path to the private files tar, inside the bench directory. Stored as Small Text rather than Data: a real backup path on a bench with a long site name exceeds the 140 characters a Data column holds, and the insert failed before the job could even be queued.",
    "fieldname": "restore_private_file",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Private Files Tar"
   },
   {

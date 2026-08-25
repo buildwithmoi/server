@@ -97,3 +97,70 @@ class TestCrossTransportDedup(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+try:
+	import frappe as _frappe
+
+	_HAS_SITE = bool(getattr(_frappe.local, "site", None))
+except Exception:  # pragma: no cover
+	_frappe = None
+	_HAS_SITE = False
+
+
+class TestOverlongValuesAreTrimmedNotRejected(unittest.TestCase):
+	"""An unbounded capture must not be able to stop collection.
+
+	Every parser capture is unbounded by design — the raw line is always kept
+	in full — while the columns are varchar(140). A 300-character username,
+	which an attacker chooses freely, raised CharacterLengthExceededError. That
+	is a SIBLING of UniqueValidationError, so it escaped the handler, unwound
+	the whole batch, and left the checkpoint unadvanced: the same record failed
+	again every five minutes and SSH monitoring stopped for good. Blinding the
+	audit log was one `logger` command away.
+	"""
+
+	def test_a_long_value_is_trimmed_to_fit(self):
+		from server.ssh import ingest
+
+		fitted = ingest._fit_to_columns({"doctype": "SSH Auth Event", "username": "A" * 300})
+		self.assertLessEqual(len(fitted["username"]), ingest.DATA_COLUMN_LIMIT)
+		self.assertTrue(fitted["username"].endswith("…"))
+
+	def test_the_raw_line_is_never_trimmed(self):
+		"""Truncating a username loses a few characters nobody legitimately
+		has; the full line is what makes the event still investigable."""
+		from server.ssh import ingest
+
+		raw = "x" * 5000
+		fitted = ingest._fit_to_columns({"doctype": "SSH Auth Event", "raw_message": raw})
+		self.assertEqual(fitted["raw_message"], raw)
+
+	def test_short_values_are_untouched(self):
+		from server.ssh import ingest
+
+		doc = {"doctype": "SSH Auth Event", "username": "patoo", "auth_method": "publickey"}
+		self.assertEqual(ingest._fit_to_columns(doc), doc)
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestIngestSurvivesABadRecord(unittest.TestCase):
+	def test_an_overlong_username_is_stored_rather_than_aborting_the_batch(self):
+		from server.ssh import ingest
+
+		stats = ingest.IngestStats()
+		doc = {
+			"doctype": "SSH Auth Event",
+			"event_time": _frappe.utils.now_datetime(),
+			"event_type": "Failed",
+			"outcome": "Failure",
+			"username": "A" * 300,
+			"raw_message": "x" * 400,
+			"dedup_hash": "f" * 40,
+			"ingest_source": "fixture",
+		}
+		try:
+			ingest._insert(doc, stats)
+			self.assertEqual(stats.inserted, 1)
+		finally:
+			_frappe.db.rollback()

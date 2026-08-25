@@ -162,9 +162,19 @@ def is_secret(key: str) -> bool:
 #: How a secret shows up in command output. `bench show-config` prints an
 #: ASCII table; other commands print JSON or key=value. All three are matched
 #: because any of them can carry a password into a log this app displays.
+#: Matched per line, and the value runs to the END of the line.
+#:
+#: The value group used to stop at a quote or a pipe, so a password containing
+#: either — `P@ss'w0rd!` — had only its leading fragment replaced and the tail
+#: was written into the stored log verbatim. A partly-redacted secret is a
+#: leaked secret. A trailing table delimiter is put back afterwards so
+#: `bench show-config` output still lines up.
 _SECRET_LINE = re.compile(
-	r"""(?P<lead>[|\s"']*)(?P<key>[A-Za-z0-9_.-]+)(?P<sep>\s*["']?\s*[|:=]\s*["']?\s*)(?P<value>[^|"'\n]+)""",
+	r"^(?P<lead>[|\s\"']*)(?P<key>[A-Za-z0-9_.-]+)(?P<sep>\s*[\"']?\s*[|:=]\s*)(?P<value>.+)$"
 )
+
+#: Put back after redaction, so a table row keeps its shape.
+_TRAILING = re.compile(r"(?P<trail>[\"',]?\s*\|?\s*)$")
 
 
 def scrub(text: str) -> str:
@@ -179,12 +189,14 @@ def scrub(text: str) -> str:
 	command that prints a credential will not be one anybody predicted.
 	"""
 
-	def replace(match: re.Match) -> str:
-		if not is_secret(match["key"]):
-			return match.group(0)
-		return f"{match['lead']}{match['key']}{match['sep']}{REDACTED}"
+	def replace_line(line: str) -> str:
+		match = _SECRET_LINE.match(line)
+		if not match or not is_secret(match["key"]):
+			return line
+		trail = _TRAILING.search(match["value"])
+		return f"{match['lead']}{match['key']}{match['sep']}{REDACTED}{trail['trail'] if trail else ''}"
 
-	return _SECRET_LINE.sub(replace, text)
+	return "\n".join(replace_line(line) for line in text.split("\n"))
 
 
 def redact_nested(value):

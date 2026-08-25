@@ -88,6 +88,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import Icon from "./Icon.vue";
 import { alertsResource, markAlertsReadResource } from "../api";
+import { parseServerTime } from "../jobs";
 
 /** Alerts are raised by the scheduler, so a slow poll is the right cadence. */
 const POLL_MS = 60000;
@@ -117,8 +118,10 @@ function strip(html) {
 }
 
 function when(value) {
-	const then = new Date(String(value).replace(" ", "T"));
-	const mins = Math.round((Date.now() - then.getTime()) / 60000);
+	// Site-local, not browser-local — see parseServerTime.
+	const at = parseServerTime(value);
+	if (at === null) return "";
+	const mins = Math.round((Date.now() - at) / 60000);
 	if (mins < 2) return "just now";
 	if (mins < 60) return `${mins} min ago`;
 	if (mins < 1440) return `${Math.round(mins / 60)}h ago`;

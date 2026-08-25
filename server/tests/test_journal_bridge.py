@@ -169,3 +169,88 @@ class TestTransportEquivalence(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestLogForgery(unittest.TestCase):
+	"""`SYSLOG_IDENTIFIER` is a label the writer chooses.
+
+	So any local account can run
+
+	    logger -p authpriv.notice -t sshd "Accepted publickey for root from 8.8.8.8 port 22 ssh2"
+
+	and — trusting the tag — this app stored a fully-formed successful root
+	login from an address of the attacker's choosing, indistinguishable from a
+	real one and enough to fire the root-login alert. Reproduced on this
+	machine as an unprivileged user before the fix.
+
+	`_COMM` comes from the sending process's credentials and cannot be set by
+	the sender, so preferring it is what closes this.
+	"""
+
+	def _record(self, **fields):
+		base = {
+			"MESSAGE": "Accepted publickey for root from 8.8.8.8 port 22 ssh2: RSA SHA256:AAAA",
+			"__REALTIME_TIMESTAMP": "1756000000000000",
+			"_PID": "1234",
+		}
+		return parser.journal_record_to_syslog_line(base | fields)
+
+	def test_a_forged_identifier_is_not_believed(self):
+		line = self._record(SYSLOG_IDENTIFIER="sshd", _COMM="logger", _UID="1000")
+		self.assertEqual(line.program, "logger")
+		self.assertIsNone(parser.parse_syslog_record(line))
+
+	def test_a_forged_sudo_record_is_not_believed(self):
+		line = parser.journal_record_to_syslog_line(
+			{
+				"MESSAGE": "  alice : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/rm -rf /",
+				"SYSLOG_IDENTIFIER": "sudo",
+				"_COMM": "logger",
+				"_UID": "1000",
+				"_PID": "1",
+				"__REALTIME_TIMESTAMP": "1756000000000000",
+			}
+		)
+		self.assertEqual(line.program, "logger")
+		self.assertIsNone(parser.parse_syslog_record(line))
+
+	def test_a_real_sshd_record_still_parses(self):
+		line = self._record(SYSLOG_IDENTIFIER="sshd", _COMM="sshd", _UID="0")
+		event = parser.parse_syslog_record(line)
+		self.assertIsNotNone(event)
+		self.assertEqual(event.username, "root")
+
+	def test_a_real_sudo_record_without_comm_still_parses(self):
+		"""`_TRANSPORT=syslog` entries whose process had already exited carry no
+		`_COMM`, and they are legitimate — verified on this machine."""
+		line = parser.journal_record_to_syslog_line(
+			{
+				"MESSAGE": "  patoo : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/ls",
+				"SYSLOG_IDENTIFIER": "sudo",
+				"_TRANSPORT": "syslog",
+				"_UID": "1000",
+				"_PID": "3",
+				"__REALTIME_TIMESTAMP": "1756000000000000",
+			}
+		)
+		self.assertEqual(line.program, "sudo")
+		self.assertIsNotNone(parser.parse_syslog_record(line))
+
+	def test_filtering_on_uid_would_have_been_wrong(self):
+		"""Real sudo records carry the INVOKING user's uid, not 0.
+
+		Guards against "just filter _UID=0" being reintroduced as a fix — it
+		would drop every genuine sudo event, which is half of what this app
+		collects.
+		"""
+		line = parser.journal_record_to_syslog_line(
+			{
+				"MESSAGE": "  patoo : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/ls",
+				"SYSLOG_IDENTIFIER": "sudo",
+				"_COMM": "sudo",
+				"_UID": "1000",
+				"_PID": "4",
+				"__REALTIME_TIMESTAMP": "1756000000000000",
+			}
+		)
+		self.assertIsNotNone(parser.parse_syslog_record(line))

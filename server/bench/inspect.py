@@ -41,7 +41,15 @@ MAX_SCAN_BYTES = 4 * 1024 * 1024 * 1024
 CHUNK = 1024 * 1024
 
 _CREATE = re.compile(rf"CREATE TABLE [`\"]?{re.escape(APPS_TABLE)}[`\"]?\s*\((?P<body>.*?)\)\s*ENGINE", re.S)
-_COLUMN = re.compile(r"^\s*[`\"](?P<name>\w+)[`\"]\s+\w", re.M)
+#: A column is a backticked name followed by a type. NOT anchored to the start
+#: of a line: mysqldump writes one column per line, but `--compact` and other
+#: tools do not, and requiring line starts meant such a dump silently reported
+#: no apps at all — the worst possible answer, since "no apps" reads as "nothing
+#: to install".
+_COLUMN = re.compile(r"[`\"](?P<name>\w+)[`\"]\s+(?:varchar|int|tinyint|bigint|text|datetime|decimal|longtext|char|date|time|double|float|blob)", re.I)
+
+#: Everything from here on is indexes and constraints, not columns.
+_INDEX_TAIL = re.compile(r"\b(?:PRIMARY\s+KEY|UNIQUE\s+KEY|KEY|CONSTRAINT|INDEX)\b", re.I)
 _INSERT = re.compile(rf"INSERT INTO [`\"]?{re.escape(APPS_TABLE)}[`\"]? VALUES\s*(?P<rows>.*?);", re.S)
 
 
@@ -82,6 +90,7 @@ class BackupContents:
 	source: str = ""
 	scanned_bytes: int = 0
 	truncated: bool = False
+	encrypted: bool = False
 	error: str = ""
 
 	def as_dict(self) -> dict:
@@ -91,6 +100,7 @@ class BackupContents:
 			"source": self.source,
 			"scanned_bytes": self.scanned_bytes,
 			"truncated": self.truncated,
+			"encrypted": self.encrypted,
 			"error": self.error,
 			"missing": [app.app_name for app in self.apps if not app.present],
 		}
@@ -101,18 +111,68 @@ class BackupContents:
 # ----------------------------------------------------------------------
 
 
+#: `gpg -c` output, which is how frappe encrypts a backup. Same constants as
+#: bench/restore.py, repeated rather than imported so this module stays
+#: independent of it.
+GPG_MAGIC = (b"\x8c", b"\x85", b"\xc3")
+GZIP_MAGIC = b"\x1f\x8b"
+
+
+class Encrypted(NotReadable):
+	"""The dump is encrypted, so its contents cannot be listed."""
+
+
 def _open(path: str):
-	"""Open a dump for streaming, transparently decompressing gzip."""
+	"""Open a dump for streaming, transparently decompressing gzip.
+
+	An encrypted dump is refused HERE rather than scanned.
+
+	Branching on the gzip magic alone meant a gpg-encrypted backup fell through
+	to a raw read, and the scan then chewed through up to 4 GiB of binary
+	looking for a CREATE TABLE that cannot exist — inside a synchronous web
+	request, holding a gunicorn worker for minutes and then reporting "no
+	installed-application table found", which is true and completely
+	misleading.
+	"""
+	# frappe's own `-enc` marker is checked BEFORE the magic bytes, matching
+	# restore._is_encrypted. The two must agree: a file the restore path calls
+	# encrypted and this path happily scans would demand a key in one dialog
+	# and list apps in the other.
+	if "-enc." in os.path.basename(path):
+		raise Encrypted(
+			"This backup is encrypted, so the apps it needs cannot be listed without its key. "
+			"Restoring it still works — supply the encryption key below — but check by hand "
+			"that this bench has the apps it expects."
+		)
+
 	handle = open(path, "rb")
 	try:
-		if handle.read(2) == b"\x1f\x8b":
-			handle.seek(0)
-			return gzip.open(handle, "rb")
+		head = handle.read(8)
 		handle.seek(0)
+		if head.startswith(GZIP_MAGIC):
+			return gzip.open(handle, "rb")
+		if head[:1] in GPG_MAGIC:
+			handle.close()
+			raise Encrypted(
+				"This backup is encrypted, so the apps it needs cannot be listed without its key. "
+				"Restoring it still works — supply the encryption key below — but check by hand "
+				"that this bench has the apps it expects."
+			)
 		return handle
 	except Exception:
 		handle.close()
 		raise
+
+
+def _columns_of(body: str) -> list[str]:
+	"""Column names from a CREATE TABLE body, in order.
+
+	Truncated at the first index or constraint clause, so the backticked names
+	inside a KEY or CONSTRAINT clause are not mistaken for further columns and
+	shifted into the value positions.
+	"""
+	tail = _INDEX_TAIL.search(body)
+	return _COLUMN.findall(body[: tail.start()] if tail else body)
 
 
 def _split_row(row: str) -> list[str]:
@@ -166,6 +226,10 @@ def read_apps(database_path: str) -> BackupContents:
 
 	try:
 		stream = _open(database_path)
+	except Encrypted as exc:
+		contents.error = str(exc)
+		contents.encrypted = True
+		return contents
 	except OSError as exc:
 		contents.error = f"Could not open the dump: {exc}"
 		return contents
@@ -185,7 +249,7 @@ def read_apps(database_path: str) -> BackupContents:
 				if not columns:
 					create = _CREATE.search(text)
 					if create:
-						columns = _COLUMN.findall(create.group("body"))
+						columns = _columns_of(create.group("body"))
 
 				if columns:
 					insert = _INSERT.search(text)

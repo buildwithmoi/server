@@ -228,3 +228,88 @@ class TestSiteConfigSnapshot(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestColumnParsingIsFormatIndependent(unittest.TestCase):
+	"""mysqldump writes one column per line; other tools do not.
+
+	Requiring a line start meant a `--compact` dump reported no apps at all —
+	the worst possible answer, because "no apps" reads as "nothing to install"
+	rather than "could not tell".
+	"""
+
+	BODY_ONE_LINE = (
+		"`name` varchar(140), `app_name` varchar(140), "
+		"`app_version` varchar(140), `git_branch` varchar(140)"
+	)
+
+	def test_columns_on_a_single_line_are_found(self):
+		self.assertEqual(
+			inspect._columns_of(self.BODY_ONE_LINE),
+			["name", "app_name", "app_version", "git_branch"],
+		)
+
+	def test_index_clauses_are_not_mistaken_for_columns(self):
+		body = (
+			"  `name` varchar(140) NOT NULL,\n"
+			"  `app_name` varchar(140) DEFAULT NULL,\n"
+			"  PRIMARY KEY (`name`),\n"
+			"  KEY `parent` (`parent`)\n"
+		)
+		self.assertEqual(inspect._columns_of(body), ["name", "app_name"])
+
+	def test_a_one_line_dump_reports_its_apps(self):
+		with tempfile.TemporaryDirectory() as root:
+			path = os.path.join(root, "d.sql.gz")
+			sql = (
+				f"CREATE TABLE `{inspect.APPS_TABLE}` ({self.BODY_ONE_LINE}) ENGINE=InnoDB;\n"
+				f"INSERT INTO `{inspect.APPS_TABLE}` VALUES "
+				"('a','frappe','16.31.0','version-16'),('b','hrms','16.0.1','main');\n"
+			).encode()
+			with open(path, "wb") as handle:
+				handle.write(gzip.compress(sql))
+
+			apps = {a.app_name: a.git_branch for a in inspect.read_apps(path).apps}
+			self.assertEqual(apps, {"frappe": "version-16", "hrms": "main"})
+
+
+class TestEncryptedDumpsAreRefusedNotScanned(unittest.TestCase):
+	"""Branching on the gzip magic alone let a gpg-encrypted dump through to a
+	raw read, and the scan then chewed through up to 4 GiB of binary looking
+	for a CREATE TABLE that cannot exist — inside a synchronous web request,
+	holding a worker for minutes and then reporting "no installed-application
+	table found", which is true and completely misleading."""
+
+	def test_gpg_output_is_refused_immediately(self):
+		with tempfile.TemporaryDirectory() as root:
+			path = os.path.join(root, "d.sql.gz")
+			with open(path, "wb") as handle:
+				handle.write(b"\x8c\x0d\x04\x09" + os.urandom(2_000_000))
+
+			contents = inspect.read_apps(path)
+			self.assertTrue(contents.encrypted)
+			self.assertEqual(contents.scanned_bytes, 0, "it scanned an encrypted dump")
+			self.assertIn("encrypted", contents.error)
+
+	def test_frappes_own_enc_marker_is_enough(self):
+		with tempfile.TemporaryDirectory() as root:
+			path = os.path.join(root, "x-database-enc.sql.gz")
+			with open(path, "wb") as handle:
+				handle.write(gzip.compress(b"-- looks like a plain dump"))
+			self.assertTrue(inspect.read_apps(path).encrypted)
+
+	def test_the_message_says_restoring_still_works(self):
+		"""Not being able to LIST the apps is not the same as not being able to
+		restore — saying so keeps the operator from thinking they are stuck."""
+		with tempfile.TemporaryDirectory() as root:
+			path = os.path.join(root, "d.sql.gz")
+			with open(path, "wb") as handle:
+				handle.write(b"\x8c\x0d\x04\x09")
+			self.assertIn("Restoring it still works", inspect.read_apps(path).error)
+
+	def test_a_plain_dump_is_still_scanned(self):
+		with tempfile.TemporaryDirectory() as root:
+			path = make_dump(os.path.join(root, "d.sql.gz"), [("frappe", "16.0.0", "main")])
+			contents = inspect.read_apps(path)
+			self.assertFalse(contents.encrypted)
+			self.assertEqual([a.app_name for a in contents.apps], ["frappe"])

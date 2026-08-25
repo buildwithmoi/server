@@ -402,56 +402,69 @@ export function inspectBackupResource() {
 }
 
 /**
- * Upload a backup straight into the bench, streamed.
+ * Upload a backup into the bench, in pieces.
  *
- * Not a `createResource`: this is multipart with a progress callback, and a
- * production dump is gigabytes — it has to go through XHR so the browser can
- * report how far it has got rather than appearing frozen for ten minutes.
+ * Not one request: frappe caps the body at 25 MB for every path except its own
+ * upload endpoint, and reads the whole body into memory before the method
+ * runs — so a single POST of a real dump was rejected with an HTML 413 that
+ * the interface could only report as "Upload failed (413)". Pieces stay well
+ * under the limit, hold nothing large in memory at either end, and give an
+ * honest progress bar.
  */
-export function uploadBackup(
+const CHUNK_SIZE = 8 * 1024 * 1024;
+
+export async function uploadBackup(
 	bench: string,
 	file: File,
 	onProgress?: (percent: number) => void,
 ): Promise<{ name: string; path: string; size_text: string; directory: string }> {
-	return new Promise((resolve, reject) => {
+	const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+	// Identifies this upload's part file on the server for its whole life.
+	const uploadId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+
+	let last: any = null;
+	for (let index = 0; index < total; index += 1) {
+		const slice = file.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE);
 		const form = new FormData();
-		form.append("file", file, file.name);
+		form.append("file", slice, file.name);
 		form.append("bench", bench);
+		form.append("upload_id", uploadId);
+		form.append("filename", file.name);
+		form.append("chunk_index", String(index));
+		form.append("total_chunks", String(total));
 
-		const request = new XMLHttpRequest();
-		request.open("POST", `/api/method/${M}.upload_backup`);
-		const token = (window as any).csrf_token;
-		if (token) request.setRequestHeader("X-Frappe-CSRF-Token", token);
+		const response = await fetch(`/api/method/${M}.upload_backup_chunk`, {
+			method: "POST",
+			headers: { "X-Frappe-CSRF-Token": (window as any).csrf_token || "" },
+			body: form,
+		});
 
-		request.upload.onprogress = (event) => {
-			if (event.lengthComputable && onProgress) {
-				onProgress(Math.round((event.loaded / event.total) * 100));
-			}
-		};
-		request.onload = () => {
-			let payload: any = {};
+		const text = await response.text();
+		let payload: any = {};
+		try {
+			payload = JSON.parse(text);
+		} catch {
+			/* a non-JSON body means a proxy or the framework rejected it */
+		}
+		if (!response.ok || !payload.message) {
+			// frappe returns its message as JSON inside JSON.
+			let detail = payload.exception || `Upload failed (${response.status})`;
 			try {
-				payload = JSON.parse(request.responseText || "{}");
+				const messages = JSON.parse(payload._server_messages || "[]");
+				if (messages.length) detail = JSON.parse(messages[0]).message || detail;
 			} catch {
-				/* fall through to the status check */
+				/* keep the fallback */
 			}
-			if (request.status >= 200 && request.status < 300 && payload.message) {
-				resolve(payload.message);
-			} else {
-				// frappe returns its message in _server_messages as JSON-in-JSON.
-				let detail = payload.exception || `Upload failed (${request.status})`;
-				try {
-					const messages = JSON.parse(payload._server_messages || "[]");
-					if (messages.length) detail = JSON.parse(messages[0]).message || detail;
-				} catch {
-					/* keep the fallback */
-				}
-				reject(new Error(String(detail).replace(/<[^>]+>/g, "")));
-			}
-		};
-		request.onerror = () => reject(new Error("The upload could not reach the server."));
-		request.send(form);
-	});
+			throw new Error(String(detail).replace(/<[^>]+>/g, ""));
+		}
+
+		last = payload.message;
+		onProgress?.(Math.round(((index + 1) / total) * 100));
+	}
+
+	return last;
 }
 
 export function restoreFilesResource() {
