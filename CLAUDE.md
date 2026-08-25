@@ -165,6 +165,32 @@ matters: it fills gradually, takes every site down at once, and the cause is nea
 so `backup_usage()` names which site is responsible, and `bench/backups.py` prunes them under rules
 that cannot be argued below (`MIN_KEEP`, `MIN_AGE_HOURS`).
 
+## Invariants
+
+Rules that cost real time to learn. `server/tests/test_app_wiring.py` enforces the first two.
+
+1. **Every `@frappe.whitelist` calls `_assert_server_admin()`**, and every mutating one declares
+   `methods=["POST"]`. This app runs commands as the bench user; a missing guard is a hole, not a
+   bug. Anything that spawns a process also calls `assert_installs_allowed()` — that switch is
+   documented as the kill switch for all subprocess activity, so a path that ignores it makes the
+   documentation a lie.
+2. **`shell=False` is not input validation.** git takes options that name a command to run, so a
+   remote beginning with `-` is an argument of git's choosing:
+   `git ls-remote --heads "--upload-pack=touch /tmp/x; git-upload-pack" /repo` runs `touch` and
+   exits 0. Validate the value, and put `--` before positionals.
+3. **`emit()` and `flush()` in the job body must never raise.** Every failure path calls them on the
+   way out, so an exception there surfaces from inside the handler reporting the first one — the
+   worker dies and the row says Running forever. `test_job_end_to_end.py` exists because 404 unit
+   tests passed while exactly this was broken.
+4. **A log line is not a fact about the world.** sshd escapes control characters in a username but
+   not spaces, so a client that connects as `b from 10.0.0.1` puts a well-formed address of its
+   choosing into the message. Trust the clause sshd writes itself (`from <ip> port <n>`), and
+   validate anything that becomes a docname — a bad one aborts the batch, and a batch that aborts
+   never advances the checkpoint, so ingestion stops permanently.
+5. **Exit code 0 is not success, and neither is a `Password` field being cleared.** `db_set(field,
+   None)` removes the `*****` mask and leaves the encrypted value in `__Auth`;
+   `remove_encrypted_password` is what deletes it.
+
 ## Conventions
 
 - **Python is tab-indented** (ruff `indent-style = "tab"`), double quotes, line length 110, target
