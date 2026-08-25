@@ -340,6 +340,10 @@ scheduler_events = {
 default_log_clearing_doctypes = {
 	"SSH Auth Event": 90,
 	"SSH Sudo Command": 180,
+	# The conclusion outlives its evidence: sessions keep a year where the
+	# events they were built from keep ninety days, because a session is what
+	# someone reconstructing a months-old intrusion actually reads.
+	"SSH Session": 365,
 	# A year each. These are what you read when reconstructing a compromise
 	# that ran for months — the incident behind this app went undetected for
 	# eight — and they are small enough that keeping them costs nothing.
