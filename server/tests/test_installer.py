@@ -69,12 +69,24 @@ class TestCarriageReturnProgress(unittest.TestCase):
 			timeout=30,
 			on_line=lambda line: seen.append((time.monotonic() - start, line)),
 		)
+		total = time.monotonic() - start
 		self.assertEqual(code, 0)
 		texts = [line for _, line in seen]
 		self.assertIn("Receiving objects: 10%", texts)
 		self.assertIn("Receiving objects: 100%", texts)
 		self.assertIn("done", texts)
-		self.assertLess(seen[0][0], 1.0, "first progress line must arrive while the command is still running")
+
+		# The property is that the lines arrived SPREAD OUT across the run
+		# rather than all at once when the pipe closed. Asserted relative to the
+		# run's own duration rather than against a wall-clock bound: the command
+		# takes about 0.9s, so an absolute "under 1.0s" is only marginally under
+		# its own runtime and fails on a loaded machine for reasons that have
+		# nothing to do with buffering.
+		spread = seen[-1][0] - seen[0][0]
+		self.assertGreater(spread, 0.4, "progress arrived in one burst — the pipe is buffering")
+		self.assertLess(
+			seen[0][0], total * 0.7, "first progress line did not arrive while the command was running"
+		)
 
 	def test_progress_lines_are_separate_not_one_blob(self):
 		seen = []

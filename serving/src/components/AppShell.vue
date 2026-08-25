@@ -62,6 +62,12 @@
 					<span v-if="!collapsed" class="truncate">Collapse</span>
 				</button>
 
+				<!-- Alerts live in the chrome for the same reason ingest state does.
+				     Frappe delivers them to the desk at /app, which is not where
+				     anyone using this app is looking — and an alert nobody sees is
+				     the same as no alert, which was the original problem. -->
+				<AlertsPanel :collapsed="collapsed" class="mb-2" />
+
 				<!-- Ingest state lives in the chrome, not on one page: a monitoring
 				     console that is quietly not ingesting looks exactly like a quiet
 				     server, so this must be visible from everywhere. -->
@@ -136,6 +142,7 @@
 import { inject, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import Icon from "./Icon.vue";
+import AlertsPanel from "./AlertsPanel.vue";
 import JobDock from "./JobDock.vue";
 import { activeJobs, adoptRunningJobs, isRunning } from "../jobs";
 import { loadSettings, monitoringEnabled } from "../state";

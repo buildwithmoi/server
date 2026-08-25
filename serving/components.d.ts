@@ -9,6 +9,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     ActionMenu: typeof import('./src/components/ActionMenu.vue')['default']
+    AlertsPanel: typeof import('./src/components/AlertsPanel.vue')['default']
     AppShell: typeof import('./src/components/AppShell.vue')['default']
     BackupsDialog: typeof import('./src/components/BackupsDialog.vue')['default']
     BarTimeline: typeof import('./src/components/BarTimeline.vue')['default']

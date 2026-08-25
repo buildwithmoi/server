@@ -298,6 +298,24 @@ export function cancelInstallResource() {
 	return createResource({ url: `${M}.cancel_install_request` });
 }
 
+export interface AlertRow {
+	name: string;
+	subject: string;
+	email_content: string;
+	creation: string;
+	read: number;
+	document_type: string;
+	document_name: string;
+}
+
+export function alertsResource() {
+	return createResource({ url: `${M}.recent_alerts` });
+}
+
+export function markAlertsReadResource() {
+	return createResource({ url: `${M}.mark_alerts_read` });
+}
+
 export function systemHealthResource() {
 	return createResource({ url: `${M}.system_health` });
 }

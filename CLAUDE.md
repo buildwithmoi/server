@@ -30,17 +30,16 @@ bench --site local.16.server console               # python REPL with frappe loa
 bench --site local.16.server clear-cache
 bench start                                        # web + socketio + workers + watch (Procfile)
 
-# Tests — 250 of them, most needing neither a site nor a database.
+# Tests — 377 of them, most needing neither a site nor a database.
 # Use the BENCH VENV python: one module imports frappe, and the venv is the
 # interpreter the app actually runs under (3.14, not this box's system 3.12).
 ../../env/bin/python -m unittest discover -s server/tests -t .
 ../../env/bin/python -m unittest server.tests.test_restore     # one module
 
 # 34 of them need a site connection and skip without one, so the run above
-# reports ~37 skips. To actually exercise those, run through a site:
-bench --site local.16.server execute frappe.utils.error.log_error --kwargs '{}' # (any bootstrap)
-
-bench --site local.16.server set-config allow_tests true
+# reports ~37 skips and ~325 passes. Run them through a site to exercise
+# those too — 377 tests, 3 skips (the certbot-dependent ones):
+bench --site local.16.server set-config allow_tests true   # once per site
 bench --site local.16.server run-tests --app server
 bench --site local.16.server run-tests --module server.tests.test_x   # single module
 bench --site local.16.server run-tests --doctype "Some DocType"

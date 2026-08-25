@@ -646,6 +646,48 @@ def read_log(bench: str, path: str, lines: int = 300, search: str | None = None)
 
 
 @frappe.whitelist()
+def recent_alerts(limit: int = 25) -> dict:
+	"""Alerts raised for the current user.
+
+	Frappe delivers these to the desk at /app, which is not where anyone using
+	this app is looking. An alert nobody sees is the same as no alert at all —
+	which was the original problem.
+	"""
+	_assert_server_admin()
+	rows = frappe.get_all(
+		"Notification Log",
+		filters={"for_user": frappe.session.user, "type": "Alert"},
+		fields=["name", "subject", "email_content", "creation", "read", "document_type", "document_name"],
+		order_by="creation desc",
+		limit=min(int(limit or 25), 100),
+	)
+	return {
+		"alerts": rows,
+		"unread": sum(1 for row in rows if not row.read),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def mark_alerts_read(name: str | None = None) -> dict:
+	"""Mark one alert read, or all of them.
+
+	Scoped to the current user's own rows in both cases — an endpoint that can
+	mark someone else's notifications read is a small thing that becomes a way
+	to hide an intrusion alert from whoever was meant to see it.
+	"""
+	_assert_server_admin()
+	filters = {"for_user": frappe.session.user, "type": "Alert", "read": 0}
+	if name:
+		filters["name"] = name
+
+	names = frappe.get_all("Notification Log", filters=filters, pluck="name")
+	for row in names:
+		frappe.db.set_value("Notification Log", row, "read", 1, update_modified=False)
+	frappe.db.commit()
+	return {"marked": len(names)}
+
+
+@frappe.whitelist()
 def system_health() -> dict:
 	"""Disk, memory, load and where the disk went.
 
