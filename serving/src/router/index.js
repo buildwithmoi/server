@@ -14,6 +14,24 @@ const routes = [
 		meta: { title: "Overview" },
 	},
 	{
+		path: "/security",
+		name: "Security",
+		component: () => import("../views/Security.vue"),
+		meta: { title: "Security" },
+	},
+	{
+		path: "/detectors",
+		name: "Detectors",
+		component: () => import("../views/Detectors.vue"),
+		meta: { title: "Detectors" },
+	},
+	{
+		path: "/sessions",
+		name: "Sessions",
+		component: () => import("../views/Sessions.vue"),
+		meta: { title: "SSH Sessions" },
+	},
+	{
 		path: "/auth-events",
 		name: "AuthEvents",
 		component: () => import("../views/AuthEvents.vue"),

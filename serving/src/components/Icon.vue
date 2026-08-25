@@ -37,6 +37,10 @@ const SHAPES = {
 	gauge: { paths: ["M12 14 16 9", "M4.5 19a9 9 0 1 1 15 0"], circles: [[12, 14, 1.4]] },
 	shield: { paths: ["M12 3 20 6.5v5c0 5-3.4 8.3-8 9.5-4.6-1.2-8-4.5-8-9.5v-5L12 3Z"] },
 	terminal: { paths: ["M5 8l4 4-4 4", "M13 16h6"] },
+	// A heartbeat trace: the detectors page is about whether anything is
+	// still running, and this is the shape everyone already reads as "alive".
+	activity: { paths: ["M3 12h4l3 8 4-16 3 8h4"] },
+	users: { paths: ["M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19", "M18 14a3.5 3.5 0 0 1 3 3.5V19"], circles: [[10, 8, 3.5], [17.5, 8, 3]] },
 	globe: { paths: ["M2.6 9h18.8", "M2.6 15h18.8", "M12 3a15 15 0 0 1 0 18", "M12 3a15 15 0 0 0 0 18"], circles: [[12, 12, 9]] },
 	sliders: { paths: ["M4 7h10", "M18 7h2", "M4 17h4", "M12 17h8"], circles: [[16, 7, 2], [10, 17, 2]] },
 	logout: { paths: ["M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4", "M10 8 6 12l4 4", "M6 12h11"] },

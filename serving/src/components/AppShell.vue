@@ -181,7 +181,10 @@ function toggleCollapsed() {
 
 const nav = [
 	{ name: "Dashboard", label: "Overview", icon: "gauge" },
-	{ name: "AuthEvents", label: "SSH Events", icon: "shield" },
+	{ name: "Security", label: "Security", icon: "shield" },
+	{ name: "Detectors", label: "Detectors", icon: "activity" },
+	{ name: "Sessions", label: "SSH Sessions", icon: "users" },
+	{ name: "AuthEvents", label: "SSH Events", icon: "terminal" },
 	{ name: "SudoCommands", label: "Sudo Commands", icon: "terminal" },
 	{ name: "IpAddresses", label: "Addresses", icon: "globe" },
 	{ name: "Benches", label: "Benches", icon: "layers" },

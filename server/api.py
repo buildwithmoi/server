@@ -723,26 +723,50 @@ BACKUP_USAGE_TTL = 300
 def security_events(
 	severity: str | None = None,
 	status: str | None = None,
-	limit: int = 50,
+	category: str | None = None,
+	search: str | None = None,
+	start: int = 0,
+	page_length: int = 50,
+	limit: int | None = None,
 ) -> dict:
-	"""Findings from the security detectors, newest first."""
+	"""Findings from the security detectors, newest first.
+
+	Paged, because eight detectors on a busy host produce more than a screen
+	and a list that silently stops at fifty is a list that hides things.
+	`limit` is still accepted so the dashboard's small preview keeps working.
+	"""
 	_assert_server_admin()
+
 	filters = {}
 	if severity:
 		filters["severity"] = severity
 	if status:
 		filters["status"] = status
+	if category:
+		filters["category"] = category
 
+	or_filters = None
+	if search:
+		# Subject and detail both, because "what was it about" is as often
+		# remembered by the path inside the finding as by its title.
+		term = f"%{search.strip()}%"
+		or_filters = [["subject", "like", term], ["detail", "like", term]]
+
+	page = min(int(limit or page_length or 50), 200)
 	rows = frappe.get_all(
 		"Security Event",
 		filters=filters,
+		or_filters=or_filters,
 		fields=[
 			"name", "event_time", "severity", "category", "subject", "detail", "runbook",
-			"status", "occurrences", "last_seen", "host",
+			"status", "occurrences", "last_seen", "host", "acknowledged_by", "acknowledged_at",
+			"suppressed_until", "suppression_reason", "forwarded", "sequence",
 		],
 		order_by="event_time desc",
-		limit=min(int(limit or 50), 200),
+		start=int(start or 0),
+		limit=page,
 	)
+
 	# Counted per severity with the query builder — frappe v16 refuses a SQL
 	# function written as a string in `fields`.
 	counts = frappe.get_all(
@@ -751,10 +775,115 @@ def security_events(
 		fields=["severity", {"COUNT": "name", "as": "total"}],
 		group_by="severity",
 	)
+	categories = frappe.get_all(
+		"Security Event",
+		fields=["category", {"COUNT": "name", "as": "total"}],
+		group_by="category",
+		order_by="category asc",
+	)
+
 	return {
 		"events": rows,
+		"total": frappe.db.count("Security Event", filters),
 		"open_by_severity": {row.severity: row.total for row in counts},
+		"categories": [{"category": row.category or "other", "total": row.total} for row in categories],
 		"unreviewed_baseline": frappe.db.count("Persistence Item", {"status": "Active", "is_baseline": 0}),
+	}
+
+
+@frappe.whitelist()
+def security_inventory(kind: str = "persistence", start: int = 0, page_length: int = 50) -> dict:
+	"""What the detectors are watching, as opposed to what they found.
+
+	The findings answer "what changed". This answers "what is there" — the
+	units, accounts, keys, ports and files being compared against. Being able
+	to read that list is most of what makes a baseline reviewable, and a
+	baseline nobody reviews is one that quietly blesses whatever was already
+	on the host.
+	"""
+	_assert_server_admin()
+
+	shapes = {
+		"persistence": ("Persistence Item", ["kind", "identifier", "path", "package", "package_owned", "status", "is_baseline", "last_seen"]),
+		"accounts": ("System Account", ["username", "uid", "shell", "home", "can_log_in", "privileged", "groups", "password_status", "status", "is_baseline", "last_seen"]),
+		"keys": ("Authorized Key", ["fingerprint", "key_type", "account", "comment", "options", "path", "status", "is_baseline", "last_seen"]),
+		"sockets": ("Listening Socket", ["protocol", "local_address", "port", "process_name", "binary", "binary_verified", "pid", "listening_publicly", "status", "is_baseline", "last_seen"]),
+		"files": ("Watched File", ["kind", "identifier", "path", "package", "package_owned", "status", "is_baseline", "last_seen"]),
+	}
+	if kind not in shapes:
+		frappe.throw(f"Unknown inventory: {kind}", frappe.ValidationError)
+
+	doctype, fields = shapes[kind]
+	if not frappe.db.exists("DocType", doctype):
+		return {"rows": [], "total": 0, "kind": kind, "doctype": doctype, "unreviewed": 0}
+
+	return {
+		"kind": kind,
+		"doctype": doctype,
+		"rows": frappe.get_all(
+			doctype,
+			filters={"status": "Active"},
+			fields=["name", *fields],
+			order_by="is_baseline asc, modified desc",
+			start=int(start or 0),
+			limit=min(int(page_length or 50), 200),
+		),
+		"total": frappe.db.count(doctype, {"status": "Active"}),
+		"unreviewed": frappe.db.count(doctype, {"status": "Active", "is_baseline": 0}),
+	}
+
+
+@frappe.whitelist()
+def ssh_sessions(start: int = 0, page_length: int = 50, status: str | None = None) -> dict:
+	"""Logins, joined to the commands they ran.
+
+	The attribution method travels with every row on purpose. An exact match
+	on the audit session id and a guess from username-and-time must not look
+	the same in a console, or the guess gets trusted like the measurement.
+	"""
+	_assert_server_admin()
+	if not frappe.db.exists("DocType", "SSH Session"):
+		return {"rows": [], "total": 0}
+
+	filters = {"status": status} if status else {}
+	return {
+		"rows": frappe.get_all(
+			"SSH Session",
+			filters=filters,
+			fields=[
+				"name", "session_key", "status", "username", "source_ip", "country",
+				"auth_method", "key_fingerprint", "login_time", "logout_time", "duration",
+				"sudo_command_count", "attribution_method", "event_count", "hostname", "pid",
+			],
+			order_by="login_time desc",
+			start=int(start or 0),
+			limit=min(int(page_length or 50), 200),
+		),
+		"total": frappe.db.count("SSH Session", filters),
+	}
+
+
+@frappe.whitelist()
+def ssh_session_detail(name: str) -> dict:
+	"""One session, with the commands attributed to it."""
+	_assert_server_admin()
+	session = frappe.get_doc("SSH Session", name)
+	return {
+		"session": session.as_dict(),
+		"commands": frappe.get_all(
+			"SSH Sudo Command",
+			filters={"ssh_session": name},
+			fields=["name", "event_time", "actor", "target_user", "command", "status", "attribution_method", "tty", "pwd"],
+			order_by="event_time asc",
+			limit=500,
+		),
+		"events": frappe.get_all(
+			"SSH Auth Event",
+			filters={"session_key": session.session_key},
+			fields=["name", "event_time", "event_type", "outcome", "auth_method", "raw_message"],
+			order_by="event_time asc",
+			limit=200,
+		),
 	}
 
 

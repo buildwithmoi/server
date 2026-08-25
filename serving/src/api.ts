@@ -568,3 +568,86 @@ export function replayFixtureResource() {
 export function purgeFixturesResource() {
 	return createResource({ url: `${M}.purge_fixture_events` });
 }
+
+/* ---------------------------------------------------------------- security */
+
+export type Severity = "Critical" | "High" | "Medium" | "Info";
+
+export interface SecurityEvent {
+	name: string;
+	event_time: string;
+	severity: Severity;
+	category: string;
+	subject: string;
+	detail: string;
+	runbook: string;
+	status: string;
+	occurrences: number;
+	last_seen: string | null;
+	host: string;
+	acknowledged_by: string | null;
+	acknowledged_at: string | null;
+	suppressed_until: string | null;
+	suppression_reason: string | null;
+	forwarded: 0 | 1;
+	sequence: number | null;
+}
+
+export interface DetectorHeartbeat {
+	source: string;
+	last_run: string | null;
+	sequence: number;
+	last_status: string;
+	expected_every: number;
+}
+
+export interface SshSession {
+	name: string;
+	session_key: string;
+	status: "Open" | "Closed" | "Unknown";
+	username: string;
+	source_ip: string;
+	country: string;
+	auth_method: string;
+	key_fingerprint: string;
+	login_time: string;
+	logout_time: string | null;
+	duration: number;
+	sudo_command_count: number;
+	attribution_method: string;
+	event_count: number;
+	hostname: string;
+	pid: number | null;
+}
+
+export function securityEventsResource() {
+	return createResource({ url: `${M}.security_events` });
+}
+
+export function securityOverviewResource() {
+	return createResource({ url: `${M}.security_overview` });
+}
+
+export function securityInventoryResource() {
+	return createResource({ url: `${M}.security_inventory` });
+}
+
+export function acknowledgeEventResource() {
+	return createResource({ url: `${M}.acknowledge_security_event` });
+}
+
+export function runSecurityScanResource() {
+	return createResource({ url: `${M}.run_security_scan` });
+}
+
+export function acceptBaselineResource() {
+	return createResource({ url: `${M}.accept_security_baseline` });
+}
+
+export function sshSessionsResource() {
+	return createResource({ url: `${M}.ssh_sessions` });
+}
+
+export function sshSessionDetailResource() {
+	return createResource({ url: `${M}.ssh_session_detail` });
+}

@@ -29,6 +29,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SearchSelect: typeof import('./src/components/SearchSelect.vue')['default']
+    SeverityMark: typeof import('./src/components/SeverityMark.vue')['default']
     SiteConfigDialog: typeof import('./src/components/SiteConfigDialog.vue')['default']
     Skeleton: typeof import('./src/components/Skeleton.vue')['default']
     SslDialog: typeof import('./src/components/SslDialog.vue')['default']
