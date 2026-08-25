@@ -81,7 +81,17 @@ def plan(
 	takes six a day.
 	"""
 	keep = max(MIN_KEEP, int(keep))
-	sets = restore.list_backups(bench_path, site)
+
+	# ONLY this site's own backup directory — the only place prune() will
+	# unlink from. Ranking over the full listing (which merges the bench root
+	# drop zone and every other site's backups) meant files prune could never
+	# touch filled the protected `keep` window, pushing this site's own backups
+	# past it. Copying five production dumps into the bench directory and then
+	# pruning an unrelated site deleted every backup that site had, while all
+	# five foreign files survived. The ranking and the delete guard have to be
+	# computed over the same population.
+	directory = restore.own_backup_directory(bench_path, site)
+	sets = restore.list_backups(bench_path, site, directories=[(directory, "site")])
 	now = time.time()
 
 	candidates: list[Candidate] = []
@@ -157,12 +167,17 @@ def prune(bench_path: str, site: str, keys: list[str], keep: int = DEFAULT_KEEP)
 	refused = sorted(requested - set(allowed))
 	targets = [allowed[key] for key in requested if key in allowed]
 
-	backups_dir = os.path.join(bench_path, "sites", site, "private", "backups")
+	backups_dir = restore.own_backup_directory(bench_path, site)
 	deleted: list[str] = []
+	# Sets from which something was actually unlinked. Reporting every TARGET
+	# instead meant the audit log and the toast both counted files the guard
+	# had refused to touch.
+	removed_sets: list[str] = []
 	failed: list[dict] = []
 	freed = 0
 
 	for target in targets:
+		removed_any = False
 		for path in target["files"]:
 			# Belt and braces: only ever unlink inside this site's own backup
 			# directory, whatever the plan happens to say.
@@ -173,14 +188,17 @@ def prune(bench_path: str, site: str, keys: list[str], keep: int = DEFAULT_KEEP)
 				size = os.path.getsize(path)
 				os.remove(path)
 				deleted.append(path)
+				removed_any = True
 				freed += size
 			except OSError as exc:
 				failed.append({"path": path, "error": str(exc)})
+		if removed_any:
+			removed_sets.append(target["key"])
 
 	return {
 		"site": site,
 		"deleted": deleted,
-		"deleted_sets": [t["key"] for t in targets],
+		"deleted_sets": removed_sets,
 		"failed": failed,
 		"refused": refused,
 		"freed": freed,

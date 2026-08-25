@@ -102,6 +102,11 @@
 					</label>
 				</div>
 
+				<p v-if="warning" class="u-note u-note-warn flex items-start gap-2.5">
+					<Icon name="alert" :size="15" class="u-warn mt-0.5 shrink-0" />
+					<span class="text-[12.5px] leading-relaxed">{{ warning }}</span>
+				</p>
+
 				<p v-if="error" class="flex items-start gap-2 text-[12.5px] leading-relaxed">
 					<Icon name="alert" :size="14" class="u-danger mt-[2px] shrink-0" />
 					<span>{{ error }}</span>
@@ -150,6 +155,7 @@ const confirmed = ref(false);
 const pruning = ref(false);
 const backingUp = ref(false);
 const error = ref("");
+const warning = ref("");
 
 const open = computed({
 	get: () => props.modelValue,
@@ -170,6 +176,7 @@ const deletable = computed(() => candidates.value.filter((c) => c.deletable));
 function load() {
 	if (!site.value?.value) return;
 	confirmed.value = false;
+	warning.value = "";
 	plan.fetch({
 		bench: props.bench,
 		site: site.value.value,
@@ -213,7 +220,22 @@ async function prune() {
 			keep: keep.value,
 			confirm: 1,
 		});
-		toast.success(`Freed ${result.freed_text}`);
+		// Report what actually happened, not what was asked for. This used to
+		// count every target as deleted including the ones the guard refused,
+		// so the operator was told gigabytes had been freed while the disk
+		// alert fired again an hour later.
+		const skipped = (result.failed?.length || 0) + (result.refused?.length || 0);
+		if (skipped) {
+			warning.value =
+				`${result.deleted_sets.length} deleted, freeing ${result.freed_text}. ` +
+				`${skipped} could not be removed — reopen this dialog to see what is left.`;
+			toast.error(warning.value);
+		} else {
+			warning.value = "";
+			toast.success(
+				`Deleted ${result.deleted_sets.length}, freeing ${result.freed_text}`,
+			);
+		}
 		// The server recomputes its own plan, so re-read rather than assuming
 		// what went — a scheduled backup may have landed in between.
 		load();

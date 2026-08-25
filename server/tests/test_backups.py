@@ -170,3 +170,95 @@ class TestBackupArgv(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestRetentionOnlyRanksWhatItCanDelete(unittest.TestCase):
+	"""The worst bug this module has had, and the least obvious.
+
+	`plan()` ranked candidates from the full backup listing, which deliberately
+	merges the site's own directory, the bench root drop zone, and every other
+	site's backups — while `prune()` only ever unlinks from the site's own
+	directory. So files it could never touch filled the protected `keep`
+	window and pushed the site's real backups out of it.
+
+	Copying five production dumps into the bench directory (the documented
+	workflow the drop zone exists for) and then pruning an unrelated site
+	deleted every backup that site had, while all five foreign files survived.
+	The module's own stated rule — the newest few are never deletable — did not
+	hold for the files it actually deletes.
+	"""
+
+	def _bench(self, root: str, own_ages: list[float], dropped: int) -> str:
+		directory = make_sets(root, own_ages)
+		now = time.time()
+		for index in range(dropped):
+			# Newer stamps than anything the site owns, so they sort first.
+			path = os.path.join(root, f"20260830_1200{index:02d}-prod_example_com-database.sql.gz")
+			with open(path, "wb") as handle:
+				handle.write(gzip.compress(b"production"))
+			os.utime(path, (now - 3 * 86400, now - 3 * 86400))
+		return directory
+
+	def test_dropped_in_backups_cannot_fill_the_keep_window(self):
+		with tempfile.TemporaryDirectory() as root:
+			directory = self._bench(root, [10, 11, 12, 13, 14, 15], dropped=5)
+			plan = backups.plan(root, SITE, keep=5)
+
+			kept = [c for c in plan["candidates"] if not c["deletable"]]
+			self.assertEqual(len(kept), 5)
+			# Every protected set must be one this site owns.
+			for candidate in kept:
+				self.assertIn(SLUG, candidate["key"])
+			self.assertEqual(len(plan["deletable"]), 1)
+
+			backups.prune(root, SITE, plan["deletable"], keep=5)
+			self.assertEqual(len(os.listdir(directory)), 5)
+
+	def test_foreign_files_are_never_deleted(self):
+		with tempfile.TemporaryDirectory() as root:
+			self._bench(root, [10, 11, 12], dropped=3)
+			plan = backups.plan(root, SITE, keep=2)
+			backups.prune(root, SITE, plan["deletable"], keep=2)
+			survivors = [f for f in os.listdir(root) if f.endswith(".gz")]
+			self.assertEqual(len(survivors), 3)
+
+	def test_the_restore_picker_still_sees_everything(self):
+		"""Narrowing retention must not narrow what can be restored."""
+		from server.bench import restore as restore_module
+
+		with tempfile.TemporaryDirectory() as root:
+			self._bench(root, [10, 11], dropped=3)
+			self.assertEqual(len(restore_module.list_backups(root, SITE)), 5)
+
+	def test_a_single_dropped_file_does_not_shrink_the_window(self):
+		"""The likely form: one dump copied in, silently keeping four not five."""
+		with tempfile.TemporaryDirectory() as root:
+			directory = self._bench(root, [10, 11, 12, 13, 14, 15], dropped=1)
+			plan = backups.plan(root, SITE, keep=5)
+			backups.prune(root, SITE, plan["deletable"], keep=5)
+			self.assertEqual(len(os.listdir(directory)), 5)
+
+
+class TestPruneReportsWhatItActuallyDid(unittest.TestCase):
+	def test_only_sets_that_lost_a_file_are_reported_deleted(self):
+		"""It reported every TARGET, including ones the guard refused.
+
+		The operator was told gigabytes had been freed while the disk alert
+		fired again an hour later, and the audit log claimed those sets were
+		already pruned.
+		"""
+		with tempfile.TemporaryDirectory() as root:
+			make_sets(root, [10, 11, 12, 40, 50])
+			plan = backups.plan(root, SITE, keep=2)
+			result = backups.prune(root, SITE, plan["deletable"], keep=2)
+
+			self.assertEqual(len(result["deleted_sets"]), len(plan["deletable"]))
+			self.assertTrue(result["deleted"])
+			self.assertEqual(result["failed"], [])
+
+	def test_nothing_deleted_means_nothing_reported(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_sets(root, [1, 2])
+			result = backups.prune(root, SITE, [], keep=2)
+			self.assertEqual(result["deleted_sets"], [])
+			self.assertEqual(result["freed"], 0)

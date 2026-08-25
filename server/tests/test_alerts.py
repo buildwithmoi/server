@@ -168,3 +168,81 @@ class TestSweepsNeverRaise(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestFloodControlKeys(unittest.TestCase):
+	"""What goes in the subject decides what gets deduplicated."""
+
+	def test_a_measurement_is_never_part_of_the_subject(self):
+		"""The disk percentage was, so nothing ever deduplicated.
+
+		A host drifting 84.3 → 84.4 → 84.6 over a day produced a different
+		subject every hour, so every System Manager received twenty-four
+		notifications and twenty-four emails about one condition — the mailbox
+		becoming exactly the denial of service this module was written to avoid.
+		"""
+		from unittest import mock
+
+		disks = [
+			{"label": "/", "percent": pct, "level": "warn", "detail": f"{pct}% used"}
+			for pct in (84.3, 84.4, 85.1)
+		]
+		recipients = mock.Mock(get_alert_recipients=lambda: ["ops@example.com"])
+		subjects = []
+		for disk in disks:
+			with (
+				mock.patch.object(
+					alerts, "_notify", side_effect=lambda r, s, b, dt, dn: subjects.append(s)
+				),
+				mock.patch.object(alerts, "get_settings", return_value=recipients),
+				mock.patch("server.system.snapshot", return_value={"disks": [disk], "worst_level": "warn"}),
+				mock.patch.object(alerts, "_disk_hints", return_value=""),
+			):
+				alerts.check_disk()
+
+		self.assertTrue(subjects, "no disk alert was raised at all")
+		self.assertEqual(
+			len(set(subjects)), 1, f"the subject changes with the measurement: {subjects}"
+		)
+		for subject in subjects:
+			self.assertNotIn("84.3", subject)
+			self.assertNotIn("%", subject)
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestTrustedCountries(unittest.TestCase):
+	"""The setting suppressed nothing, because it compared codes to names.
+
+	`get_trusted_countries()` returns ISO-2 codes and SSH Auth Event stores the
+	country NAME, so "GH" was tested against "ghana" and never matched. Someone
+	who entered their own country to quieten the noise would conclude the
+	setting was broken, stop reading new-country alerts, and lose the one that
+	mattered along with them.
+	"""
+
+	def _settings(self, value):
+		from server.server.doctype.server_settings.server_settings import get_settings
+
+		settings = get_settings()
+		settings.trusted_countries = value
+		return settings
+
+	def test_iso_codes_match_the_stored_country_name(self):
+		trusted = alerts._trusted_names(self._settings("GH\nDE"))
+		self.assertIn("ghana", trusted)
+		self.assertIn("germany", trusted)
+
+	def test_codes_themselves_still_match(self):
+		trusted = alerts._trusted_names(self._settings("GH"))
+		self.assertIn("gh", trusted)
+
+	def test_typing_the_name_works_too(self):
+		"""Someone entering "Germany" plainly meant Germany."""
+		self.assertIn("germany", alerts._trusted_names(self._settings("Germany")))
+
+	def test_an_empty_setting_trusts_nothing(self):
+		self.assertEqual(alerts._trusted_names(self._settings("")), set())
+
+	def test_an_unknown_code_does_not_raise(self):
+		self.assertIn("zz", alerts._trusted_names(self._settings("ZZ")))

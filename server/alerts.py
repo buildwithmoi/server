@@ -153,6 +153,19 @@ def _root_logins(recipients: list[str], since) -> list[str]:
 	return raised
 
 
+def _trusted_names(settings) -> set[str]:
+	"""Trusted countries as lowercase names AND codes, so either spelling works."""
+	from server.geo import countries as geo_countries
+
+	trusted: set[str] = set()
+	for code in settings.get_trusted_countries():
+		trusted.add(code.lower())
+		name = geo_countries.country_from_code(code)
+		if name:
+			trusted.add(name.lower())
+	return trusted
+
+
 def _new_countries(recipients: list[str], since, settings) -> list[str]:
 	"""A successful login from a country never seen before.
 
@@ -160,11 +173,12 @@ def _new_countries(recipients: list[str], since, settings) -> list[str]:
 	fixed list — so the first login from home is announced once and then never
 	again, and a login from somewhere genuinely new always is.
 	"""
-	trusted = {
-		line.strip().lower()
-		for line in (settings.trusted_countries or "").splitlines()
-		if line.strip()
-	}
+	# Both spellings. The setting is documented as ISO-2 codes and
+	# `get_trusted_countries()` returns codes, but SSH Auth Event stores the
+	# country NAME — so comparing the two never matched and the setting
+	# suppressed nothing at all. Someone who types "Ghana" instead of "GH"
+	# meant the same thing, so accept either.
+	trusted = _trusted_names(settings)
 
 	recent = frappe.get_all(
 		"SSH Auth Event",
@@ -284,10 +298,15 @@ def check_disk() -> dict:
 
 		critical = disk["percent"] >= DISK_CRITICAL
 		mount = disk["label"]
-		subject = (
-			f"Disk {'critically ' if critical else ''}low on {mount}: "
-			f"{disk['percent']}% used · {_today()}"
-		)
+		# The percentage is NOT in the subject.
+		#
+		# dedupe_on matches on the subject, and a disk drifting 84.3 → 84.4 →
+		# 84.6 over a day produced a different subject every hour — so nothing
+		# ever deduplicated and every System Manager got twenty-four
+		# notifications, and twenty-four emails, about one condition. The
+		# measurement belongs in the body; the subject has to be the stable
+		# fact, which is "this mount is low today".
+		subject = f"Disk {'critically ' if critical else ''}low on {mount} · {_today()}"
 
 		hints = _disk_hints(paths)
 		_notify(

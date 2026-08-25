@@ -204,17 +204,30 @@ def backup_directories(bench_path: str, site: str) -> list[tuple[str, str]]:
 	]
 
 
-def list_backups(bench_path: str, site: str) -> list[BackupSet]:
+def own_backup_directory(bench_path: str, site: str) -> str:
+	"""Where this site's own scheduled backups land."""
+	return os.path.join(bench_path, "sites", site, "private", "backups")
+
+
+def list_backups(
+	bench_path: str, site: str, directories: list[tuple[str, str]] | None = None
+) -> list[BackupSet]:
 	"""Every restorable backup visible to this bench, newest first.
 
-	Sets from any site are returned, not just this one — restoring another
-	site's backup onto this site is a legitimate thing to do (staging from
-	production), and silently hiding those files would look like a bug. The
-	mismatch is reported instead, in `describe_mismatch`.
+	Sets from any site are returned by default, not just this one — restoring
+	another site's backup onto this site is a legitimate thing to do (staging
+	from production), and silently hiding those files would look like a bug.
+	The mismatch is reported instead, in `describe_mismatch`.
+
+	`directories` narrows that. A caller that can only ACT on a subset must
+	also only RANK over that subset: retention deletes from the site's own
+	backup directory alone, and ranking over the merged listing let files it
+	could never touch fill the protected window and push the site's real
+	backups out of it.
 	"""
 	grouped: dict[tuple[str, str], dict] = {}
 
-	for directory, source in backup_directories(bench_path, site):
+	for directory, source in directories or backup_directories(bench_path, site):
 		if not os.path.isdir(directory):
 			continue
 		try:
