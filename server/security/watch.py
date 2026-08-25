@@ -30,6 +30,7 @@ from server.server.doctype.server_settings.server_settings import get_settings
 #: How often each detector is scheduled, so "late" is derived from its own
 #: cadence rather than one global guess. Must match hooks.py.
 SCHEDULE_SECONDS = {
+	"self": 60 * 60,
 	"web": 60 * 60,
 	"site": 60 * 60,
 	"sshd": 15 * 60,
@@ -1331,3 +1332,126 @@ def scan_web(record_only: bool = False) -> dict:
 
 def run_web_scan() -> dict:
 	return _scheduled("web", scan_web)
+
+
+# ----------------------------------------------------------------------
+# Watching this app itself
+# ----------------------------------------------------------------------
+
+CODE_BASELINE_KEY = "selfcheck:code"
+
+
+def scan_self(record_only: bool = False) -> dict:
+	"""Check this app's own code and its own findings for tampering.
+
+	An intruder who knows what is installed here has a cheaper option than
+	evading the detectors: edit them. Two lines in `rules.py` turn a Critical
+	into an Info, and everything downstream keeps working and keeps saying the
+	machine is fine.
+	"""
+	import json as _json
+	import os
+
+	from server.security import selfcheck
+	from server.server.doctype.security_baseline import security_baseline as baseline
+	from server.server.doctype.security_event.security_event import verify_chain
+
+	findings: list = []
+	app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+	state = selfcheck.scan_code(app_root)
+
+	stored = frappe.db.get_value("Security Baseline", CODE_BASELINE_KEY, "detail")
+	previous: dict[str, str] = {}
+	if stored:
+		try:
+			previous = _json.loads(stored).get("files") or {}
+		except (ValueError, AttributeError):
+			previous = {}
+
+	if previous:
+		difference = selfcheck.compare(previous, state)
+		changed = difference["changed"]
+		added = difference["added"]
+		removed = difference["removed"]
+
+		if changed or removed:
+			findings.append(
+				rules.Finding(
+					rules.HIGH,
+					f"This monitoring app's own code changed ({len(changed) + len(removed)} file(s))",
+					f"Changed: {', '.join(changed[:8]) or 'none'}. Removed: "
+					f"{', '.join(removed[:8]) or 'none'}. Fingerprint is now "
+					f"{state.fingerprint[:12]}.",
+					"An app upgrade or a deploy explains this — confirm one happened, and when. If "
+					"none did, treat it seriously: editing the detector is cheaper than evading it, "
+					"and a rule quietly downgraded from Critical to Info leaves every other part of "
+					"this system working and reporting that the machine is fine. The forwarded copy "
+					"of this finding, and the fingerprint in the heartbeat, are what let somebody on "
+					"another machine check this without trusting this one.",
+					category="self",
+				)
+			)
+		elif added:
+			findings.append(
+				rules.Finding(
+					rules.MEDIUM,
+					f"{len(added)} new file(s) appeared in this monitoring app",
+					f"{', '.join(added[:8])}.",
+					"Usually a deploy. Worth confirming, because a new module inside a trusted app "
+					"runs with everything that app is allowed to do.",
+					category="self",
+				)
+			)
+
+	chain = verify_chain()
+	if not chain["ok"]:
+		findings.append(
+			rules.Finding(
+				rules.CRITICAL,
+				"The finding history has been altered",
+				f"{len(chain['broken'])} finding(s) no longer match their chain hash and "
+				f"{len(chain['gaps'])} are missing entirely, out of {chain['checked']} checked. "
+				f"Each finding commits to the one before it, so an edit or a deletion breaks every "
+				f"link that follows.",
+				"Do not investigate this from this machine. Findings are forwarded off the box as "
+				"they are written and the chain head is published in the heartbeat, so compare "
+				"against those copies from somewhere else — that comparison is the point of them. "
+				"An ordinary DELETE or a desk edit produces exactly this; so does somebody removing "
+				"a record of themselves.",
+				category="self",
+			)
+		)
+
+	baseline.record(
+		CODE_BASELINE_KEY,
+		state.fingerprint,
+		{"files": {f.relative_path: f.digest for f in state.files}, "count": state.count},
+	)
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"files": state.count,
+		"fingerprint": state.fingerprint,
+		"chain_ok": chain["ok"],
+		"chain_checked": chain["checked"],
+		"findings": len(findings),
+		"raised": len(raised),
+	}
+
+
+def run_self_scan() -> dict:
+	return _scheduled("self", scan_self)

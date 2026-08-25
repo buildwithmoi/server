@@ -8,6 +8,9 @@ doctype controllers, so the complete remotely-callable surface of the app can be
 reviewed by reading one file. Every function starts with an `_assert_*` guard.
 """
 
+import hashlib
+import hmac
+import json
 import os
 import re
 import shutil
@@ -805,8 +808,6 @@ def security_heartbeat(token: str | None = None) -> dict:
 	Returns counts and timings only. No finding text, because this is reachable
 	without a session and a subject line can name an internal address.
 	"""
-	import hmac
-
 	expected = get_settings().watchdog_secret()
 	if not expected:
 		frappe.throw("No watchdog token is configured.", frappe.PermissionError)
@@ -833,9 +834,15 @@ def security_heartbeat(token: str | None = None) -> dict:
 	]
 
 	from server.server.doctype.ingest_heartbeat.ingest_heartbeat import overdue
+	from server.server.doctype.security_event.security_event import head
 
 	late = overdue()
-	return {
+	chain_sequence, chain_head = head()
+	code_fingerprint = (
+		frappe.db.get_value("Security Baseline", "selfcheck:code", "value_hash") or ""
+	)
+
+	payload = {
 		"host": os.uname().nodename,
 		"time": str(now),
 		"healthy": not late and all(d["status"] == "OK" for d in detectors) and bool(detectors),
@@ -847,7 +854,30 @@ def security_heartbeat(token: str | None = None) -> dict:
 		"open_critical": frappe.db.count("Security Event", {"status": "New", "severity": "Critical"}),
 		"open_high": frappe.db.count("Security Event", {"status": "New", "severity": "High"}),
 		"undelivered": frappe.db.count("Security Event", {"forwarded": 0}),
+		# The two values that let a watcher elsewhere check this host's own
+		# records without trusting this host. `chain_head` is the tip of the
+		# tamper-evident finding chain: it only ever moves forward, so a head
+		# that CHANGES for a sequence already seen means history was rewritten.
+		# `code_fingerprint` is a hash of this app's own source, so a detector
+		# quietly edited to stop reporting shows up as a fingerprint that
+		# changed with no deploy behind it.
+		"chain_sequence": chain_sequence,
+		"chain_head": chain_head,
+		"code_fingerprint": code_fingerprint,
 	}
+
+	# Signed so the watcher can tell this host's answer from a convincing one.
+	# Without a signature, anything able to intercept the request can return a
+	# healthy payload forever — which is exactly what an intruder who has
+	# noticed the polling would do. The nonce is the response time, which the
+	# watcher already checks for staleness, so a captured reply cannot be
+	# replayed tomorrow to prove today is fine.
+	payload["signature"] = hmac.new(
+		expected.encode(),
+		json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
+		hashlib.sha256,
+	).hexdigest()
+	return payload
 
 
 @frappe.whitelist()

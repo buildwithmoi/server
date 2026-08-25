@@ -246,6 +246,10 @@ scheduler_events = {
 		# rather than judged — fifty-five guest endpoints is how a web
 		# framework works; a new one appearing is the finding.
 		"server.security.watch.run_web_scan",
+		# And this app watching itself: its own code, and whether its own
+		# findings still add up. Editing the detector is cheaper than evading
+		# it, and nothing else in the system notices when somebody does.
+		"server.security.watch.run_self_scan",
 	],
 	"daily": [
 		# One message a day saying what state this machine is in — including

@@ -115,8 +115,112 @@ def raise_event(
 			"dedupe_key": key,
 		}
 	)
+	sequence, chain_hash = _next_link(doc)
+	doc.sequence = sequence
+	doc.chain_hash = chain_hash
 	doc.insert(ignore_permissions=True)
 	return doc.name
+
+
+# ----------------------------------------------------------------------
+# Tamper evidence
+# ----------------------------------------------------------------------
+
+
+def content_digest(
+	sequence: int, event_time, severity: str, category: str, subject: str, detail: str
+) -> str:
+	"""The part of a finding the chain commits to.
+
+	Deliberately not every field. `status`, `occurrences`, `last_seen` and the
+	forwarding columns all change legitimately after the row is written --
+	acknowledging a finding must not look like tampering with one. What is
+	covered is what the finding SAYS: when, how bad, about what.
+	"""
+	import hashlib
+
+	canonical = "\x1f".join(
+		[str(sequence), str(event_time), severity or "", category or "", subject or "", detail or ""]
+	)
+	return hashlib.sha256(canonical.encode("utf-8", "replace")).hexdigest()
+
+
+def link_hash(previous_hash: str, digest: str) -> str:
+	"""Chain one link to the last."""
+	import hashlib
+
+	return hashlib.sha256(f"{previous_hash}:{digest}".encode()).hexdigest()
+
+
+def head() -> tuple[int, str]:
+	"""(sequence, chain hash) of the most recent finding, or (0, "")."""
+	row = frappe.db.sql(
+		"""SELECT sequence, chain_hash FROM `tabSecurity Event`
+		   ORDER BY sequence DESC LIMIT 1""",
+		as_dict=True,
+	)
+	if not row or not row[0].sequence:
+		return 0, ""
+	return int(row[0].sequence), row[0].chain_hash or ""
+
+
+def _next_link(doc) -> tuple[int, str]:
+	previous_sequence, previous_hash = head()
+	sequence = previous_sequence + 1
+	digest = content_digest(
+		sequence, doc.event_time, doc.severity, doc.category, doc.subject, doc.detail
+	)
+	return sequence, link_hash(previous_hash, digest)
+
+
+def verify_chain(limit: int = 5000) -> dict:
+	"""Walk the chain and report where it stops adding up.
+
+	WHAT THIS DOES AND DOES NOT PROVE. It does not prove nobody tampered with
+	the findings: an attacker with database access can delete a row and
+	recompute every hash after it, and this check would then pass. What it
+	proves is that nobody tampered with them CARELESSLY -- a plain `DELETE` or
+	an `UPDATE` through the desk breaks every link that follows and is caught
+	on the next run.
+
+	Making it actually strong needs an anchor outside this database, which is
+	what the other two halves of this phase are for: every finding is forwarded
+	off the box as it is written, and the chain head is published in the signed
+	heartbeat. A rewritten chain is then a chain that disagrees with the copies
+	somebody else already has.
+	"""
+	rows = frappe.db.sql(
+		"""SELECT name, sequence, chain_hash, event_time, severity, category, subject, detail
+		   FROM `tabSecurity Event`
+		   WHERE sequence IS NOT NULL AND sequence > 0
+		   ORDER BY sequence ASC LIMIT %(limit)s""",
+		{"limit": limit},
+		as_dict=True,
+	)
+	if not rows:
+		return {"checked": 0, "broken": [], "gaps": [], "ok": True}
+
+	broken: list[dict] = []
+	gaps: list[dict] = []
+	previous_hash = ""
+	expected = rows[0].sequence
+
+	for row in rows:
+		if row.sequence != expected:
+			gaps.append({"expected": expected, "found": row.sequence, "name": row.name})
+			expected = row.sequence
+		expected += 1
+
+		digest = content_digest(
+			row.sequence, row.event_time, row.severity, row.category, row.subject, row.detail
+		)
+		if link_hash(previous_hash, digest) != (row.chain_hash or ""):
+			broken.append(
+				{"name": row.name, "sequence": row.sequence, "subject": (row.subject or "")[:80]}
+			)
+		previous_hash = row.chain_hash or ""
+
+	return {"checked": len(rows), "broken": broken, "gaps": gaps, "ok": not broken and not gaps}
 
 
 def is_suppressed(category: str, subject: str) -> bool:
