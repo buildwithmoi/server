@@ -45,6 +45,11 @@
 			</div>
 		</Transition>
 
+		<!-- The machine itself. First, because a bench host that is out of disk
+		     is a different kind of problem from anything else on this page and
+		     the only one that takes every site down at once. -->
+		<HealthPanel :data="systemHealth.data" />
+
 		<!-- headline numbers -->
 		<div class="u-stagger grid grid-cols-2 gap-3 lg:grid-cols-4">
 			<StatCard
@@ -144,10 +149,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Button, toast } from "frappe-ui";
 
 import AppShell from "../components/AppShell.vue";
+import HealthPanel from "../components/HealthPanel.vue";
 import BarTimeline from "../components/BarTimeline.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Icon from "../components/Icon.vue";
@@ -155,9 +161,20 @@ import OutcomeMark from "../components/OutcomeMark.vue";
 import RankBars from "../components/RankBars.vue";
 import Skeleton from "../components/Skeleton.vue";
 import StatCard from "../components/StatCard.vue";
-import { overviewResource, replayFixtureResource, setMonitoringResource } from "../api";
+import { overviewResource, replayFixtureResource, setMonitoringResource, systemHealthResource } from "../api";
 
 const RANGES = [1, 7, 30];
+
+/**
+ * Refreshed on its own timer, not with the rest of the page.
+ *
+ * Disk and load change on the scale of seconds; the event counts behind them
+ * are a 30-day aggregate and cost real query time. Tying the two together would
+ * mean either a stale gauge or a needlessly expensive poll.
+ */
+const HEALTH_POLL_MS = 20000;
+const systemHealth = systemHealthResource();
+let healthTimer = null;
 
 const days = ref(7);
 const acting = ref(false);
@@ -224,6 +241,7 @@ function setRange(value) {
 }
 
 function refresh() {
+	systemHealth.fetch();
 	overview.value.fetch();
 	toast.success("Refreshed");
 }
@@ -266,5 +284,11 @@ function ago(value) {
 	return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-onMounted(() => overview.value.fetch());
+onMounted(() => {
+	overview.value.fetch();
+	systemHealth.fetch();
+	healthTimer = setInterval(() => systemHealth.fetch(), HEALTH_POLL_MS);
+});
+
+onUnmounted(() => healthTimer && clearInterval(healthTimer));
 </script>

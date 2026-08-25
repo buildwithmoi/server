@@ -17,6 +17,18 @@
 import { computed, ref } from "vue";
 import { installRequestResource, installRequestsResource } from "./api";
 
+export interface JobStep {
+	key: string;
+	title: string;
+	description: string;
+	status: "Pending" | "Running" | "Success" | "Failure" | "Skipped";
+	detail: string;
+	output: string;
+	started_at: string | null;
+	finished_at: string | null;
+	duration: number | null;
+}
+
 export interface Job {
 	name: string;
 	operation: string;
@@ -26,6 +38,7 @@ export interface Job {
 	status: string;
 	exit_code: number | null;
 	output: string;
+	steps: JobStep[];
 	command: string | null;
 	error_summary: string | null;
 	is_terminal: boolean;
@@ -81,6 +94,7 @@ export function watchJob(name: string, seed: Partial<Job> = {}) {
 				status: seed.status || "Queued",
 				exit_code: null,
 				output: "",
+				steps: [],
 				command: null,
 				error_summary: null,
 				is_terminal: false,

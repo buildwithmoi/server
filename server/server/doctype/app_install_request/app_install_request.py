@@ -144,15 +144,13 @@ class AppInstallRequest(Document):
 				f"Known sites: {', '.join(bench.site_names()) or 'none'}."
 			)
 
-		if not self.restore_backup_key:
-			frappe.throw("Choose which backup to restore.")
-
-		# Resolved now so a rotated-away backup is refused before the record
-		# exists, rather than after the queue has picked it up.
+		# Resolved now so a rotated-away backup, or a path that points outside
+		# the bench, is refused before the record exists rather than after the
+		# queue has picked it up.
 		try:
-			backup = restore.find(bench.bench_path, site, self.restore_backup_key)
+			backup = self.resolve_backup(bench.bench_path)
 		except restore.RestoreRefused as exc:
-			frappe.throw(str(exc), title="Backup Not Found")
+			frappe.throw(str(exc), title="Cannot Restore")
 
 		if backup.encrypted and not self.get_password("restore_encryption_key", raise_exception=False):
 			frappe.throw(
@@ -258,6 +256,27 @@ class AppInstallRequest(Document):
 
 	def is_restore(self) -> bool:
 		return self.operation == OP_RESTORE
+
+	def resolve_backup(self, bench_path: str):
+		"""The backup this request restores, however it was chosen.
+
+		Both sources converge on one BackupSet so the argv builder, the
+		pre-flights and the job body have a single shape to work with — a
+		second code path for hand-picked files is a second thing to get wrong.
+		"""
+		from server.bench import restore
+
+		if self.restore_source == "Chosen Files":
+			return restore.resolve_chosen(
+				bench_path,
+				self.install_on_site,
+				self.restore_database_file,
+				self.restore_public_file,
+				self.restore_private_file,
+			)
+		if not self.restore_backup_key:
+			raise restore.RestoreRefused("Choose which backup to restore.")
+		return restore.find(bench_path, self.install_on_site, self.restore_backup_key)
 
 	def clear_restore_secrets(self) -> None:
 		"""Drop the credentials once the job is over.

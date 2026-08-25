@@ -217,6 +217,13 @@ export interface SslSite {
 	days_left: number | null;
 	note: string;
 	custom_domains: string[];
+	dns: {
+		domain: string;
+		resolved: string[];
+		points_here: boolean;
+		level: "ok" | "warn" | "danger";
+		detail: string;
+	};
 }
 
 export interface SslReadiness {
@@ -226,6 +233,14 @@ export interface SslReadiness {
 	sites: SslSite[];
 	default_site: string | null;
 	certificates_note: string;
+}
+
+export function systemHealthResource() {
+	return createResource({ url: `${M}.system_health` });
+}
+
+export function backupUsageResource() {
+	return createResource({ url: `${M}.backup_usage` });
 }
 
 export function sslReadinessResource() {
@@ -254,10 +269,39 @@ export interface BackupSet {
 	mismatch: string;
 }
 
+export interface SpaceEstimate {
+	required: number;
+	free: number;
+	total: number;
+	mountpoint: string;
+	enough: boolean;
+	detail: string;
+}
+
+export interface RestoreFile {
+	path: string;
+	name: string;
+	directory: string;
+	kind: string;
+	size: number;
+	size_text: string;
+	modified: string;
+	in_set: boolean;
+}
+
 export interface BackupListing {
 	site: string;
-	backups: BackupSet[];
+	bench_path: string;
+	backups: (BackupSet & { space: SpaceEstimate })[];
 	searched: string[];
+}
+
+export function restoreFilesResource() {
+	return createResource({ url: `${M}.list_restore_files` });
+}
+
+export function restoreSpaceResource() {
+	return createResource({ url: `${M}.estimate_restore_space` });
 }
 
 export function backupsResource() {

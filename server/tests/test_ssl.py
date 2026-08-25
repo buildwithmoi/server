@@ -170,3 +170,41 @@ class TestReadiness(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestDNS(unittest.TestCase):
+	"""Checked before certbot is asked.
+
+	Let's Encrypt rate-limits failed authorisations per account and the block
+	outlasts the mistake, so a domain that cannot possibly validate should never
+	cost an attempt.
+	"""
+
+	def test_a_domain_that_does_not_resolve_is_a_hard_no(self):
+		result = ssl.dns_check("definitely-not-a-real-domain-xyz123456.invalid")
+		self.assertEqual(result["level"], "danger")
+		self.assertFalse(result["points_here"])
+
+	def test_something_that_is_not_a_domain_is_a_hard_no(self):
+		for bad in ("localhost", "not a domain", ""):
+			with self.subTest(domain=bad):
+				self.assertEqual(ssl.dns_check(bad)["level"], "danger")
+
+	def test_resolving_elsewhere_is_only_a_warning(self):
+		"""Behind a proxy or Cloudflare this is entirely normal."""
+		result = ssl.dns_check("example.com")
+		if not result["resolved"]:
+			self.skipTest("no DNS available in this environment")
+		self.assertEqual(result["level"], "warn")
+		self.assertFalse(result["points_here"])
+		self.assertIn("proxy", result["detail"])
+
+	def test_local_ips_are_discoverable(self):
+		found = ssl.local_ips()
+		self.assertTrue(all(ip.count(".") == 3 for ip in found))
+
+	def test_readiness_carries_a_dns_verdict_per_site(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, "erp.example.com", {})
+			report = ssl.readiness(root, [{"name": "erp.example.com", "is_default": True}])
+			self.assertIn("level", report["sites"][0]["dns"])

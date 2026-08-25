@@ -14,14 +14,35 @@
 				</div>
 
 				<!--
-					A backup is picked as ONE thing, not as four file paths.
+					Two ways in, because there are two situations.
 
-					frappe writes the dump, the two files tars and the config
-					snapshot with a shared timestamp; matching them up by hand is
-					how you end up restoring Tuesday's database over Friday's
-					files. Picking the set fills in everything.
+					A backup frappe wrote is one thing with four files, and picking
+					it as a set is what stops you restoring Tuesday's database over
+					Friday's files. A backup copied in from another server is three
+					loose paths, and there is nothing to group them by.
 				-->
 				<div class="flex flex-col gap-1.5">
+					<span class="u-label">Restore from</span>
+					<div class="grid grid-cols-2 gap-2">
+						<button
+							v-for="option in SOURCES"
+							:key="option.value"
+							type="button"
+							class="flex flex-col gap-1 rounded-md border px-3 py-2.5 text-left transition-colors duration-150"
+							:class="
+								source === option.value
+									? 'border-[var(--ink)] bg-[var(--paper-sunk)]'
+									: 'border-[var(--rule)] hover:border-[var(--rule-strong)]'
+							"
+							@click="source = option.value"
+						>
+							<span class="u-item-label">{{ option.label }}</span>
+							<span class="u-item-detail">{{ option.hint }}</span>
+						</button>
+					</div>
+				</div>
+
+				<div v-if="source === 'Backup Set'" class="flex flex-col gap-1.5">
 					<span class="u-label">Backup</span>
 					<SearchSelect
 						v-model="backup"
@@ -37,6 +58,35 @@
 						<span class="u-mono">{{ benchPath }}</span> and it shows up here.
 					</p>
 				</div>
+
+				<!-- Three independent pickers. The database is required; the two
+				     files tars are not, because plenty of backups are database
+				     only and demanding all three would block them. -->
+				<template v-else>
+					<div v-for="slot in FILE_SLOTS" :key="slot.key" class="flex flex-col gap-1.5">
+						<span class="u-label">
+							{{ slot.label }}
+							<span v-if="!slot.required" class="font-normal normal-case text-[var(--ink-ghost)]">
+								· optional
+							</span>
+						</span>
+						<SearchSelect
+							v-model="picks[slot.key]"
+							:options="optionsFor(slot.kind)"
+							:placeholder="slot.placeholder"
+							search-placeholder="Search by file name"
+							empty-text="Nothing in the bench directory looks like this."
+							:loading="files.loading"
+							mono
+						/>
+					</div>
+
+					<p class="u-item-detail">
+						Only files inside <span class="u-mono">{{ benchPath }}</span> can be used —
+						copy the backup in with <span class="u-mono">scp</span> first. A path
+						anywhere else on the server is refused.
+					</p>
+				</template>
 
 				<template v-if="chosen">
 					<!-- What is actually in the set, and what will be replaced. -->
@@ -70,6 +120,35 @@
 						<Icon name="alert" :size="15" class="u-warn mt-0.5 shrink-0" />
 						<p class="text-[12.5px] leading-relaxed">{{ chosen.mismatch }}</p>
 					</div>
+
+					<!-- Disk space. A restore that fills the disk leaves a
+					     half-loaded database behind and takes the whole server
+					     with it — every other site on this bench included. -->
+					<div
+						v-if="space"
+						class="flex items-start gap-2.5"
+						:class="space.enough ? 'u-note' : 'u-note u-note-danger'"
+					>
+						<Icon
+							:name="space.enough ? 'database' : 'alert'"
+							:size="15"
+							class="mt-0.5 shrink-0"
+							:class="space.enough ? 'text-[var(--ink-faint)]' : 'u-danger'"
+						/>
+						<p class="text-[12.5px] leading-relaxed">{{ space.detail }}</p>
+					</div>
+
+					<label
+						v-if="space && !space.enough"
+						class="flex cursor-pointer items-start gap-2.5 rounded-md border border-[var(--danger-border)] px-3 py-2.5"
+					>
+						<input v-model="ignoreSpace" type="checkbox" class="mt-[3px]" />
+						<span class="u-item-detail">
+							Restore anyway. The estimate is deliberately pessimistic and yours may
+							well fit — but if it does not, the disk fills and every site on this
+							bench goes down with it.
+						</span>
+					</label>
 
 					<div v-if="chosen.has_files" class="flex flex-col gap-2">
 						<span class="u-label">Also restore</span>
@@ -180,7 +259,7 @@ import { Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
 import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
-import { backupsResource, runRestoreResource } from "../api";
+import { backupsResource, restoreFilesResource, restoreSpaceResource, runRestoreResource } from "../api";
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -191,7 +270,37 @@ const props = defineProps({
 });
 const emit = defineEmits(["update:modelValue", "started"]);
 
+const SOURCES = [
+	{
+		value: "Backup Set",
+		label: "A backup on this bench",
+		hint: "One backup frappe wrote, with its files already matched to its dump.",
+	},
+	{
+		value: "Chosen Files",
+		label: "Choose the files myself",
+		hint: "For a backup copied in from another server, or files from different backups.",
+	},
+];
+
+const FILE_SLOTS = [
+	{
+		key: "database",
+		kind: "database",
+		label: "Database dump",
+		required: true,
+		placeholder: "Choose the .sql.gz dump",
+	},
+	{ key: "public", kind: "public", label: "Public files tar", required: false, placeholder: "None" },
+	{ key: "private", kind: "private", label: "Private files tar", required: false, placeholder: "None" },
+];
+
 const listing = backupsResource();
+const files = restoreFilesResource();
+const spaceCheck = restoreSpaceResource();
+const source = ref("Backup Set");
+const picks = ref({ database: null, public: null, private: null });
+const ignoreSpace = ref(false);
 const site = ref(null);
 const backup = ref(null);
 const withPublic = ref(false);
@@ -218,7 +327,87 @@ const siteOptions = computed(() =>
 );
 
 const backups = computed(() => listing.data?.backups || []);
-const chosen = computed(() => backups.value.find((b) => b.key === backup.value?.value) || null);
+
+/**
+ * The backup being restored, whichever way it was chosen.
+ *
+ * Both sources produce the same shape so everything downstream — the contents
+ * list, the mismatch warning, the preview, the space check — has one thing to
+ * read rather than two.
+ */
+const chosen = computed(() => {
+	if (source.value === "Backup Set") {
+		return backups.value.find((b) => b.key === backup.value?.value) || null;
+	}
+	const database = picks.value.database?.value;
+	if (!database) return null;
+	const pick = (key) => picks.value[key]?.value || null;
+	const named = (path) => (path ? path.split("/").pop() : null);
+	return {
+		key: `chosen:${named(database)}`,
+		taken_at: fileFor(database)?.modified || "chosen by hand",
+		database,
+		public_files: pick("public"),
+		private_files: pick("private"),
+		has_files: Boolean(pick("public") || pick("private")),
+		size_text: chosenSizeText.value,
+		encrypted: false,
+		mismatch: chosenMismatch.value,
+		source: "chosen",
+	};
+});
+
+const candidates = computed(() => files.data?.files || []);
+const fileFor = (path) => candidates.value.find((f) => f.path === path);
+
+const chosenSizeText = computed(() => {
+	const total = ["database", "public", "private"]
+		.map((k) => fileFor(picks.value[k]?.value)?.size || 0)
+		.reduce((a, b) => a + b, 0);
+	if (!total) return "";
+	const units = ["B", "KB", "MB", "GB"];
+	let value = total;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+});
+
+/** The same right-backup-wrong-site check, applied to a hand-picked dump. */
+const chosenMismatch = computed(() => {
+	const name = picks.value.database?.value?.split("/").pop() || "";
+	const match = name.match(/^\d{8}_\d{6}-(.+?)-database\.sql\.gz$/);
+	if (!match) return "";
+	const from = match[1].replace(/_/g, ".");
+	if (from === siteName.value) return "";
+	return `This dump is from ${from}, not ${siteName.value}. Restoring it will replace this site's data with that site's data.`;
+});
+
+function optionsFor(kind) {
+	const ordered = [
+		...candidates.value.filter((f) => f.kind === kind),
+		...candidates.value.filter((f) => f.kind !== kind),
+	];
+	return [
+		...(kind === "database" ? [] : [{ label: "None", value: "", description: "Do not restore these." }]),
+		...ordered.map((f) => ({
+			label: f.name,
+			value: f.path,
+			description: `${f.directory} · ${f.modified}`,
+			chip: f.size_text,
+			chipClass: f.kind === kind ? "u-chip" : "u-chip-warn",
+			keywords: `${f.kind} ${f.path}`,
+		})),
+	];
+}
+
+/** Disk headroom: read from the backup set, or asked for explicitly. */
+const space = computed(() => {
+	if (source.value === "Backup Set") return chosen.value?.space || null;
+	return spaceCheck.data || null;
+});
 
 const backupOptions = computed(() =>
 	backups.value.map((b) => ({
@@ -259,6 +448,7 @@ const canRun = computed(() => {
 	if (!chosen.value || !siteName.value) return false;
 	if (!dbPassword.value) return false;
 	if (chosen.value.encrypted && !encryptionKey.value) return false;
+	if (space.value && !space.value.enough && !ignoreSpace.value) return false;
 	return confirm.value === siteName.value;
 });
 
@@ -288,10 +478,34 @@ watch(
 	([value, isOpen]) => {
 		if (!isOpen || !value?.value) return;
 		backup.value = null;
+		picks.value = { database: null, public: null, private: null };
 		listing.fetch({ bench: props.bench, site: value.value });
+		files.fetch({ bench: props.bench, site: value.value });
 	},
 	{ immediate: true },
 );
+
+// Hand-picked files have no pre-computed sizes, so the space check has to be
+// asked for each time the selection changes.
+watch(
+	() => [source.value, picks.value.database?.value, picks.value.public?.value, picks.value.private?.value],
+	([mode, database, publicFile, privateFile]) => {
+		ignoreSpace.value = false;
+		if (mode !== "Chosen Files" || !database) return;
+		spaceCheck.fetch({
+			bench: props.bench,
+			site: siteName.value,
+			database_file: database,
+			public_file: publicFile || null,
+			private_file: privateFile || null,
+		});
+	},
+);
+
+watch(source, () => {
+	confirm.value = "";
+	ignoreSpace.value = false;
+});
 
 watch(chosen, (value) => {
 	// Default to restoring whatever the backup actually contains: if someone
@@ -300,6 +514,8 @@ watch(chosen, (value) => {
 	withPrivate.value = Boolean(value?.private_files);
 });
 
+watch([() => picks.value.database, backup], () => (ignoreSpace.value = false));
+
 async function run() {
 	running.value = true;
 	error.value = "";
@@ -307,7 +523,11 @@ async function run() {
 		const result = await runRestoreResource().submit({
 			bench: props.bench,
 			site: siteName.value,
-			backup_key: chosen.value.key,
+			source: source.value,
+			backup_key: source.value === "Backup Set" ? backup.value?.value : null,
+			database_file: picks.value.database?.value || null,
+			public_file: picks.value.public?.value || null,
+			private_file: picks.value.private?.value || null,
 			db_root_password: dbPassword.value,
 			encryption_key: encryptionKey.value || null,
 			with_public_files: withPublic.value ? 1 : 0,

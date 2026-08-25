@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -49,8 +50,48 @@ SECRET_FLAGS = ("--db-root-password", "--encryption-key", "--admin-password")
 REDACTED = "********"
 
 
+#: What a file looks like it is, from its name alone. Used to pre-sort the
+#: picker; never used to decide what a file IS, because a backup copied in from
+#: another system can be called anything.
+KIND_GUESSES = (
+	("private", re.compile(r"private[-_]?files\.tar(\.gz)?$", re.I)),
+	("public", re.compile(r"(^|[-_])files\.tar(\.gz)?$", re.I)),
+	("database", re.compile(r"\.sql(\.gz)?$", re.I)),
+	("public", re.compile(r"\.tar(\.gz)?$", re.I)),
+)
+
+#: Extensions worth offering at all. Anything else in the bench directory is
+#: noise in a picker whose job is to be short.
+RESTORABLE = (".sql", ".sql.gz", ".tar", ".tar.gz", ".tgz")
+
+#: How deep to walk looking for candidates. The bench root holds apps/, env/ and
+#: sites/, which together are tens of thousands of files; a backup someone
+#: copied in is at the top or one level down, never buried.
+SCAN_DEPTH = 2
+
+#: Directories that can only cost time. env/ and node_modules/ are enormous and
+#: contain nothing restorable.
+SKIP_DIRS = {"apps", "env", "node_modules", ".git", "logs", "config", "archived", "__pycache__"}
+
+
 class RestoreRefused(Exception):
 	"""Raised when a restore cannot be built or should not be attempted."""
+
+
+@dataclass(frozen=True)
+class FileCandidate:
+	"""One file on disk that could take part in a restore."""
+
+	path: str
+	name: str
+	directory: str
+	kind: str
+	size: int
+	size_text: str
+	modified: str
+	#: True when this file belongs to a backup set frappe wrote, which is the
+	#: signal that picking its siblings by hand is the wrong move.
+	in_set: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,6 +259,232 @@ def find(bench_path: str, site: str, key: str) -> BackupSet:
 			"dialog to see what is there now."
 		)
 	return backup
+
+
+# ----------------------------------------------------------------------
+# Picking files by hand
+# ----------------------------------------------------------------------
+
+
+def classify(name: str) -> str:
+	"""What a filename suggests the file is. A guess, and labelled as one."""
+	for kind, pattern in KIND_GUESSES:
+		if pattern.search(name):
+			return kind
+	return "unknown"
+
+
+def _is_restorable(name: str) -> bool:
+	lowered = name.lower()
+	return any(lowered.endswith(ext) for ext in RESTORABLE)
+
+
+def is_inside(root: str, path: str) -> bool:
+	"""True when `path` really is under `root`, symlinks resolved.
+
+	Restore paths arrive from a browser, and `bench restore` will happily read
+	/etc/shadow if asked. Comparing resolved paths — rather than the strings —
+	is what stops `../../..` and a symlink planted in the bench directory from
+	reaching outside it.
+	"""
+	try:
+		root_real = os.path.realpath(root)
+		path_real = os.path.realpath(path)
+	except OSError:
+		return False
+	return os.path.commonpath([root_real, path_real]) == root_real
+
+
+def list_files(bench_path: str, site: str) -> list[FileCandidate]:
+	"""Every file in the bench that could be part of a restore.
+
+	Bounded on purpose. A bench root contains apps/ and env/ — hundreds of
+	thousands of files — and a backup someone copied in is at the top level or
+	one directory down. Walking the whole tree would take seconds and return
+	nothing extra.
+	"""
+	in_sets = {
+		path
+		for backup in list_backups(bench_path, site)
+		for path in (backup.database, backup.public_files, backup.private_files)
+		if path
+	}
+
+	seen: set[str] = set()
+	found: list[FileCandidate] = []
+
+	roots = [directory for directory, _ in backup_directories(bench_path, site)]
+	for root in roots:
+		if not os.path.isdir(root):
+			continue
+		base_depth = root.rstrip(os.sep).count(os.sep)
+		for current, dirs, names in os.walk(root):
+			if current.rstrip(os.sep).count(os.sep) - base_depth >= SCAN_DEPTH:
+				dirs[:] = []
+			dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+
+			for name in names:
+				if not _is_restorable(name):
+					continue
+				path = os.path.join(current, name)
+				real = os.path.realpath(path)
+				if real in seen or not os.path.isfile(path):
+					continue
+				seen.add(real)
+				try:
+					stat = os.stat(path)
+				except OSError:
+					continue
+				found.append(
+					FileCandidate(
+						path=path,
+						name=name,
+						directory=os.path.dirname(path),
+						kind=classify(name),
+						size=stat.st_size,
+						size_text=_human_size(stat.st_size),
+						modified=datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %Y, %H:%M"),
+						in_set=path in in_sets,
+					)
+				)
+
+	found.sort(key=lambda f: f.name, reverse=True)
+	return found
+
+
+def resolve_chosen(
+	bench_path: str,
+	site: str,
+	database: str,
+	public: str | None = None,
+	private: str | None = None,
+) -> BackupSet:
+	"""Turn three hand-picked paths into the same BackupSet the rest expects.
+
+	Everything downstream — the argv builder, the pre-flights, the job — works
+	on a BackupSet, so choosing files by hand converges here rather than growing
+	a second code path that could drift from the first.
+	"""
+	if not database:
+		raise RestoreRefused("A database dump is required. Files alone cannot restore a site.")
+
+	chosen = {"database": database, "public files": public, "private files": private}
+	for label, path in chosen.items():
+		if not path:
+			continue
+		if not is_inside(bench_path, path):
+			raise RestoreRefused(
+				f"The {label} must be a file inside {bench_path}. Copy the backup into the bench "
+				"directory first — restoring from anywhere on the server is not allowed."
+			)
+		if not os.path.isfile(path):
+			raise RestoreRefused(f"{path} is not a file.")
+
+	stamp = ""
+	match = BACKUP_NAME.match(os.path.basename(database))
+	if match:
+		stamp = match["stamp"]
+
+	size = sum(os.path.getsize(p) for p in chosen.values() if p)
+	return BackupSet(
+		key=f"chosen:{os.path.basename(database)}",
+		# Named after the file, so a mismatch warning still fires when someone
+		# hand-picks another site's dump.
+		site_slug=match["site"] if match else site_slug(site),
+		taken_at=_stamp_to_text(stamp) if stamp else _modified_text(database),
+		database=database,
+		public_files=public or None,
+		private_files=private or None,
+		size=size,
+		encrypted=_is_encrypted(database),
+		source="chosen",
+	)
+
+
+def _modified_text(path: str) -> str:
+	try:
+		return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%d %b %Y, %H:%M")
+	except OSError:
+		return "unknown"
+
+
+# ----------------------------------------------------------------------
+# Disk space
+# ----------------------------------------------------------------------
+
+#: A gzipped SQL dump expands hard, and MariaDB then writes binlogs of roughly
+#: the same volume while loading it. This is press's own multiplier
+#: (`8 * db_file_size * 2` in press/press/doctype/site/site.py) and it is the
+#: number Frappe Cloud restores against in production.
+DB_EXPANSION = 16
+
+#: Below this, refuse to guess. A disk with almost nothing left will fail for
+#: reasons that have nothing to do with the estimate.
+FLOOR_BYTES = 512 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class SpaceEstimate:
+	"""Whether this restore will fit, and the numbers behind the answer."""
+
+	required: int
+	free: int
+	total: int
+	mountpoint: str
+	enough: bool
+	detail: str
+
+	@property
+	def required_text(self) -> str:
+		return _human_size(self.required)
+
+	@property
+	def free_text(self) -> str:
+		return _human_size(self.free)
+
+
+def estimate_space(bench_path: str, backup: BackupSet) -> SpaceEstimate:
+	"""Estimate whether there is room to restore this backup.
+
+	An estimate and labelled as one — compression ratios vary enormously. It is
+	worth making anyway: running out of disk half way through a restore leaves
+	a partly-loaded database on a full disk, which is materially worse than not
+	starting.
+	"""
+	database = _size_of(backup.database)
+	files = _size_of(backup.public_files) + _size_of(backup.private_files)
+	required = database * DB_EXPANSION + files
+
+	try:
+		usage = shutil.disk_usage(bench_path)
+	except OSError as exc:
+		return SpaceEstimate(required, 0, 0, bench_path, True, f"Could not read disk usage: {exc}")
+
+	enough = usage.free >= required and usage.free >= FLOOR_BYTES
+	if enough:
+		detail = (
+			f"About {_human_size(required)} needed, {_human_size(usage.free)} free. "
+			f"The dump is expected to expand about {DB_EXPANSION}x once loaded."
+		)
+	else:
+		short = max(required - usage.free, 0)
+		detail = (
+			f"About {_human_size(required)} needed but only {_human_size(usage.free)} is free — "
+			f"roughly {_human_size(short)} short. A restore that fills the disk leaves a "
+			"half-loaded database behind. This is an estimate: a dump expands about "
+			f"{DB_EXPANSION}x with its binlogs, and yours may be smaller."
+		)
+
+	return SpaceEstimate(required, usage.free, usage.total, bench_path, enough, detail)
+
+
+def _size_of(path: str | None) -> int:
+	if not path:
+		return 0
+	try:
+		return os.path.getsize(path)
+	except OSError:
+		return 0
 
 
 def build_backup_argv(bench_exe: str, site: str, with_files: bool) -> list[str]:

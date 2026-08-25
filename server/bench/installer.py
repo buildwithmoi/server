@@ -35,7 +35,7 @@ import time
 import frappe
 from frappe.utils.synchronization import LockTimeoutError, filelock
 
-from server.bench import commands, doctor, restore, scanner, ssl
+from server.bench import commands, doctor, restore, scanner, ssl, steps as step_plan
 from server.server.doctype.server_settings.server_settings import get_settings
 
 #: How often, at most, to push log lines to a watching browser.
@@ -50,6 +50,7 @@ _LINE_BREAK = re.compile(r"[\r\n]")
 
 LOG_EVENT = "server:app_install_log"
 DONE_EVENT = "server:app_install_done"
+STEP_EVENT = "server:app_install_steps"
 
 #: bench ends a get-app by calling `sudo supervisorctl status` to decide whether
 #: to restart processes. On a host with no passwordless sudo that raises, and
@@ -77,7 +78,7 @@ class InstallAborted(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _preflight(request, bench_doc, settings) -> list[str]:
+def _preflight(request, bench_doc, settings, on_step=None) -> list[str]:
 	"""Everything checkable cheaply, before spending minutes on a subprocess."""
 	settings.assert_installs_allowed()
 	bench_doc.assert_usable()
@@ -99,7 +100,7 @@ def _preflight(request, bench_doc, settings) -> list[str]:
 		return _preflight_restore(request, bench_doc)
 	if request.is_pull():
 		return _preflight_pull(request)
-	return _preflight_clone(request, bench_doc)
+	return _preflight_clone(request, bench_doc, on_step)
 
 
 def _preflight_command(request, bench_doc) -> list[str]:
@@ -172,7 +173,21 @@ def _preflight_ssl(request, bench_doc) -> list[str]:
 				f"({', '.join(extras) or 'none'}). bench only certifies a domain the site already "
 				"knows about — add it with `bench setup add-domain` first."
 			)
-		return [f"Issue certificate for {target} · nginx will restart"]
+
+		# Let's Encrypt rate-limits failed authorisations and the block outlasts
+		# the mistake, so a domain that cannot possibly validate is refused here
+		# rather than spent. A domain that resolves somewhere else is only a
+		# warning: behind a proxy or Cloudflare that is entirely normal.
+		dns = ssl.dns_check(target)
+		if dns["level"] == "danger":
+			raise InstallAborted(
+				dns["detail"] + " Nothing was changed and no certificate request was made."
+			)
+
+		notes = [f"Issue certificate for {target} · nginx will restart"]
+		if not dns["points_here"]:
+			notes.append(dns["detail"])
+		return notes
 
 	return [
 		"Renew certificates" + (" (dry run — nothing installed)" if request.ssl_dry_run else ""),
@@ -191,7 +206,7 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 		raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
 
 	try:
-		backup = restore.find(bench_doc.bench_path, site, request.restore_backup_key or "")
+		backup = request.resolve_backup(bench_doc.bench_path)
 	except restore.RestoreRefused as exc:
 		raise InstallAborted(str(exc)) from exc
 
@@ -220,7 +235,7 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 	return notes
 
 
-def _preflight_clone(request, bench_doc) -> list[str]:
+def _preflight_clone(request, bench_doc, on_step=None) -> list[str]:
 	app_path = request.app_path
 	if os.path.isdir(app_path) and not request.overwrite_existing:
 		raise InstallAborted(
@@ -237,7 +252,11 @@ def _preflight_clone(request, bench_doc) -> list[str]:
 
 	# The highest-value check in the file: proves the key is authorised and the
 	# branch exists in about a second, rather than three minutes into a clone
-	# with a message that blames the repository for not existing.
+	# with a message that blames the repository for not existing. It reaches the
+	# network, so it gets its own step — "verifying access" hanging for ten
+	# seconds should not look like "checking options" hanging.
+	if on_step:
+		on_step("access")
 	probe = doctor.check_repo(request.resolved_git_url, request.branch or None)
 	if not probe["reachable"]:
 		raise InstallAborted(f"Cannot reach {request.resolved_git_url}. {probe['error']}")
@@ -467,6 +486,20 @@ def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _plan_for(request) -> list:
+	"""The steps this request will run through, decided before it starts."""
+	if request.is_command():
+		command = commands.get(request.bench_command or "")
+		return step_plan.for_command(command.label if command else "Run the command")
+	if request.is_ssl():
+		return step_plan.for_ssl(request.ssl_mode_key(), bool(request.ssl_dry_run))
+	if request.is_restore():
+		return step_plan.for_restore(bool(request.restore_backup_first))
+	if request.is_pull():
+		return step_plan.for_pull()
+	return step_plan.for_clone(bool(request.install_on_site))
+
+
 def run_install_request(name: str) -> dict:
 	"""Execute one App Install Request — a clone or a pull.
 
@@ -477,21 +510,53 @@ def run_install_request(name: str) -> dict:
 	settings = get_settings()
 	buffer: list[str] = []
 	last_emit = [0.0]
+	last_steps = [0.0]
+
+	plan = step_plan.Plan(_plan_for(request))
+
+	def push_steps(force: bool = False) -> None:
+		"""Persist and broadcast the plan.
+
+		Throttled like the log is. A step change is worth showing immediately;
+		the output accumulating inside a step is not worth a write per line.
+		"""
+		now = time.monotonic()
+		if not force and now - last_steps[0] < STREAM_INTERVAL:
+			return
+		last_steps[0] = now
+		payload = plan.as_list()
+		request.db_set("steps", json.dumps(payload), update_modified=False)
+		frappe.db.commit()
+		frappe.publish_realtime(
+			STEP_EVENT, {"name": name, "steps": payload}, doctype="App Install Request", docname=name
+		)
+
+	def step(key: str) -> None:
+		plan.start(key)
+		push_steps(force=True)
 
 	def emit(line: str) -> None:
 		buffer.append(line)
+		plan.line(line)
 		now = time.monotonic()
 		if now - last_emit[0] >= STREAM_INTERVAL:
 			last_emit[0] = now
 			frappe.publish_realtime(
 				LOG_EVENT, {"name": name, "line": line}, doctype="App Install Request", docname=name
 			)
+			push_steps()
 		if len(buffer) % PERSIST_EVERY_LINES == 0:
 			request.append_output("\n".join(buffer))
 			frappe.db.commit()
 
 	def finish(status: str, exit_code: int | None = None, error: str | None = None) -> dict:
 		started = request.started_at
+		if status in ("Success", "Completed With Warnings"):
+			plan.succeed()
+			plan.abandon("Not needed.")
+		else:
+			plan.abandon(error or "Stopped here.")
+		push_steps(force=True)
 		request.db_set(
 			{
 				"status": status,
@@ -501,6 +566,7 @@ def run_install_request(name: str) -> dict:
 				if started
 				else 0,
 				"output": "\n".join(buffer),
+				"steps": json.dumps(plan.as_list()),
 				"error_summary": (error or _tail(buffer))[:1000] or None,
 			},
 			update_modified=False,
@@ -531,15 +597,18 @@ def run_install_request(name: str) -> dict:
 		)
 		frappe.db.commit()
 
+		step("check")
 		try:
-			for note in _preflight(request, bench_doc, settings):
-				emit(f"[preflight] {note}")
+			for note in _preflight(request, bench_doc, settings, on_step=step):
+				emit(note)
 		except InstallAborted as abort:
-			emit(f"[preflight] refused: {abort}")
+			emit(f"refused: {abort}")
 			return finish("Failed", exit_code=None, error=str(abort))
 		except frappe.ValidationError as abort:
-			emit(f"[preflight] refused: {abort}")
+			emit(f"refused: {abort}")
 			return finish("Failed", exit_code=None, error=str(abort))
+		plan.succeed("check")
+		plan.succeed("access")
 
 		env = settings.get_bench_env()
 		timeout = settings.get_install_timeout()
@@ -549,6 +618,7 @@ def run_install_request(name: str) -> dict:
 		try:
 			with filelock(f"server_bench_install::{bench_doc.name}", timeout=5, is_global=True):
 				if request.is_command():
+					step("run")
 					command = commands.get(request.bench_command)
 					argv = commands.build_argv(
 						command,
@@ -572,6 +642,7 @@ def run_install_request(name: str) -> dict:
 							),
 						)
 				elif request.is_ssl():
+					step("issue" if request.ssl_mode_key() == ssl.MODE_ISSUE else "renew")
 					argv = ssl.build_argv(
 						request.ssl_mode_key(),
 						settings.bench_executable,
@@ -601,9 +672,10 @@ def run_install_request(name: str) -> dict:
 						return finish("Failed", exit_code=code, error=quiet)
 				elif request.is_restore():
 					site = request.install_on_site
-					backup = restore.find(bench_doc.bench_path, site, request.restore_backup_key)
+					backup = request.resolve_backup(bench_doc.bench_path)
 
 					if request.restore_backup_first:
+						step("safety")
 						# Files are only worth backing up when files are about
 						# to be overwritten; a dump is fast, a files tar is not.
 						with_files = bool(request.restore_public_files or request.restore_private_files)
@@ -626,6 +698,7 @@ def run_install_request(name: str) -> dict:
 							)
 						emit("")
 
+					step("restore")
 					argv = restore.build_argv(
 						settings.bench_executable,
 						site,
@@ -651,6 +724,7 @@ def run_install_request(name: str) -> dict:
 							error=_explain_failure(code, timed_out, timeout, request, "bench restore"),
 						)
 				elif request.is_pull():
+					step("pull")
 					app = scanner.read_app(request.app_path)
 					argv = build_pull_argv(request, app)
 					request.db_set("command", " ".join(argv), update_modified=False)
@@ -671,6 +745,7 @@ def run_install_request(name: str) -> dict:
 							error=_explain_failure(code, timed_out, timeout, request, "git pull"),
 						)
 				else:
+					step("clone")
 					argv = build_get_app_argv(request, settings)
 					request.db_set("command", " ".join(argv), update_modified=False)
 					frappe.db.commit()
@@ -709,28 +784,45 @@ def run_install_request(name: str) -> dict:
 						)
 
 					if request.install_on_site:
+						step("install")
 						argv = build_install_app_argv(request, settings)
 						emit("")
 						emit(f"$ {' '.join(argv)}")
-						code = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+						# Unpack both values. This used to assign the whole
+						# (code, timed_out) tuple to `code`, so the comparison
+						# below was always true and a successful install-app was
+						# reported as a failure every single time.
+						code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
 						if code != 0:
-							return finish("Failed", exit_code=code, error=f"bench install-app exited {code}")
+							return finish(
+								"Failed",
+								exit_code=code,
+								error=_explain_failure(
+									code, timed_out, timeout, request, "bench install-app"
+								),
+							)
 		except LockTimeoutError:
 			message = f"Another install is already running on {bench_doc.name}. Try again when it finishes."
 			emit(f"[lock] {message}")
 			return finish("Failed", error=message)
 
-		result = finish("Success", exit_code=0)
-
-		# Refresh the bench so its app list reflects what just landed.
+		# Before finish(), so the step is recorded as work rather than closed
+		# out as "did not run".
+		if plan.get("rescan"):
+			step("rescan")
 		try:
 			from server.bench import discovery
 
 			discovery.scan_benches()
-		except Exception:
+			emit("Bench re-read from disk.")
+		except Exception as exc:
+			# A stale app list is a cosmetic problem; the operation itself
+			# already succeeded. Say so and carry on.
 			frappe.logger("server").warning("post-install rescan failed", exc_info=True)
+			emit(f"Could not re-read the bench: {exc}")
+			plan.fail("rescan", "The operation succeeded; only the refresh failed.")
 
-		return result
+		return finish("Success", exit_code=0)
 
 	except Exception as exc:
 		frappe.db.rollback()

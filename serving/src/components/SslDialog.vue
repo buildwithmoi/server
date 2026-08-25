@@ -94,6 +94,24 @@
 						<p v-if="selectedSite" class="u-item-detail">{{ selectedSite.note }}</p>
 					</div>
 
+					<!-- DNS, checked before certbot is asked. Let's Encrypt
+					     rate-limits failed authorisations per account and the block
+					     outlasts the mistake, so this is the cheapest check in the
+					     dialog and the most expensive one to skip. -->
+					<div
+						v-if="dns"
+						class="flex items-start gap-2.5"
+						:class="dns.level === 'ok' ? 'u-note u-note-ok' : dns.level === 'warn' ? 'u-note u-note-warn' : 'u-note u-note-danger'"
+					>
+						<Icon
+							:name="dns.level === 'ok' ? 'check' : 'alert'"
+							:size="15"
+							class="mt-0.5 shrink-0"
+							:class="dns.level === 'ok' ? 'u-ok' : dns.level === 'warn' ? 'u-warn' : 'u-danger'"
+						/>
+						<p class="text-[12.5px] leading-relaxed">{{ dns.detail }}</p>
+					</div>
+
 					<div v-if="selectedSite?.custom_domains?.length" class="flex flex-col gap-1.5">
 						<span class="u-label">Domain</span>
 						<SearchSelect
@@ -227,6 +245,22 @@ function chipFor(site) {
 
 const selectedSite = computed(() => sites.value.find((s) => s.site === picked.value?.value) || null);
 
+/** DNS for whatever domain is actually going to be certified. */
+const dns = computed(() => {
+	const site = selectedSite.value;
+	if (!site) return null;
+	const custom = domain.value?.value;
+	// A custom domain has no pre-computed check; say so rather than showing the
+	// site's own result and implying it was checked.
+	if (custom && custom !== site.domain) {
+		return {
+			level: "warn",
+			detail: `${custom} has not been checked. It must have an A record pointing at this server before certbot will validate it.`,
+		};
+	}
+	return site.dns || null;
+});
+
 const domainOptions = computed(() => {
 	const site = selectedSite.value;
 	if (!site) return [];
@@ -265,8 +299,12 @@ const summary = computed(() => {
 
 const canRun = computed(() => {
 	if (!report.value?.ready) return false;
-	if (mode.value === "issue") return !!picked.value?.value;
-	return true;
+	if (mode.value !== "issue") return true;
+	if (!picked.value?.value) return false;
+	// A domain that does not resolve at all cannot validate, and the attempt
+	// costs a rate-limit slot. Resolving elsewhere is allowed through — behind
+	// a proxy that is normal, and only the operator knows.
+	return dns.value?.level !== "danger";
 });
 
 watch(

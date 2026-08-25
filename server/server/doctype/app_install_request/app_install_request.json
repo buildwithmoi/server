@@ -24,7 +24,11 @@
   "ssl_domain",
   "ssl_dry_run",
   "restore_section",
+  "restore_source",
   "restore_backup_key",
+  "restore_database_file",
+  "restore_public_file",
+  "restore_private_file",
   "restore_backup_first",
   "restore_public_files",
   "restore_private_files",
@@ -47,6 +51,7 @@
   "duration",
   "job_id",
   "log_section",
+  "steps",
   "error_summary",
   "command",
   "output"
@@ -311,7 +316,7 @@
    "label": "Restore"
   },
   {
-   "depends_on": "eval:doc.operation==\"Restore\"",
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source!=\"Chosen Files\"",
    "description": "Identifies one backup set — the timestamp and site name frappe shares across the database dump, the files tars and the site_config snapshot. The individual paths are resolved from disk when the job runs, so a set that has been rotated away is caught before anything is dropped rather than after.",
    "fieldname": "restore_backup_key",
    "fieldtype": "Data",
@@ -361,6 +366,44 @@
    "fieldname": "restore_encryption_key",
    "fieldtype": "Password",
    "label": "Backup Encryption Key"
+  },
+  {
+   "default": "Backup Set",
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Backup Set restores one backup frappe wrote, with its files already matched to its database dump. Chosen Files restores three paths picked by hand — for a backup copied in from another server, or when the database and the files come from different backups.",
+   "fieldname": "restore_source",
+   "fieldtype": "Select",
+   "label": "Restore From",
+   "options": "Backup Set\nChosen Files"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
+   "description": "Absolute path to the database dump. Must be inside the bench directory — restoring from anywhere else on the server is refused, because this path arrives from a browser.",
+   "fieldname": "restore_database_file",
+   "fieldtype": "Data",
+   "label": "Database File"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
+   "description": "Optional. Absolute path to the public files tar, inside the bench directory.",
+   "fieldname": "restore_public_file",
+   "fieldtype": "Data",
+   "label": "Public Files Tar"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
+   "description": "Optional. Absolute path to the private files tar, inside the bench directory.",
+   "fieldname": "restore_private_file",
+   "fieldtype": "Data",
+   "label": "Private Files Tar"
+  },
+  {
+   "description": "The operation broken into named steps, as JSON. Written by the worker and read by the interface, which folds each step's output underneath it. The complete log is still in Output — this is the structure over it, so a failure can say which part failed rather than only that something did.",
+   "fieldname": "steps",
+   "fieldtype": "Code",
+   "label": "Steps",
+   "options": "JSON",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

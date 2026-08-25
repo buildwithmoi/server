@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import frappe
 
-from server import dashboard
+from server import dashboard, system
 from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer
 from server.bench import restore as bench_restore
@@ -508,6 +508,43 @@ def run_bench_command(
 
 
 @frappe.whitelist()
+def system_health() -> dict:
+	"""Disk, memory, load and where the disk went.
+
+	Read-only and cheap enough to poll. Disk is the reason this exists: a full
+	disk takes down every site on every bench at once, it fills slowly enough
+	that nobody notices, and on a bench host the thing filling it is nearly
+	always backups that were never cleared.
+	"""
+	_assert_server_admin()
+	paths = frappe.get_all("Server Bench", filters={"is_active": 1}, pluck="bench_path")
+	report = system.snapshot(paths)
+
+	# Only worth computing when it is about to matter — scanning every bench's
+	# backup directory on every poll would be rude.
+	report["backups"] = []
+	if report["worst_level"] != "ok":
+		for path in paths:
+			report["backups"].extend(system.backup_usage(path))
+		report["backups"].sort(key=lambda r: r["bytes"], reverse=True)
+	return report
+
+
+@frappe.whitelist()
+def backup_usage(bench: str) -> dict:
+	"""How much disk each site's backups are taking on one bench."""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	rows = system.backup_usage(doc.bench_path)
+	return {
+		"bench": doc.name,
+		"rows": rows,
+		"total": system.human(sum(r["bytes"] for r in rows)),
+		"disk": (system.disk(doc.bench_path) or {}) and system.disk(doc.bench_path).__dict__,
+	}
+
+
+@frappe.whitelist()
 def ssl_readiness(bench: str) -> dict:
 	"""Everything the SSL dialog needs to tell you whether this will work.
 
@@ -580,17 +617,71 @@ def list_backups(bench: str, site: str) -> dict:
 	backups = bench_restore.list_backups(doc.bench_path, site)
 	return {
 		"site": site,
-		"backups": [bench_restore.as_dict(b, site) for b in backups],
+		"bench_path": doc.bench_path,
+		"backups": [
+			{
+				**bench_restore.as_dict(b, site),
+				"space": bench_restore.estimate_space(doc.bench_path, b).__dict__,
+			}
+			for b in backups
+		],
 		"searched": [path for path, _ in bench_restore.backup_directories(doc.bench_path, site)],
 	}
+
+
+@frappe.whitelist()
+def list_restore_files(bench: str, site: str) -> dict:
+	"""Files in the bench that could take part in a restore.
+
+	For the case the bench directory exists to serve: a backup copied in from
+	another server, whose three files have to be pointed at individually.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+
+	return {
+		"bench_path": doc.bench_path,
+		"files": [f.__dict__ for f in bench_restore.list_files(doc.bench_path, site)],
+	}
+
+
+@frappe.whitelist()
+def estimate_restore_space(
+	bench: str,
+	site: str,
+	database_file: str,
+	public_file: str | None = None,
+	private_file: str | None = None,
+) -> dict:
+	"""Will this restore fit on the disk?
+
+	Answered for hand-picked files, where there is no backup set to read the
+	sizes from. Running out of disk part way through a restore leaves a
+	half-loaded database on a full disk, which is worse than not starting.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	try:
+		backup = bench_restore.resolve_chosen(
+			doc.bench_path, site, database_file, public_file, private_file
+		)
+	except bench_restore.RestoreRefused as exc:
+		frappe.throw(str(exc), title="Cannot Restore")
+	return bench_restore.estimate_space(doc.bench_path, backup).__dict__
 
 
 @frappe.whitelist()
 def run_restore(
 	bench: str,
 	site: str,
-	backup_key: str,
 	db_root_password: str,
+	backup_key: str | None = None,
+	source: str = "Backup Set",
+	database_file: str | None = None,
+	public_file: str | None = None,
+	private_file: str | None = None,
 	db_root_username: str | None = None,
 	encryption_key: str | None = None,
 	with_public_files: int | bool = 0,
@@ -620,7 +711,11 @@ def run_restore(
 			"operation": "Restore",
 			"bench": bench,
 			"install_on_site": site,
+			"restore_source": source if source in ("Backup Set", "Chosen Files") else "Backup Set",
 			"restore_backup_key": backup_key,
+			"restore_database_file": (database_file or "").strip() or None,
+			"restore_public_file": (public_file or "").strip() or None,
+			"restore_private_file": (private_file or "").strip() or None,
 			"restore_db_username": (db_root_username or "").strip() or None,
 			"restore_db_password": db_root_password,
 			"restore_encryption_key": (encryption_key or "").strip() or None,
@@ -755,6 +850,8 @@ def get_install_request(name: str) -> dict:
 		"finished_at": doc.finished_at,
 		"duration": doc.duration,
 		"output": doc.output,
+		"steps": frappe.parse_json(doc.steps) if doc.steps else [],
+		"operation": doc.operation,
 		"error_summary": doc.error_summary,
 		"job_id": doc.job_id,
 		"is_terminal": doc.is_terminal(),

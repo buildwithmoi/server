@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 from dataclasses import dataclass, field
 
@@ -93,6 +94,8 @@ class SiteSSL:
 	days_left: int | None = None
 	note: str = ""
 	custom_domains: list[str] = field(default_factory=list)
+	#: What DNS says about this site's domain, checked before certbot is asked.
+	dns: dict = field(default_factory=dict)
 
 
 # ----------------------------------------------------------------------
@@ -212,6 +215,103 @@ def installed_certificates() -> tuple[dict[str, dict], str]:
 
 
 # ----------------------------------------------------------------------
+# DNS
+# ----------------------------------------------------------------------
+
+
+def local_ips() -> set[str]:
+	"""Every IPv4 address this machine answers on.
+
+	Two sources because neither is complete on its own: `hostname -I` lists the
+	configured addresses, and the UDP trick finds the one the kernel would
+	actually route out of — which is the one that matters and which is missing
+	from the first list on some setups. No packet is sent; connect() on a UDP
+	socket only fixes the route.
+	"""
+	found: set[str] = set()
+
+	code, out = _run(["hostname", "-I"], timeout=5)
+	if code == 0:
+		found.update(part for part in out.split() if part.count(".") == 3)
+
+	try:
+		with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+			probe.settimeout(2)
+			probe.connect(("198.51.100.1", 53))
+			found.add(probe.getsockname()[0])
+	except OSError:
+		pass
+
+	return found
+
+
+def resolve(domain: str) -> list[str]:
+	"""The A records for a domain, or an empty list if it does not resolve."""
+	try:
+		infos = socket.getaddrinfo(domain, None, socket.AF_INET, socket.SOCK_STREAM)
+	except (OSError, UnicodeError):
+		return []
+	return sorted({info[4][0] for info in infos})
+
+
+def dns_check(domain: str) -> dict:
+	"""Does this domain point at this machine?
+
+	The check certbot will effectively perform, done first and for free. Let's
+	Encrypt rate-limits failed authorisations per account and the block outlasts
+	the mistake, so burning an attempt on a domain whose DNS was never pointed
+	here is the single most avoidable way to lock yourself out.
+
+	Deliberately advisory. A server behind a proxy, a load balancer or Cloudflare
+	genuinely does not resolve to its own address, and refusing those outright
+	would be wrong.
+	"""
+	if not VALID_DOMAIN.match(domain or ""):
+		return {
+			"domain": domain,
+			"resolved": [],
+			"points_here": False,
+			"level": "danger",
+			"detail": f"{domain} is not a public domain name, so Let's Encrypt cannot certify it.",
+		}
+
+	addresses = resolve(domain)
+	if not addresses:
+		return {
+			"domain": domain,
+			"resolved": [],
+			"points_here": False,
+			"level": "danger",
+			"detail": (
+				f"{domain} does not resolve. Point an A record at this server and wait for it to "
+				"propagate — certbot will fail until it does."
+			),
+		}
+
+	mine = local_ips()
+	if mine & set(addresses):
+		return {
+			"domain": domain,
+			"resolved": addresses,
+			"points_here": True,
+			"level": "ok",
+			"detail": f"{domain} resolves to this server ({', '.join(sorted(mine & set(addresses)))}).",
+		}
+
+	return {
+		"domain": domain,
+		"resolved": addresses,
+		"points_here": False,
+		"level": "warn",
+		"detail": (
+			f"{domain} resolves to {', '.join(addresses)}, which is not an address on this machine "
+			f"({', '.join(sorted(mine)) or 'none detected'}). That is expected behind a proxy or "
+			"Cloudflare; otherwise certbot will fail to validate."
+		),
+	}
+
+
+# ----------------------------------------------------------------------
 # Readiness
 # ----------------------------------------------------------------------
 
@@ -268,6 +368,7 @@ def readiness(bench_path: str, sites: list[dict]) -> dict:
 		cert = certs.get(domain)
 		rows.append(
 			SiteSSL(
+				dns=dns_check(domain),
 				site=name,
 				domain=domain,
 				is_default=is_default,

@@ -344,3 +344,65 @@ body {
 .u-note-ok { border-color: var(--ok-border); background: var(--ok-bg); }
 .u-note-warn { border-color: var(--warn-border); background: var(--warn-bg); }
 .u-note-danger { border-color: var(--danger-border); background: var(--danger-bg); }
+
+/* ------------------------------------------------------------------ dialogs
+ *
+ * frappe-ui centres a dialog in a scrolling overlay with `min-h-screen` and
+ * `my-8`. That is fine until the content is tall: the dialog then runs off the
+ * bottom of the screen, the buttons go with it, and the whole thing reads as
+ * misplaced rather than as something you are meant to scroll.
+ *
+ * `.dialog-content` has exactly two children — the body and the actions — so
+ * capping it to the viewport and letting only the body scroll turns a tall
+ * dialog into a normal one: title at the top, buttons always in reach, the
+ * middle scrolls.
+ */
+.dialog-content {
+	display: flex;
+	flex-direction: column;
+	max-height: calc(100vh - 4rem);
+}
+
+/* The body: the only part allowed to scroll. `min-height: 0` is what lets a
+ * flex child shrink below its content instead of forcing the parent taller. */
+.dialog-content > div:first-child {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+/* The actions: pinned, and separated by a rule so it reads as a footer once
+ * the body scrolls underneath it. */
+.dialog-content > div:last-child:not(:first-child) {
+	flex: 0 0 auto;
+	border-top: 1px solid var(--rule);
+	background: var(--paper-raised);
+}
+
+/* The title stays put while the body scrolls beneath it. */
+.dialog-content .mb-6.flex.items-center.justify-between {
+	position: sticky;
+	top: -1.25rem;
+	z-index: 2;
+	margin-bottom: 1.25rem;
+	padding-top: 1.25rem;
+	padding-bottom: 0.75rem;
+	background: var(--paper-raised);
+}
+
+/* frappe-ui's default title is text-2xl, which is louder than anything else in
+ * this interface. Bring it into the same scale as the page headings. */
+.dialog-content h3 {
+	font-size: 17px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.dialog-content > div:first-child::-webkit-scrollbar { width: 10px; }
+.dialog-content > div:first-child::-webkit-scrollbar-thumb {
+	background-clip: padding-box;
+	border: 3px solid transparent;
+	border-radius: 6px;
+	background-color: var(--rule-strong);
+}

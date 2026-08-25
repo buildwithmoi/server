@@ -118,10 +118,25 @@
 				$ {{ active.command }}
 			</p>
 
-			<pre
-				ref="logEl"
-				class="u-mono u-scroll max-h-[340px] overflow-auto whitespace-pre-wrap break-words px-4 py-3 text-[12px] leading-relaxed"
-			>{{ active.output || "waiting for output…" }}</pre>
+			<!-- Steps, then the raw log underneath for anyone who wants all of
+			     it. The step list answers "what happened"; the log answers
+			     "exactly what was printed", and both are worth having. -->
+			<div v-if="active.steps?.length" class="px-4 py-3">
+				<JobSteps :steps="active.steps" />
+			</div>
+
+			<details v-if="active.output" class="border-t border-[var(--rule)]">
+				<summary class="cursor-pointer px-4 py-2 text-[12px] text-[var(--ink-faint)] hover:text-[var(--ink)]">
+					Full output
+				</summary>
+				<pre
+					ref="logEl"
+					class="u-mono u-scroll max-h-[340px] overflow-auto whitespace-pre-wrap break-words px-4 pb-3 text-[12px] leading-relaxed"
+				>{{ active.output }}</pre>
+			</details>
+			<p v-else-if="!active.steps?.length" class="px-4 py-3 text-[12px] text-[var(--ink-faint)]">
+				waiting for output…
+			</p>
 
 			<p v-if="active.error_summary" class="border-t border-[var(--rule)] px-4 py-2.5 text-[12.5px] leading-relaxed">
 				{{ active.error_summary }}
@@ -157,6 +172,7 @@ import { useRoute } from "vue-router";
 
 import AppShell from "../components/AppShell.vue";
 import DataTable from "../components/DataTable.vue";
+import JobSteps from "../components/JobSteps.vue";
 import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import {

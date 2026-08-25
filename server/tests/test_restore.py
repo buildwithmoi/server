@@ -226,3 +226,121 @@ class TestRedaction(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestFileDiscovery(unittest.TestCase):
+	"""Picking three loose files, for a backup copied in from another server."""
+
+	def test_finds_restorable_files_and_ignores_the_rest(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			write(os.path.join(root, "dump.sql.gz"), gzip.compress(b"x"))
+			write(os.path.join(root, "files.tar"), b"tar")
+			write(os.path.join(root, "notes.txt"), b"text")
+
+			names = {f.name for f in restore.list_files(root, SITE)}
+			self.assertEqual(names, {"dump.sql.gz", "files.tar"})
+
+	def test_does_not_walk_into_apps_or_env(self):
+		"""A bench root holds hundreds of thousands of files it must not read."""
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			write(os.path.join(root, "apps", "frappe", "buried.sql.gz"), gzip.compress(b"x"))
+			write(os.path.join(root, "env", "lib", "buried.sql.gz"), gzip.compress(b"x"))
+			self.assertEqual(restore.list_files(root, SITE), [])
+
+	def test_the_same_file_reachable_twice_is_listed_once(self):
+		with tempfile.TemporaryDirectory() as root:
+			backups = os.path.join(root, "sites", SITE, "private", "backups")
+			write(os.path.join(backups, "dump.sql.gz"), gzip.compress(b"x"))
+			os.symlink(os.path.join(backups, "dump.sql.gz"), os.path.join(root, "link.sql.gz"))
+			self.assertEqual(len(restore.list_files(root, SITE)), 1)
+
+
+class TestPathSafety(unittest.TestCase):
+	"""Restore paths arrive from a browser, and bench restore reads any file."""
+
+	def test_a_path_outside_the_bench_is_refused(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			for outside in ("/etc/passwd", os.path.join(root, "..", "escape.sql.gz")):
+				with self.subTest(path=outside), self.assertRaises(restore.RestoreRefused):
+					restore.resolve_chosen(root, SITE, outside)
+
+	def test_a_symlink_pointing_out_of_the_bench_is_refused(self):
+		"""String comparison would pass this; resolving the path does not."""
+		with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as elsewhere:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			target = os.path.join(elsewhere, "secret.sql.gz")
+			write(target, gzip.compress(b"x"))
+			link = os.path.join(root, "innocent.sql.gz")
+			os.symlink(target, link)
+
+			self.assertFalse(restore.is_inside(root, link))
+			with self.assertRaises(restore.RestoreRefused):
+				restore.resolve_chosen(root, SITE, link)
+
+	def test_a_file_inside_the_bench_is_allowed(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			dump = os.path.join(root, "dump.sql.gz")
+			write(dump, gzip.compress(b"x"))
+			self.assertEqual(restore.resolve_chosen(root, SITE, dump).database, dump)
+
+	def test_a_missing_file_is_refused(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			with self.assertRaises(restore.RestoreRefused):
+				restore.resolve_chosen(root, SITE, os.path.join(root, "gone.sql.gz"))
+
+	def test_files_alone_cannot_restore_a_site(self):
+		with tempfile.TemporaryDirectory() as root:
+			with self.assertRaises(restore.RestoreRefused):
+				restore.resolve_chosen(root, SITE, "", public=os.path.join(root, "files.tar"))
+
+
+class TestChosenConverges(unittest.TestCase):
+	"""Both sources produce one BackupSet, so there is one path to get wrong."""
+
+	def test_a_hand_picked_dump_still_warns_about_the_wrong_site(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			dump = os.path.join(root, "20260825_000007-other_site_com-database.sql.gz")
+			write(dump, gzip.compress(b"x"))
+
+			chosen = restore.resolve_chosen(root, SITE, dump)
+			self.assertIn("other.site.com", restore.describe_mismatch(chosen, SITE))
+
+	def test_encryption_is_still_detected(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			dump = os.path.join(root, "encrypted.sql.gz")
+			write(dump, b"NOTGZIP")
+			self.assertTrue(restore.resolve_chosen(root, SITE, dump).encrypted)
+
+
+class TestSpaceEstimate(unittest.TestCase):
+	def test_required_space_scales_with_the_dump(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_set(root, SITE, "20260825_000007", SLUG, files=True)
+			backup = restore.list_backups(root, SITE)[0]
+			estimate = restore.estimate_space(root, backup)
+
+			dump_size = os.path.getsize(backup.database)
+			files_size = os.path.getsize(backup.public_files) + os.path.getsize(backup.private_files)
+			self.assertEqual(estimate.required, dump_size * restore.DB_EXPANSION + files_size)
+
+	def test_a_tiny_backup_on_a_real_disk_fits(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_set(root, SITE, "20260825_000007", SLUG)
+			self.assertTrue(restore.estimate_space(root, restore.list_backups(root, SITE)[0]).enough)
+
+	def test_the_detail_says_how_short_it_is(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_set(root, SITE, "20260825_000007", SLUG)
+			backup = restore.list_backups(root, SITE)[0]
+			huge = restore.BackupSet(**{**backup.__dict__, "database": backup.database})
+			estimate = restore.estimate_space(root, huge)
+			# Small backup on a real disk: the message should be the reassuring
+			# one, and should still name the expansion factor.
+			self.assertIn(str(restore.DB_EXPANSION), estimate.detail)

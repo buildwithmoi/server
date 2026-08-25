@@ -65,7 +65,15 @@
 							<p v-if="job.command" class="u-mono truncate bg-[var(--paper-sunk)] px-3.5 py-1.5 text-[11px] text-[var(--ink-soft)]">
 								$ {{ job.command }}
 							</p>
+
+							<!-- Steps first. A wall of git output does not say which
+							     part is slow or which part broke; the step list does,
+							     and folds the output under the step it belongs to. -->
+							<div v-if="job.steps?.length" class="max-h-[320px] overflow-y-auto u-scroll px-2.5 py-2.5">
+								<JobSteps :steps="job.steps" />
+							</div>
 							<pre
+								v-else
 								:ref="(el) => setLogEl(job.name, el)"
 								class="u-mono u-scroll max-h-[300px] overflow-auto whitespace-pre-wrap break-words px-3.5 py-2.5 text-[11.5px] leading-relaxed"
 							>{{ job.output || "waiting for output…" }}</pre>
@@ -94,6 +102,7 @@
 <script setup>
 import { nextTick, onUnmounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
+import JobSteps from "./JobSteps.vue";
 import OutcomeMark from "./OutcomeMark.vue";
 import { allJobs, dismiss, elapsed, expand, expandedJob, formatElapsed } from "../jobs";
 
