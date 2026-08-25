@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import os
 import pathlib
 import unittest
 
@@ -202,3 +203,46 @@ class TestLogClearingTargets(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+@unittest.skipUnless(frappe is not None, "requires frappe on the path")
+class TestUploadNameHandling(unittest.TestCase):
+	"""An uploaded name becomes a path on the server.
+
+	The drop zone sits beside `sites/`, so this is matched rather than escaped.
+	`basename` alone would neutralise a traversal but save it under a different
+	name, which tells the operator nothing about what just happened.
+	"""
+
+	def test_the_pattern_rejects_anything_with_a_path(self):
+		from server import api
+
+		for name in ("../x.sql.gz", "a/b.sql.gz", "/etc/passwd", "..%2Fx.sql.gz"):
+			with self.subTest(name=name):
+				self.assertFalse(
+					api.UPLOAD_NAME.match(name) and name == os.path.basename(name).replace("\\", "")
+				)
+
+	def test_only_backup_extensions_are_accepted(self):
+		from server import api
+
+		for name in ("evil.sh", "notes.txt", "x.php", "x"):
+			with self.subTest(name=name):
+				self.assertFalse(name.lower().endswith(api.UPLOAD_EXTENSIONS))
+
+		for name in ("d.sql", "d.sql.gz", "f.tar", "f.tar.gz", "f.tgz", "c.json"):
+			with self.subTest(name=name):
+				self.assertTrue(name.lower().endswith(api.UPLOAD_EXTENSIONS))
+
+	def test_the_names_frappe_writes_are_accepted(self):
+		from server import api
+
+		for name in (
+			"20260825_000007-erp_example_com-database.sql.gz",
+			"20260825_000007-erp_example_com-database-enc.sql.gz",
+			"20260825_000007-erp_example_com-private-files.tar",
+			"20260825_000007-erp_example_com-site_config_backup.json",
+		):
+			with self.subTest(name=name):
+				self.assertTrue(api.UPLOAD_NAME.match(name), name)
+				self.assertTrue(name.lower().endswith(api.UPLOAD_EXTENSIONS), name)

@@ -378,6 +378,82 @@ export interface BackupListing {
 	searched: string[];
 }
 
+export interface BackupApp {
+	app_name: string;
+	app_version: string;
+	git_branch: string;
+	present: boolean;
+	branch_matches: boolean;
+	installed_branch: string;
+	note: string;
+}
+
+export interface BackupContents {
+	apps: BackupApp[];
+	missing: string[];
+	bench_apps: string[];
+	site_config_keys: string[];
+	error: string;
+	truncated: boolean;
+}
+
+export function inspectBackupResource() {
+	return createResource({ url: `${M}.inspect_backup` });
+}
+
+/**
+ * Upload a backup straight into the bench, streamed.
+ *
+ * Not a `createResource`: this is multipart with a progress callback, and a
+ * production dump is gigabytes — it has to go through XHR so the browser can
+ * report how far it has got rather than appearing frozen for ten minutes.
+ */
+export function uploadBackup(
+	bench: string,
+	file: File,
+	onProgress?: (percent: number) => void,
+): Promise<{ name: string; path: string; size_text: string; directory: string }> {
+	return new Promise((resolve, reject) => {
+		const form = new FormData();
+		form.append("file", file, file.name);
+		form.append("bench", bench);
+
+		const request = new XMLHttpRequest();
+		request.open("POST", `/api/method/${M}.upload_backup`);
+		const token = (window as any).csrf_token;
+		if (token) request.setRequestHeader("X-Frappe-CSRF-Token", token);
+
+		request.upload.onprogress = (event) => {
+			if (event.lengthComputable && onProgress) {
+				onProgress(Math.round((event.loaded / event.total) * 100));
+			}
+		};
+		request.onload = () => {
+			let payload: any = {};
+			try {
+				payload = JSON.parse(request.responseText || "{}");
+			} catch {
+				/* fall through to the status check */
+			}
+			if (request.status >= 200 && request.status < 300 && payload.message) {
+				resolve(payload.message);
+			} else {
+				// frappe returns its message in _server_messages as JSON-in-JSON.
+				let detail = payload.exception || `Upload failed (${request.status})`;
+				try {
+					const messages = JSON.parse(payload._server_messages || "[]");
+					if (messages.length) detail = JSON.parse(messages[0]).message || detail;
+				} catch {
+					/* keep the fallback */
+				}
+				reject(new Error(String(detail).replace(/<[^>]+>/g, "")));
+			}
+		};
+		request.onerror = () => reject(new Error("The upload could not reach the server."));
+		request.send(form);
+	});
+}
+
 export function restoreFilesResource() {
 	return createResource({ url: `${M}.list_restore_files` });
 }

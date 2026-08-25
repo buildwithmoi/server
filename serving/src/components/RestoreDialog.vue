@@ -81,11 +81,47 @@
 						/>
 					</div>
 
-					<p class="u-item-detail">
-						Only files inside <span class="u-mono">{{ benchPath }}</span> can be used —
-						copy the backup in with <span class="u-mono">scp</span> first. A path
-						anywhere else on the server is refused.
-					</p>
+					<!--
+						Upload, for a backup that is on your machine rather than the
+						server. It streams straight into the bench's drop zone and
+						then appears in the pickers above like anything else — so
+						there is one restore path, not two.
+					-->
+					<div class="rounded-md border border-dashed border-[var(--rule-strong)] px-3 py-2.5">
+						<div class="flex flex-wrap items-center gap-2.5">
+							<Button :loading="uploading" :disabled="uploading" @click="pickFile">
+								<template #prefix><Icon name="upload" :size="13" /></template>
+								Upload from this computer
+							</Button>
+							<input
+								ref="fileInput"
+								type="file"
+								class="hidden"
+								accept=".sql,.gz,.tar,.tgz,.json"
+								@change="onFilePicked"
+							/>
+							<span v-if="uploading" class="u-item-detail tabular-nums">
+								{{ uploadName }} — {{ uploadPercent }}%
+							</span>
+							<span v-else class="u-item-detail">
+								Or copy it in with <span class="u-mono">scp</span>; anything in
+								<span class="u-mono">{{ benchPath }}</span> shows up here.
+							</span>
+						</div>
+
+						<div v-if="uploading" class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--paper-sunk)]">
+							<div
+								class="h-full rounded-full bg-[var(--ink)] transition-all duration-200"
+								:style="{ width: `${Math.max(2, uploadPercent)}%` }"
+							/>
+						</div>
+
+						<p class="u-item-detail mt-2">
+							Keep the name frappe gave it — the timestamp and site in the filename are
+							what group the dump with its files, and what warns you if it came from a
+							different site.
+						</p>
+					</div>
 				</template>
 
 				<template v-if="chosen">
@@ -119,6 +155,79 @@
 					<div v-if="chosen.mismatch" class="u-note u-note-warn flex items-start gap-2.5">
 						<Icon name="alert" :size="15" class="u-warn mt-0.5 shrink-0" />
 						<p class="text-[12.5px] leading-relaxed">{{ chosen.mismatch }}</p>
+					</div>
+
+					<!--
+						What the backup expects the bench to have.
+
+						Restoring a database that references an app this bench does
+						not have looks like it worked: the site comes up and every
+						DocType belonging to the missing app is gone. It surfaces
+						days later as import errors nobody connects to the restore.
+						Read out of the dump itself, before anything is dropped.
+					-->
+					<div v-if="contents.loading" class="flex items-center gap-2 py-1">
+						<Spinner class="h-3.5 w-3.5 text-[var(--ink-faint)]" />
+						<span class="u-item-detail">Reading which apps this backup needs…</span>
+					</div>
+
+					<div
+						v-else-if="needs"
+						class="overflow-hidden rounded-md border"
+						:class="missingApps.length ? 'border-[var(--danger-border)]' : 'border-[var(--rule)]'"
+					>
+						<header
+							class="flex items-center justify-between gap-2 border-b px-3 py-2"
+							:class="missingApps.length ? 'border-[var(--danger-border)] bg-[var(--danger-bg)]' : 'border-[var(--rule)]'"
+						>
+							<span class="u-item-label">
+								{{ missingApps.length ? "This bench is missing apps this backup needs" : "Apps this backup needs" }}
+							</span>
+							<span v-if="needs.truncated" class="u-chip u-chip-warn shrink-0">partial read</span>
+						</header>
+
+						<ul v-if="needs.apps.length">
+							<li
+								v-for="app in needs.apps"
+								:key="app.app_name"
+								class="flex items-start gap-2.5 border-b border-[var(--rule)] px-3 py-2 last:border-b-0"
+							>
+								<Icon
+									:name="app.present ? (app.branch_matches ? 'check' : 'alert') : 'close'"
+									:size="13"
+									class="mt-0.5 shrink-0"
+									:class="app.present ? (app.branch_matches ? 'u-ok' : 'u-warn') : 'u-danger'"
+								/>
+								<span class="min-w-0 flex-1">
+									<span class="u-item-label u-mono block">{{ app.app_name }}</span>
+									<span class="u-item-detail block">{{ app.note }}</span>
+								</span>
+								<span class="u-item-detail shrink-0 tabular-nums">
+									{{ app.git_branch || "—" }}
+								</span>
+								<span class="u-chip shrink-0">v{{ app.app_version || "?" }}</span>
+							</li>
+						</ul>
+
+						<p v-if="needs.error" class="u-item-detail px-3 py-2.5">{{ needs.error }}</p>
+					</div>
+
+					<div v-if="missingApps.length" class="u-note u-note-danger flex flex-col gap-2">
+						<div class="flex items-start gap-2.5">
+							<Icon name="alert" :size="15" class="u-danger mt-0.5 shrink-0" />
+							<p class="text-[12.5px] leading-relaxed">
+								Clone
+								<span class="u-mono">{{ missingApps.join(", ") }}</span>
+								onto this bench first. Restoring without them looks like it worked —
+								the site comes up and everything those apps owned is gone.
+							</p>
+						</div>
+						<label class="flex cursor-pointer items-center gap-2.5">
+							<input v-model="ignoreMissing" type="checkbox" />
+							<span class="u-item-detail">
+								Restore anyway — I will install them straight afterwards.
+							</span>
+						</label>
 					</div>
 
 					<!-- Disk space. A restore that fills the disk leaves a
@@ -259,7 +368,14 @@ import { Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
 import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
-import { backupsResource, restoreFilesResource, restoreSpaceResource, runRestoreResource } from "../api";
+import {
+	backupsResource,
+	inspectBackupResource,
+	restoreFilesResource,
+	restoreSpaceResource,
+	runRestoreResource,
+	uploadBackup,
+} from "../api";
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -298,6 +414,12 @@ const FILE_SLOTS = [
 const listing = backupsResource();
 const files = restoreFilesResource();
 const spaceCheck = restoreSpaceResource();
+const contents = inspectBackupResource();
+const fileInput = ref(null);
+const uploading = ref(false);
+const uploadPercent = ref(0);
+const uploadName = ref("");
+const ignoreMissing = ref(false);
 const source = ref("Backup Set");
 const picks = ref({ database: null, public: null, private: null });
 const ignoreSpace = ref(false);
@@ -416,6 +538,44 @@ function optionsFor(kind) {
 	];
 }
 
+const needs = computed(() => contents.data || null);
+const missingApps = computed(() => needs.value?.missing || []);
+
+function pickFile() {
+	fileInput.value?.click();
+}
+
+async function onFilePicked(event) {
+	const file = event.target.files?.[0];
+	event.target.value = "";
+	if (!file) return;
+
+	uploading.value = true;
+	uploadPercent.value = 0;
+	uploadName.value = file.name;
+	error.value = "";
+	try {
+		const result = await uploadBackup(props.bench, file, (percent) => {
+			uploadPercent.value = percent;
+		});
+		toast.success(`${result.name} uploaded (${result.size_text})`);
+		// Re-read both listings so the new file appears in the pickers, then
+		// select it, because selecting it is obviously what was meant.
+		await Promise.all([
+			listing.fetch({ bench: props.bench, site: siteName.value }),
+			files.fetch({ bench: props.bench, site: siteName.value }),
+		]);
+		const uploaded = candidates.value.find((f) => f.path === result.path);
+		if (uploaded && uploaded.kind === "database") {
+			picks.value = { ...picks.value, database: { label: uploaded.name, value: uploaded.path } };
+		}
+	} catch (err) {
+		error.value = err.message || "The upload failed";
+	} finally {
+		uploading.value = false;
+	}
+}
+
 /** Disk headroom: read from the backup set, or asked for explicitly. */
 const space = computed(() => {
 	if (source.value === "Backup Set") return chosen.value?.space || null;
@@ -462,6 +622,9 @@ const canRun = computed(() => {
 	if (!dbPassword.value) return false;
 	if (chosen.value.encrypted && !encryptionKey.value) return false;
 	if (space.value && !space.value.enough && !ignoreSpace.value) return false;
+	// Missing apps are the failure that looks like a success, so they block by
+	// default — but the operator can say they will install them next.
+	if (missingApps.value.length && !ignoreMissing.value) return false;
 	return confirm.value === siteName.value;
 });
 
@@ -473,6 +636,7 @@ watch(
 			dbPassword.value = "";
 			encryptionKey.value = "";
 			confirm.value = "";
+			ignoreMissing.value = false;
 			return;
 		}
 		error.value = "";
@@ -528,6 +692,23 @@ watch(chosen, (value) => {
 });
 
 watch([() => picks.value.database, backup], () => (ignoreSpace.value = false));
+
+// Read the dump for the apps it expects, whenever the selection changes. An
+// encrypted dump cannot be read without its key, and says so rather than
+// silently reporting no apps.
+watch(
+	[chosen, () => props.modelValue],
+	([value, isOpen]) => {
+		ignoreMissing.value = false;
+		if (!isOpen || !value?.database || !siteName.value) return;
+		contents.fetch(
+			source.value === "Backup Set"
+				? { bench: props.bench, site: siteName.value, backup_key: backup.value?.value }
+				: { bench: props.bench, site: siteName.value, database_file: value.database },
+		);
+	},
+	{ immediate: true },
+);
 
 async function run() {
 	running.value = true;

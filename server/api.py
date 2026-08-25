@@ -9,6 +9,7 @@ reviewed by reading one file. Every function starts with an `_assert_*` guard.
 """
 
 import os
+import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -18,6 +19,7 @@ from server import dashboard, system
 from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer
 from server.bench import backups as bench_backups
+from server.bench import inspect as bench_inspect
 from server.bench import logs as bench_logs
 from server.bench import siteconfig as bench_siteconfig
 from server.bench import restore as bench_restore
@@ -837,6 +839,126 @@ def list_restore_files(bench: str, site: str) -> dict:
 	return {
 		"bench_path": doc.bench_path,
 		"files": [f.__dict__ for f in bench_restore.list_files(doc.bench_path, site)],
+	}
+
+
+@frappe.whitelist()
+def inspect_backup(
+	bench: str,
+	site: str,
+	database_file: str | None = None,
+	backup_key: str | None = None,
+) -> dict:
+	"""What apps this backup expects, and which ones the bench is missing.
+
+	Read straight out of the dump's `tabInstalled Application` without loading
+	anything. Restoring a database that references an app the bench does not
+	have appears to succeed and leaves a broken site — every DocType belonging
+	to the missing app is gone, and it surfaces later as import errors nobody
+	connects back to the restore.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+
+	config_file = None
+	if backup_key:
+		try:
+			backup = bench_restore.find(doc.bench_path, site, backup_key)
+		except bench_restore.RestoreRefused as exc:
+			frappe.throw(str(exc), title="Cannot Read This Backup")
+		database_file, config_file = backup.database, backup.site_config
+	elif not database_file:
+		frappe.throw("Nothing to inspect.")
+	elif not bench_restore.is_inside(doc.bench_path, database_file):
+		frappe.throw(f"{database_file} is not inside {doc.bench_path}.", title="Not Allowed")
+
+	contents = bench_inspect.read_apps(database_file)
+	contents.site_config_keys = bench_inspect.read_site_config(config_file)
+
+	installed = {row.app_name: (row.branch or "") for row in doc.apps}
+	report = bench_inspect.compare(contents, installed).as_dict()
+	report["bench_apps"] = sorted(installed)
+	return report
+
+
+#: What may be uploaded into a bench. Anything else is not a backup.
+UPLOAD_EXTENSIONS = (".sql", ".sql.gz", ".tar", ".tar.gz", ".tgz", ".json")
+
+#: A name that will become a filename on the server, so it is matched rather
+#: than escaped.
+UPLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
+
+
+@frappe.whitelist(methods=["POST"])
+def upload_backup(bench: str) -> dict:
+	"""Receive a backup file from the browser into the bench's drop zone.
+
+	Streamed to disk rather than read into memory: a production dump is
+	routinely gigabytes and buffering one would take the worker out.
+
+	The uploaded name is validated, not escaped — it becomes a path on the
+	server, and the drop zone sits beside `sites/`, so a name containing a
+	slash would be a way to write anywhere the bench user can reach.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	doc = frappe.get_doc("Server Bench", bench)
+	incoming = (frappe.request.files or {}).get("file") if frappe.request else None
+	if incoming is None:
+		frappe.throw("No file was uploaded.", title="Nothing Received")
+
+	raw = (incoming.filename or "").strip()
+	name = os.path.basename(raw)
+
+	# Refused, not quietly renamed. `basename` already neutralises a traversal
+	# attempt, but silently saving `../../etc/cron.d/x.sql.gz` as `x.sql.gz`
+	# tells the operator nothing about what just happened — and a filename that
+	# contains a path was never a browser's own doing.
+	if raw != name or "\\" in raw:
+		frappe.throw(
+			f"{raw!r} contains a path. Upload the file by name only.", title="Not A Plain Filename"
+		)
+
+	if not UPLOAD_NAME.match(name) or not name.lower().endswith(UPLOAD_EXTENSIONS):
+		frappe.throw(
+			f"{name!r} is not a backup file. Upload the .sql.gz dump, or a files tar, exactly as "
+			"frappe wrote it — the name is what tells this app which site and which backup it "
+			"belongs to.",
+			title="Not A Backup File",
+		)
+
+	target_dir = os.path.join(doc.bench_path, "backups")
+	os.makedirs(target_dir, exist_ok=True)
+	target = os.path.join(target_dir, name)
+	if os.path.exists(target):
+		frappe.throw(f"{name} is already in {target_dir}.", title="Already There")
+
+	# Written to a temporary name first, then renamed. A half-uploaded file
+	# under the real name would be offered in the restore picker as though it
+	# were complete.
+	partial = f"{target}.uploading"
+	try:
+		incoming.save(partial)
+		os.replace(partial, target)
+	except OSError as exc:
+		for path in (partial, target):
+			try:
+				os.unlink(path)
+			except OSError:
+				pass
+		frappe.throw(f"Could not save the upload: {exc}", title="Upload Failed")
+
+	size = os.path.getsize(target)
+	frappe.logger("server").info(f"uploaded {name} ({size} bytes) to {bench} by {frappe.session.user}")
+	return {
+		"name": name,
+		"path": target,
+		"size": size,
+		"size_text": system.human(size),
+		"directory": target_dir,
 	}
 
 
