@@ -230,6 +230,11 @@ scheduler_events = {
 			"server.security.watch.run_sshd_scan",
 		],
 	},
+	# Sessionising runs just after an ingest tick, so it reads events written
+	# moments ago. It is idempotent — a second run over the same window
+	# rewrites the same rows — which is what makes it safe on a schedule and
+	# safe to run by hand while looking at something.
+	"hourly": ["server.ssh.sessionize.enqueue_sessionize"],
 	"daily": [
 		# `dpkg --verify` re-hashes every file every installed package owns:
 		# 40 seconds of solid I/O here, against 0.8 for the rest of the
@@ -241,9 +246,7 @@ scheduler_events = {
 		# debsums cron runs weekly.
 		"server.security.watch.run_filesystem_deep_scan",
 	],
-	# Session correlation is added together with the SSH Session doctype — a
-	# hook pointing at a module that does not exist yet would create a
-	# Scheduled Job Type row that fails every time it fires.
+
 }
 
 # Testing

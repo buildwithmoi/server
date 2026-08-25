@@ -1,0 +1,207 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:session_key",
+ "creation": "2026-08-25 19:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "session_key",
+  "status",
+  "username",
+  "column_break_who",
+  "source_ip",
+  "country",
+  "auth_method",
+  "key_fingerprint",
+  "timing_section",
+  "login_time",
+  "logout_time",
+  "last_seen",
+  "duration",
+  "column_break_timing",
+  "sudo_command_count",
+  "attribution_method",
+  "event_count",
+  "correlation_section",
+  "audit_session",
+  "column_break_corr",
+  "pid",
+  "hostname"
+ ],
+ "fields": [
+  {
+   "fieldname": "session_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Session Key",
+   "description": "The sshd child process that handled this connection, scoped by boot id where journald supplies one. sshd's own correlation identifier, so grouping on it is a grouping rather than a guess.",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Open\nClosed\nUnknown",
+   "description": "Unknown means opened, never closed, and too old to still be running. Deliberately not Closed: an sshd that was killed, a host that lost power and a log that stopped being ingested all look like this, and none of them is the user logging out.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Username",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_who",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "source_ip",
+   "fieldtype": "Link",
+   "options": "IP Address Info",
+   "in_list_view": 1,
+   "label": "Source IP",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Link",
+   "options": "Country",
+   "in_standard_filter": 1,
+   "label": "Country",
+   "read_only": 1
+  },
+  {
+   "fieldname": "auth_method",
+   "fieldtype": "Data",
+   "label": "Auth Method",
+   "description": "Free text, never an enum: password, publickey, keyboard-interactive/pam, gssapi-with-mic and others all appear.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "key_fingerprint",
+   "fieldtype": "Data",
+   "label": "Key Fingerprint",
+   "description": "Only recorded when sshd runs at LogLevel VERBOSE. Below that, which key was used cannot be answered afterwards.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "timing_section",
+   "fieldtype": "Section Break",
+   "label": "Timing"
+  },
+  {
+   "fieldname": "login_time",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Login Time",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "logout_time",
+   "fieldtype": "Datetime",
+   "label": "Logout Time",
+   "read_only": 1
+  },
+  {
+   "fieldname": "duration",
+   "fieldtype": "Duration",
+   "label": "Duration",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_timing",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sudo_command_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Sudo Commands",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attribution_method",
+   "fieldtype": "Select",
+   "label": "Attribution Method",
+   "options": "\nAudit Session\nUser and Time\nAmbiguous\nUnattributed",
+   "description": "How the sudo commands were tied to this session. Audit Session is exact \u2014 PAM stamps every process in a login with the same id. User and Time is inferred from the actor and the session window, which is usually right and is not the same kind of fact. Ambiguous means more than one session fitted and nothing was attributed.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "event_count",
+   "fieldtype": "Int",
+   "label": "Auth Events",
+   "read_only": 1
+  },
+  {
+   "fieldname": "correlation_section",
+   "fieldtype": "Section Break",
+   "label": "Correlation"
+  },
+  {
+   "fieldname": "audit_session",
+   "fieldtype": "Data",
+   "label": "Audit Session",
+   "description": "PAM's login session id. When present it makes sudo attribution exact; it is absent on hosts whose auth records come from auth.log rather than journald.",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_corr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pid",
+   "fieldtype": "Int",
+   "label": "sshd PID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "hostname",
+   "fieldtype": "Data",
+   "label": "Hostname",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen",
+   "description": "The last event of any kind belonging to this session. Not a logout time \u2014 it is the last evidence the session existed, and it is how far command attribution reaches for a session that was never seen closing.",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-25 19:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "SSH Session",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1
+  }
+ ],
+ "sort_field": "login_time",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

@@ -19,6 +19,8 @@
   "command",
   "correlation_section",
   "audit_session",
+  "ssh_session",
+  "attribution_method",
   "column_break_corr",
   "ingest_source",
   "provenance_section",
@@ -157,6 +159,23 @@
    "length": 40,
    "read_only": 1,
    "unique": 1
+  },
+  {
+   "fieldname": "ssh_session",
+   "fieldtype": "Link",
+   "options": "SSH Session",
+   "label": "SSH Session",
+   "description": "The login this command was run from. Empty when it could not be determined \u2014 a command run by cron or a system service belongs to no session, and one run while the same user had two sessions open belongs to no single one.",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "attribution_method",
+   "fieldtype": "Select",
+   "options": "\nAudit Session\nUser and Time\nAmbiguous\nUnattributed",
+   "label": "Attribution Method",
+   "description": "How the link was made. Audit Session is exact. User and Time is inferred from the actor and the session window \u2014 usually right, but not the same kind of fact, which is why it is recorded rather than hidden.",
+   "read_only": 1
   }
  ],
  "in_create": 1,
