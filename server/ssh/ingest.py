@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import time
+
 import frappe
 from frappe.utils import get_system_timezone
 
@@ -67,6 +69,22 @@ class IngestStats:
 	unparsed: int = 0
 	ignored: int = 0
 	unparsed_samples: list[str] = field(default_factory=list)
+	#: True when the run hit its time budget with the source still ahead of it.
+	#: A console that is quietly hours behind looks exactly like a quiet server.
+	behind: bool = False
+
+	def merge(self, other: "IngestStats") -> "IngestStats":
+		"""Fold another batch's numbers in. Used when one run drains several."""
+		self.read += other.read
+		self.inserted += other.inserted
+		self.skipped += other.skipped
+		self.unparsed += other.unparsed
+		self.ignored += other.ignored
+		for sample in other.unparsed_samples:
+			if len(self.unparsed_samples) < 5:
+				self.unparsed_samples.append(sample)
+		self.behind = self.behind or other.behind
+		return self
 
 	def as_dict(self) -> dict:
 		return {
@@ -75,6 +93,7 @@ class IngestStats:
 			"skipped": self.skipped,
 			"unparsed": self.unparsed,
 			"ignored": self.ignored,
+			"behind": self.behind,
 		}
 
 
@@ -175,6 +194,11 @@ def _insert(doc: dict, stats: IngestStats) -> None:
 #: design — the raw line is always kept in full — so anything destined for a
 #: Data column is trimmed to fit rather than allowed to reject the row.
 DATA_COLUMN_LIMIT = 140
+
+#: How long one ingest run may spend draining a backlog. The scheduler fires
+#: every five minutes, so two leaves ample headroom while letting a run that
+#: finds a flood actually catch up with it.
+INGEST_BUDGET_SECONDS = 120
 
 #: Fields that are Small Text or Long Text and must not be trimmed.
 _UNBOUNDED_FIELDS = frozenset({"raw_message", "command", "output", "doctype"})
@@ -277,7 +301,37 @@ def _run_journald(cp, settings) -> tuple[IngestStats, str]:
 		checkpoint_module.SOURCE_JOURNALD,
 	)
 	cp.cursor = last_cursor
-	status = checkpoint_module.STATUS_OK if records else checkpoint_module.STATUS_NO_NEW
+
+	# Keep going until the journal is drained or the budget is spent.
+	#
+	# Stopping at a fixed record count meant ingestion moved at
+	# max_records_per_run every five minutes — about 16 records a second. An
+	# attacker only has to open connections faster than that for the backlog to
+	# grow monotonically, and journald's own vacuum then discards the unread
+	# tail. Their successful login is in that tail, and so is every alert that
+	# depends on it. Outrunning the monitoring cost nothing.
+	deadline = time.monotonic() + INGEST_BUDGET_SECONDS
+	while len(records) >= limit and time.monotonic() < deadline:
+		records, last_cursor = journal.read_batch(
+			cursor=cp.cursor or None, since_hours=bootstrap, limit=limit
+		)
+		if not records:
+			break
+		stats.merge(
+			_commit_records(
+				[parser.journal_record_to_syslog_line(r) for r in records],
+				checkpoint_module.SOURCE_JOURNALD,
+			)
+		)
+		cp.cursor = last_cursor
+
+	if len(records) >= limit:
+		# Still behind when the budget ran out. Said out loud, because a
+		# monitoring console that is quietly hours behind looks exactly like a
+		# quiet server.
+		stats.behind = True
+
+	status = checkpoint_module.STATUS_OK if stats.read else checkpoint_module.STATUS_NO_NEW
 	return stats, status
 
 
@@ -296,6 +350,25 @@ def _run_authlog(cp, settings) -> tuple[IngestStats, str]:
 		[parser.parse_syslog_line(raw) for raw in raw_lines],
 		checkpoint_module.SOURCE_AUTHLOG,
 	)
+
+	# Same reasoning as journald: drain rather than stop at a count.
+	deadline = time.monotonic() + INGEST_BUDGET_SECONDS
+	while len(raw_lines) >= limit and time.monotonic() < deadline:
+		raw_lines, inode, offset, signature = authlog.read_lines(
+			path, inode=inode, offset=offset, limit=limit, signature=signature
+		)
+		if not raw_lines:
+			break
+		stats.merge(
+			_commit_records(
+				[parser.parse_syslog_line(raw) for raw in raw_lines],
+				checkpoint_module.SOURCE_AUTHLOG,
+			)
+		)
+
+	if len(raw_lines) >= limit:
+		stats.behind = True
+
 	cp.file_path = path
 	cp.inode = inode
 	cp.byte_offset = offset

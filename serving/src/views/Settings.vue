@@ -152,6 +152,13 @@ async function ingestNow() {
 		const didNotRun = result.error || result.reason || ["disabled", "none"].includes(result.source);
 		if (didNotRun) {
 			toast.error(result.error || result.reason || `No log source available (${result.source}).`);
+		} else if (result.behind) {
+			// Falling behind is not a success. A console that is quietly hours
+			// behind looks exactly like a quiet server.
+			toast.error(
+				`Read ${result.read ?? 0}, inserted ${result.inserted ?? 0} — and the log is still ` +
+					"ahead of us. Something is producing events faster than they can be collected.",
+			);
 		} else {
 			toast.success(`Read ${result.read ?? 0}, inserted ${result.inserted ?? 0}`);
 		}

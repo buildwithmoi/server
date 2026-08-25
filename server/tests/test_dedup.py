@@ -164,3 +164,46 @@ class TestIngestSurvivesABadRecord(unittest.TestCase):
 			self.assertEqual(stats.inserted, 1)
 		finally:
 			_frappe.db.rollback()
+
+
+class TestBacklogDraining(unittest.TestCase):
+	"""Stopping at a fixed count let an attacker outrun the monitoring.
+
+	max_records_per_run every five minutes is about 16 records a second. An
+	attacker only has to open connections faster than that for the backlog to
+	grow without bound, and journald's own vacuum then discards the unread
+	tail — which is where their successful login is, along with every alert
+	that depends on it. Outrunning the collector cost nothing.
+	"""
+
+	def test_stats_merge_across_batches(self):
+		from server.ssh import ingest
+
+		total = ingest.IngestStats(read=10, inserted=8, skipped=1, unparsed=1, ignored=0)
+		total.merge(ingest.IngestStats(read=5, inserted=5, skipped=0, unparsed=0, ignored=2))
+		self.assertEqual(total.read, 15)
+		self.assertEqual(total.inserted, 13)
+		self.assertEqual(total.ignored, 2)
+
+	def test_unparsed_samples_stay_bounded_when_merging(self):
+		from server.ssh import ingest
+
+		total = ingest.IngestStats(unparsed_samples=["a", "b", "c"])
+		total.merge(ingest.IngestStats(unparsed_samples=["d", "e", "f", "g"]))
+		self.assertLessEqual(len(total.unparsed_samples), 5)
+
+	def test_falling_behind_is_reported_not_hidden(self):
+		"""A console that is quietly hours behind looks exactly like a quiet
+		server, which is the failure this whole app exists to prevent."""
+		from server.ssh import ingest
+
+		total = ingest.IngestStats()
+		total.merge(ingest.IngestStats(behind=True))
+		self.assertTrue(total.behind)
+		self.assertIn("behind", total.as_dict())
+
+	def test_the_budget_is_shorter_than_the_schedule(self):
+		"""Otherwise runs would overlap and compete for the same worker."""
+		from server.ssh import ingest
+
+		self.assertLess(ingest.INGEST_BUDGET_SECONDS, 300)
