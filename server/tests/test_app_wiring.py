@@ -85,8 +85,12 @@ class TestPatchesResolve(unittest.TestCase):
 		if not patches.exists():
 			self.skipTest("no patches.txt")
 
+		# frappe matches Patch Log on the whole line, so re-listing a patch
+		# with a trailing comment is how it is deliberately made to run again
+		# (`seed_server_settings` does this whenever new defaults are added).
+		# The module to import is what comes before the comment.
 		listed = [
-			line.strip()
+			line.strip().split("#", 1)[0].strip()
 			for line in patches.read_text().splitlines()
 			if line.strip() and not line.strip().startswith(("#", "["))
 		]
@@ -150,6 +154,17 @@ class TestEndpointsAreGuarded(unittest.TestCase):
 	app's own kill switch turned off.
 	"""
 
+	# The one endpoint that must NOT require a session, and why.
+	#
+	# `security_heartbeat` exists so a machine somewhere ELSE can ask whether
+	# this host is still watching itself. A watcher that runs here cannot
+	# notice that it has been stopped, which is the whole point — and requiring
+	# a login would mean managing a desk user for a monitor. It is guarded by a
+	# shared token compared with `hmac.compare_digest`, returns counts and
+	# timings only, and never returns finding text, because a subject line can
+	# name an internal address.
+	TOKEN_GUARDED = {"security_heartbeat"}
+
 	def test_no_whitelisted_endpoint_skips_the_admin_check(self):
 		from server import api
 
@@ -161,10 +176,29 @@ class TestEndpointsAreGuarded(unittest.TestCase):
 				source = inspect.getsource(value)
 			except (OSError, TypeError):
 				continue
+			if name in self.TOKEN_GUARDED:
+				continue
 			if "@frappe.whitelist" in source and "_assert_server_admin()" not in source:
 				unguarded.append(name)
 
 		self.assertEqual(unguarded, [], f"whitelisted without a permission check: {unguarded}")
+
+	def test_token_guarded_endpoints_really_compare_a_token(self):
+		"""The exemption above must not become a way to skip guarding entirely.
+
+		Anything listed there has to reject a missing or wrong token, and do the
+		comparison in constant time — a token checked with `==` leaks its own
+		prefix to an unauthenticated caller, and this endpoint is deliberately
+		reachable without a session.
+		"""
+		from server import api
+
+		for name in self.TOKEN_GUARDED:
+			with self.subTest(endpoint=name):
+				source = inspect.getsource(getattr(api, name))
+				self.assertIn("allow_guest=True", source)
+				self.assertIn("hmac.compare_digest", source)
+				self.assertIn("frappe.throw", source)
 
 	def test_mutating_endpoints_are_post_only(self):
 		"""A GET carries the session cookie with no CSRF token.

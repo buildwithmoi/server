@@ -29,6 +29,14 @@
   "alert_on_root_login",
   "trusted_countries",
   "bench_section",
+  "security_section",
+  "security_scans_enabled",
+  "security_record_only",
+  "expect_egress_filtering",
+  "column_break_security",
+  "forward_events_to",
+  "forward_events_token",
+  "watchdog_token",
   "allow_app_install",
   "bench_root",
   "bench_executable",
@@ -44,14 +52,14 @@
   },
   {
    "default": "0",
-   "description": "Master switch for log ingestion. Leave OFF until you have confirmed this server actually writes sshd records where the app can read them \u2014 run the facility check in CLAUDE.md first. When off, the scheduled ingest job exits immediately and writes nothing.",
+   "description": "Master switch for log ingestion. Leave OFF until you have confirmed this server actually writes sshd records where the app can read them — run the facility check in CLAUDE.md first. When off, the scheduled ingest job exits immediately and writes nothing.",
    "fieldname": "ssh_monitoring_enabled",
    "fieldtype": "Check",
    "label": "Enable SSH Monitoring"
   },
   {
    "default": "Auto",
-   "description": "Where auth events are read from. Auto probes journald first (structured, gives a resumable cursor and the kernel audit-session id) and falls back to the auth.log text file. Pin this to a specific source only when diagnosing \u2014 a wrong pin silently stops ingestion.",
+   "description": "Where auth events are read from. Auto probes journald first (structured, gives a resumable cursor and the kernel audit-session id) and falls back to the auth.log text file. Pin this to a specific source only when diagnosing — a wrong pin silently stops ingestion.",
    "fieldname": "log_source",
    "fieldtype": "Select",
    "label": "Log Source",
@@ -66,7 +74,7 @@
   },
   {
    "default": "/var/log/auth.log",
-   "description": "Only used when the source is Auth Log. Debian/Ubuntu write /var/log/auth.log; RHEL-family systems use /var/log/secure. The bench user must be able to read it \u2014 on Ubuntu that means membership of the 'adm' group, which needs no sudo.",
+   "description": "Only used when the source is Auth Log. Debian/Ubuntu write /var/log/auth.log; RHEL-family systems use /var/log/secure. The bench user must be able to read it — on Ubuntu that means membership of the 'adm' group, which needs no sudo.",
    "fieldname": "auth_log_path",
    "fieldtype": "Data",
    "label": "Auth Log Path"
@@ -135,7 +143,7 @@
    "label": "Re-resolve After (Days)"
   },
   {
-   "description": "Not needed for the free ip-api.com tier \u2014 leave blank. It exists so a paid endpoint or a MaxMind licence key can be added later without a schema change.",
+   "description": "Not needed for the free ip-api.com tier — leave blank. It exists so a paid endpoint or a MaxMind licence key can be added later without a schema change.",
    "fieldname": "geo_api_key",
    "fieldtype": "Password",
    "label": "Resolver API Key"
@@ -153,7 +161,7 @@
    "label": "Enable Alerts"
   },
   {
-   "description": "One email address per line. Leave blank to notify every enabled System Manager, which is the safer default \u2014 an empty list here never means 'nobody gets told'.",
+   "description": "One email address per line. Leave blank to notify every enabled System Manager, which is the safer default — an empty list here never means 'nobody gets told'.",
    "fieldname": "alert_recipients",
    "fieldtype": "Small Text",
    "label": "Alert Recipients"
@@ -178,13 +186,13 @@
   },
   {
    "default": "1",
-   "description": "Alert on any successful login as root. On a correctly hardened server (PermitRootLogin no) this is impossible, which is precisely why it is worth alerting on \u2014 it means the SSH configuration changed.",
+   "description": "Alert on any successful login as root. On a correctly hardened server (PermitRootLogin no) this is impossible, which is precisely why it is worth alerting on — it means the SSH configuration changed.",
    "fieldname": "alert_on_root_login",
    "fieldtype": "Check",
    "label": "Alert On Root Login"
   },
   {
-   "description": "One two-letter ISO country code per line (e.g. GH, DE). Logins from these never raise the new-country alert. Keep it short \u2014 every code added here is a place an attacker can log in from without you being told.",
+   "description": "One two-letter ISO country code per line (e.g. GH, DE). Logins from these never raise the new-country alert. Keep it short — every code added here is a place an attacker can log in from without you being told.",
    "fieldname": "trusted_countries",
    "fieldtype": "Small Text",
    "label": "Trusted Countries"
@@ -203,7 +211,7 @@
   },
   {
    "default": "/home/patoo",
-   "description": "Directory scanned for benches. A folder counts as a bench only if it contains all of apps/, sites/, config/, logs/ and config/pids \u2014 the same test the bench CLI itself uses. Leave blank to use the parent directory of the bench this app is running in.",
+   "description": "Directory scanned for benches. A folder counts as a bench only if it contains all of apps/, sites/, config/, logs/ and config/pids — the same test the bench CLI itself uses. Leave blank to use the parent directory of the bench this app is running in.",
    "fieldname": "bench_root",
    "fieldtype": "Data",
    "label": "Bench Root"
@@ -221,7 +229,7 @@
   },
   {
    "default": "3600",
-   "description": "How long a single bench command may run before the app kills its whole process group. Raised from 30 to 60 minutes on evidence: a git pull of erpnext into a bench that had been cloned shallow (bench uses --depth 1) was still fetching at the 30-minute mark and was terminated. Large repositories with little local history are genuinely slow. Existing installs keep whatever is already saved here \u2014 change it on this form if a real operation needs longer.",
+   "description": "How long a single bench command may run before the app kills its whole process group. Raised from 30 to 60 minutes on evidence: a git pull of erpnext into a bench that had been cloned shallow (bench uses --depth 1) was still fetching at the 30-minute mark and was terminated. Large repositories with little local history are genuinely slow. Existing installs keep whatever is already saved here — change it on this form if a real operation needs longer.",
    "fieldname": "install_timeout_seconds",
    "fieldtype": "Int",
    "label": "Install Timeout (Seconds)"
@@ -232,6 +240,54 @@
    "fieldname": "git_ssh_command",
    "fieldtype": "Data",
    "label": "Git SSH Command"
+  },
+  {
+   "fieldname": "security_section",
+   "fieldtype": "Section Break",
+   "label": "Security Monitoring"
+  },
+  {
+   "fieldname": "security_scans_enabled",
+   "fieldtype": "Check",
+   "label": "Run Security Scans",
+   "default": "1",
+   "description": "The persistence, account and network detectors. Off means they are not collecting — which looks exactly like a quiet server, so leaving it off is a decision worth making deliberately."
+  },
+  {
+   "fieldname": "security_record_only",
+   "fieldtype": "Check",
+   "label": "Log Only, Do Not Alert",
+   "default": "0",
+   "description": "Collect and record findings without raising alerts. Run a new detector this way for a week and read what it produces: an alerting system that cries wolf on day three teaches the one person who reads it to stop."
+  },
+  {
+   "fieldname": "expect_egress_filtering",
+   "fieldtype": "Check",
+   "label": "Expect Outbound Filtering",
+   "default": "0",
+   "description": "Tick this once a default-deny OUTPUT policy is in place. The app will then tell you if it disappears — the egress lock is the control that makes 'this cannot happen again' true for the provider, and its silent removal must not be possible."
+  },
+  {
+   "fieldname": "column_break_security",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "forward_events_to",
+   "fieldtype": "Data",
+   "label": "Forward Events To",
+   "description": "An HTTPS endpoint on ANOTHER machine that receives every security finding as JSON when it is raised. This is the part that makes the rest dependable: an agent on a compromised host cannot be trusted to report that host's compromise, and an attacker with root can stop the scheduler or edit the local records. The local database is a convenience; the off-box copy is the evidence."
+  },
+  {
+   "fieldname": "forward_events_token",
+   "fieldtype": "Password",
+   "label": "Forwarding Token",
+   "description": "Sent as a Bearer token so the collector can tell this host's events from anyone else's."
+  },
+  {
+   "fieldname": "watchdog_token",
+   "fieldtype": "Password",
+   "label": "Watchdog Token",
+   "description": "Lets an outside machine poll /api/method/server.api.security_heartbeat without a session, to check this host is still reporting. A watcher that runs HERE cannot notice that it has been stopped, which is the whole point of putting it elsewhere."
   }
  ],
  "index_web_pages_for_search": 1,

@@ -206,6 +206,14 @@ scheduler_events = {
 		# outbound brute force that got the address blocked — and connections
 		# are short-lived, so a slower cadence would simply miss them.
 		"2-59/5 * * * *": ["server.security.watch.run_network_scan"],
+		# Watching the watcher, and pushing anything the collector missed.
+		# Local self-checking catches a crashed scheduler, which is the common
+		# case; it cannot catch a hostile root, which is what the externally
+		# pollable heartbeat endpoint is for.
+		"*/10 * * * *": [
+			"server.security.watch.check_detectors_are_running",
+			"server.security.forward.retry_pending",
+		],
 	},
 	# "daily" is added together with the SSH Session doctype — a hook pointing at
 	# a module that does not exist yet would create a Scheduled Job Type row that

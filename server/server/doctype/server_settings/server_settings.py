@@ -149,6 +149,35 @@ class ServerSettings(Document):
 		)
 		return [(user.email or user.name) for user in users]
 
+	def security_scans_on(self) -> bool:
+		"""Whether the detectors should run at all.
+
+		An unset Check reads back as 0, which is indistinguishable from an
+		operator having deliberately switched it off — so "has it ever been
+		written" is answered from `tabSingles`, the same way
+		`patches/seed_server_settings.py` does it and for the same reason.
+		Getting this wrong means a security tool that quietly stops collecting,
+		which is the worst way for one to fail.
+		"""
+		if self.security_scans_enabled:
+			return True
+		configured = frappe.db.sql(
+			"SELECT 1 FROM tabSingles WHERE doctype = %s AND field = %s LIMIT 1",
+			("Server Settings", "security_scans_enabled"),
+		)
+		# Never written -> the declared default of on applies.
+		return not configured
+
+	def forwarding_target(self) -> tuple[str, str]:
+		"""(endpoint, token) for off-box forwarding, or ("", "")."""
+		endpoint = (self.forward_events_to or "").strip()
+		if not endpoint:
+			return "", ""
+		return endpoint, self.get_password("forward_events_token", raise_exception=False) or ""
+
+	def watchdog_secret(self) -> str:
+		return self.get_password("watchdog_token", raise_exception=False) or ""
+
 	def get_trusted_countries(self) -> set[str]:
 		"""Uppercase ISO-2 codes exempt from the new-country alert."""
 		raw = self.trusted_countries or ""

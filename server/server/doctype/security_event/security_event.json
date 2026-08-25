@@ -157,6 +157,31 @@
    "fieldtype": "Datetime",
    "label": "Last Seen",
    "read_only": 1
+  },
+  {
+   "fieldname": "sec_forward",
+   "fieldtype": "Section Break",
+   "label": "Off-Box Copy"
+  },
+  {
+   "fieldname": "forwarded",
+   "fieldtype": "Check",
+   "label": "Delivered Off-Box",
+   "read_only": 1,
+   "in_list_view": 0,
+   "description": "Whether this finding reached a machine other than the one it is about. The local copy is a convenience; this is the evidence."
+  },
+  {
+   "fieldname": "forward_attempts",
+   "fieldtype": "Int",
+   "label": "Delivery Attempts",
+   "read_only": 1
+  },
+  {
+   "fieldname": "forward_error",
+   "fieldtype": "Small Text",
+   "label": "Last Delivery Error",
+   "read_only": 1
   }
  ],
  "permissions": [
@@ -194,6 +219,10 @@
   "cb_2",
   "dedupe_key",
   "occurrences",
-  "last_seen"
+  "last_seen",
+  "sec_forward",
+  "forwarded",
+  "forward_attempts",
+  "forward_error"
  ]
 }

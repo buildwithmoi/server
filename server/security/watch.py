@@ -23,7 +23,17 @@ import json
 import frappe
 
 from server.security import persistence, rules
+from server.server.doctype.ingest_heartbeat.ingest_heartbeat import beat
 from server.server.doctype.security_event.security_event import raise_event
+from server.server.doctype.server_settings.server_settings import get_settings
+
+#: How often each detector is scheduled, so "late" is derived from its own
+#: cadence rather than one global guess. Must match hooks.py.
+SCHEDULE_SECONDS = {
+	"persistence": 15 * 60,
+	"accounts": 15 * 60,
+	"network": 5 * 60,
+}
 
 CATEGORY = "persistence"
 
@@ -142,10 +152,10 @@ def scan(record_only: bool = False) -> dict:
 
 
 def _notify(event_name: str) -> None:
-	"""Send it on, without letting a mail failure lose the finding.
+	"""Send it on, without letting a delivery failure lose the finding.
 
-	The event is already recorded by the time this runs, so an SMTP problem
-	costs the notification and not the evidence.
+	The event is already recorded by the time this runs, so a mail or collector
+	problem costs the notification and not the evidence.
 	"""
 	try:
 		from server import alerts
@@ -153,6 +163,42 @@ def _notify(event_name: str) -> None:
 		alerts.notify_security_event(event_name)
 	except Exception:
 		frappe.logger("server").warning(f"could not notify for {event_name}", exc_info=True)
+
+	try:
+		from server.security import forward
+
+		forward.forward_async(event_name)
+	except Exception:
+		frappe.logger("server").warning(f"could not queue forwarding for {event_name}", exc_info=True)
+
+
+def _should_run() -> tuple[bool, bool]:
+	"""(run at all, record only) — the two switches in Server Settings."""
+	settings = get_settings()
+	return settings.security_scans_on(), bool(settings.security_record_only)
+
+
+def _scheduled(source: str, runner) -> dict:
+	"""Run one detector, record that it completed, and never raise.
+
+	The heartbeat is written whether the run succeeded or failed. A detector
+	that is erroring is still a detector that is alive, and the two states need
+	telling apart — silence means stopped, which is the one that matters.
+	"""
+	enabled, record_only = _should_run()
+	if not enabled:
+		return {"skipped": "security scans are switched off in Server Settings"}
+
+	try:
+		result = runner(record_only=record_only)
+		beat(source, SCHEDULE_SECONDS.get(source, 900), findings=result.get("findings") or 0)
+		return result
+	except Exception as exc:
+		frappe.db.rollback()
+		frappe.logger("server").error(f"{source} scan failed: {exc}", exc_info=True)
+		beat(source, SCHEDULE_SECONDS.get(source, 900), error=f"{type(exc).__name__}: {exc}")
+		frappe.db.commit()
+		return {"error": str(exc)}
 
 
 def _insert_item(item: persistence.Item, now, accepted: bool) -> None:
@@ -215,6 +261,32 @@ def _raise_baseline_notice(count: int) -> str | None:
 #: Everything that is recorded before it is trusted.
 BASELINE_DOCTYPES = ("Persistence Item", "System Account", "Authorized Key", "Listening Socket")
 
+# The account attributes worth diffing between scans. This is deliberately the
+# exact key set `_account_row` produces: the two must not drift, because a field
+# stored but absent here changes silently, and a field listed here but not
+# stored raises a finding on every single scan.
+ACCOUNT_FIELDS = (
+	"uid",
+	"gid",
+	"shell",
+	"home",
+	"home_exists",
+	"can_log_in",
+	"privileged",
+	"groups",
+	"password_status",
+)
+
+# SYN-SENT endpoints carried between scans, so "tried once" can be told apart
+# from "keeps trying". Cache rather than a table: it is a counter with a
+# one-hour memory, and losing it on a restart costs one scan of sensitivity,
+# not evidence. Findings themselves are always written to the database.
+BEACON_KEY = "server:security:beacons"
+
+# The last firewall ruleset hash, for noticing that the rules changed. Same
+# reasoning as BEACON_KEY: the finding is durable, the comparison basis is not.
+FIREWALL_KEY = "server:security:firewall"
+
 
 def accept_baseline() -> dict:
 	"""Mark everything currently recorded as reviewed and expected."""
@@ -252,18 +324,7 @@ def accept_baseline() -> dict:
 def run_persistence_scan() -> dict:
 	"""Scheduled entry point. Never raises — a detector that can crash the
 	scheduler takes every other detector down with it."""
-	try:
-		return scan()
-	except Exception as exc:
-		frappe.logger("server").error(f"persistence scan failed: {exc}", exc_info=True)
-		return {"error": str(exc)}
-
-
-# ----------------------------------------------------------------------
-# Accounts and keys
-# ----------------------------------------------------------------------
-
-ACCOUNT_FIELDS = ("uid", "gid", "shell", "home", "home_exists", "groups", "password_status")
+	return _scheduled("persistence", scan)
 
 
 def _account_row(account) -> dict:
@@ -322,7 +383,7 @@ def scan_accounts(record_only: bool = False) -> dict:
 		for row in frappe.get_all(
 			"System Account",
 			filters={"status": "Active"},
-			fields=["name", "username", *ACCOUNT_FIELDS, "can_log_in", "privileged"],
+			fields=["name", "username", *ACCOUNT_FIELDS],
 			limit_page_length=0,
 		)
 	}
@@ -503,25 +564,9 @@ def _record_account_change(username: str, change_type: str, field: str, old: str
 
 
 def run_account_scan() -> dict:
-	"""Scheduled entry point. Never raises."""
-	try:
-		return scan_accounts()
-	except Exception as exc:
-		frappe.logger("server").error(f"account scan failed: {exc}", exc_info=True)
-		return {"error": str(exc)}
-
-
-# ----------------------------------------------------------------------
-# Network
-# ----------------------------------------------------------------------
-
-#: Where the consecutive-SYN-SENT count lives between scans. A beacon retries
-#: constantly, so it accumulates in minutes; losing the count to a redis
-#: restart costs one detection cycle and nothing more.
-BEACON_KEY = "server:security:syn-sent"
-
-#: Where the last firewall ruleset hash lives, to notice it changing.
-FIREWALL_KEY = "server:security:firewall-hash"
+	"""Scheduled entry point. Never raises — a detector that can crash the
+	scheduler takes every other detector down with it."""
+	return _scheduled("accounts", scan_accounts)
 
 
 def _git_host_addresses() -> tuple[str, ...]:
@@ -689,7 +734,14 @@ def _track_beacons(snapshot) -> dict:
 		counts[key] = int(previous.get(key, 0)) + 1
 
 	frappe.cache.set_value(BEACON_KEY, counts, expires_in_sec=3600)
-	return {tuple(key.rsplit(":", 1)[0:1]) + (int(key.rsplit(":", 1)[1]),): value for key, value in counts.items()}
+
+	# Back to (address, port) tuples for the rules. Split from the right so an
+	# IPv6 address, which is full of colons itself, survives the round trip.
+	tallies = {}
+	for key, value in counts.items():
+		address, _, port = key.rpartition(":")
+		tallies[(address, int(port))] = value
+	return tallies
 
 
 def _record_outbound(snapshot, now) -> None:
@@ -742,9 +794,72 @@ def _record_outbound(snapshot, now) -> None:
 
 
 def run_network_scan() -> dict:
-	"""Scheduled entry point. Never raises."""
-	try:
-		return scan_network()
-	except Exception as exc:
-		frappe.logger("server").error(f"network scan failed: {exc}", exc_info=True)
-		return {"error": str(exc)}
+	"""Scheduled entry point. Never raises — a detector that can crash the
+	scheduler takes every other detector down with it."""
+	return _scheduled("network", scan_network)
+
+
+
+
+# ----------------------------------------------------------------------
+# Watching the watcher
+# ----------------------------------------------------------------------
+
+
+def check_detectors_are_running() -> dict:
+	"""Alert when a detector has stopped reporting.
+
+	This catches the common failure: a crashed scheduler, a worker that died, a
+	detector erroring every run. It does NOT catch a hostile root — a process
+	that has been stopped cannot notice that it has been stopped, and an
+	attacker who can edit these records can edit this check's findings too.
+
+	That is not a flaw to engineer around; it is why `security_heartbeat` is
+	exposed for a machine somewhere else to poll. This is the cheap half, and
+	it is worth having because most outages are accidents.
+	"""
+	from server.server.doctype.ingest_heartbeat.ingest_heartbeat import overdue
+
+	enabled, _ = _should_run()
+	if not enabled:
+		return {"skipped": "security scans are switched off"}
+
+	late = overdue()
+	raised = []
+	for detector in late:
+		minutes = detector["seconds_late"] // 60
+		name = raise_event(
+			"Critical",
+			"monitoring",
+			f"The {detector['source']} detector has stopped reporting",
+			f"Last completed {detector['last_run']}, about {minutes} minutes later than its "
+			f"{detector['expected_every'] // 60}-minute schedule allows. Sequence "
+			f"{detector['sequence']}.",
+			"Check the scheduler and the workers first — this is usually `bench doctor` "
+			"territory rather than an intrusion. But it is reported as Critical because a "
+			"console that has quietly stopped collecting looks exactly like a server on which "
+			"nothing is happening, and that is the state the incident behind this app lived in "
+			"for eight months.",
+		)
+		if name:
+			raised.append(name)
+			_notify(name)
+
+	# Forwarding configured but silent is the same blindness, one step removed.
+	settings = get_settings()
+	if settings.forwarding_target()[0]:
+		undelivered = frappe.db.count("Security Event", {"forwarded": 0})
+		if undelivered > 50:
+			name = raise_event(
+				"High",
+				"monitoring",
+				"Security findings are piling up undelivered",
+				f"{undelivered} findings have not reached the collector.",
+				"The off-box copy is the evidence — while this is failing, the only copy of these "
+				"findings is on the machine they are about. Check the collector and the token.",
+			)
+			if name:
+				raised.append(name)
+
+	frappe.db.commit()
+	return {"overdue": late, "raised": raised}

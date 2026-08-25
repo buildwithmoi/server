@@ -786,6 +786,68 @@ def accept_security_baseline() -> dict:
 	return watch.accept_baseline()
 
 
+@frappe.whitelist(allow_guest=True)
+def security_heartbeat(token: str | None = None) -> dict:
+	"""Is this host still watching itself? For a watcher somewhere else.
+
+	Guest-accessible on purpose, gated by a shared token rather than a session:
+	the whole value of this endpoint is that something OUTSIDE this machine can
+	poll it, and requiring a login would mean managing a user for a monitor.
+
+	A watcher that runs HERE cannot notice that it has been stopped. That is
+	not a limitation to work around — it is why this endpoint exists. Point a
+	second host at it, alert when `sequence` stops climbing, and alert equally
+	loudly if it ever goes BACKWARDS, which means the database was replaced
+	with an older copy.
+
+	Returns counts and timings only. No finding text, because this is reachable
+	without a session and a subject line can name an internal address.
+	"""
+	import hmac
+
+	expected = get_settings().watchdog_secret()
+	if not expected:
+		frappe.throw("No watchdog token is configured.", frappe.PermissionError)
+	if not token or not hmac.compare_digest(str(token), expected):
+		# Constant-time, and deliberately the same message either way.
+		frappe.throw("Not authorised.", frappe.PermissionError)
+
+	beats = frappe.get_all(
+		"Ingest Heartbeat",
+		fields=["source", "last_run", "sequence", "expected_every", "last_status"],
+	)
+	now = frappe.utils.now_datetime()
+	detectors = [
+		{
+			"source": beat.source,
+			"sequence": beat.sequence,
+			"expected_every": beat.expected_every,
+			"status": beat.last_status,
+			"seconds_since_last_run": (
+				int(frappe.utils.time_diff_in_seconds(now, beat.last_run)) if beat.last_run else None
+			),
+		}
+		for beat in beats
+	]
+
+	from server.server.doctype.ingest_heartbeat.ingest_heartbeat import overdue
+
+	late = overdue()
+	return {
+		"host": os.uname().nodename,
+		"time": str(now),
+		"healthy": not late and all(d["status"] == "OK" for d in detectors) and bool(detectors),
+		"detectors": detectors,
+		"overdue": late,
+		# The sum climbs whenever any detector runs, so a single number is
+		# enough for a simple watcher to alert on.
+		"sequence_total": sum(d["sequence"] or 0 for d in detectors),
+		"open_critical": frappe.db.count("Security Event", {"status": "New", "severity": "Critical"}),
+		"open_high": frappe.db.count("Security Event", {"status": "New", "severity": "High"}),
+		"undelivered": frappe.db.count("Security Event", {"forwarded": 0}),
+	}
+
+
 @frappe.whitelist()
 def security_overview() -> dict:
 	"""What the detectors currently know, for the dashboard."""
@@ -816,6 +878,12 @@ def security_overview() -> dict:
 		"last_scan": frappe.db.get_value(
 			"Security Event", {}, "creation", order_by="creation desc"
 		),
+		"detectors": frappe.get_all(
+			"Ingest Heartbeat",
+			fields=["source", "last_run", "sequence", "last_status", "expected_every"],
+		),
+		"undelivered": frappe.db.count("Security Event", {"forwarded": 0}),
+		"forwarding_configured": bool(get_settings().forwarding_target()[0]),
 	}
 
 

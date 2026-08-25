@@ -6,3 +6,9 @@
 # Patches added in this section will be executed after doctypes are migrated
 server.patches.register_log_doctypes
 server.patches.seed_server_settings
+# Re-run: the Security Monitoring section added new fields with declared
+# defaults, and a Single only applies a default while nothing has been written
+# to it. Without this, "Run Security Scans" reads back as 0 on every existing
+# site and the detectors silently never run. Patch Log matches the whole line,
+# so the trailing comment is what makes it execute again.
+server.patches.seed_server_settings # security monitoring defaults

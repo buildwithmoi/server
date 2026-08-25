@@ -1,0 +1,90 @@
+{
+ "autoname": "field:source",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "description": "One row per detector, saying when it last completed and how many times it has. The sequence is monotonic and never resets, so a watcher outside this host can tell 'still running' from 'stopped', and 'stopped' from 'someone restored an older copy of the database'.",
+ "fields": [
+  {
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "label": "Detector",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_run",
+   "fieldtype": "Datetime",
+   "label": "Last Completed",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "sequence",
+   "fieldtype": "Int",
+   "label": "Sequence",
+   "default": "0",
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Increments on every completed run and never goes backwards. A gap means runs were missed; a decrease means the record was replaced."
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "expected_every",
+   "fieldtype": "Int",
+   "label": "Expected Every (s)",
+   "read_only": 1,
+   "description": "How often this detector is scheduled. What 'late' means is derived from this rather than from one global guess."
+  },
+  {
+   "fieldname": "last_status",
+   "fieldtype": "Select",
+   "label": "Last Status",
+   "options": "OK\nError",
+   "default": "OK",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "findings_last_run",
+   "fieldtype": "Int",
+   "label": "Findings Last Run",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "Ingest Heartbeat",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "source",
+  "last_run",
+  "sequence",
+  "cb_1",
+  "expected_every",
+  "last_status",
+  "last_error",
+  "findings_last_run"
+ ]
+}
