@@ -31,7 +31,13 @@
 			hint="Sessions are built hourly from SSH events. If there are events but no sessions, the sessionizer has not run yet."
 		/>
 
-		<ul v-else class="space-y-2">
+		<!--
+			The list scrolls, not the page. Fifty rows each of which can expand
+			meant the filters and the counts at the top were off-screen by the
+			time you found the one you wanted, and scrolling back up to change a
+			filter lost your place in the list.
+		-->
+		<ul v-else class="u-scroll max-h-[calc(100vh-19rem)] space-y-2 overflow-y-auto pr-1">
 			<li
 				v-for="row in rows"
 				:key="row.name"

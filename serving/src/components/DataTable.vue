@@ -7,15 +7,24 @@
 -->
 <template>
 	<div class="u-card overflow-hidden">
-		<div class="u-scroll overflow-x-auto">
+		<!--
+			Scrolls in BOTH directions. It used to grow vertically and push the
+			page, so on a list of fifty the column headings were off the top of
+			the screen by the tenth row and you were reading unlabelled columns.
+			Capped here instead, with the header pinned.
+
+			`maxHeight` is a cap, not a height: a short table never reaches it
+			and so never grows a scrollbar it did not need.
+		-->
+		<div class="u-scroll overflow-auto" :style="{ maxHeight: maxHeight }">
 			<table class="w-full border-collapse text-left">
-				<thead>
+				<thead class="sticky top-0 z-10">
 					<tr class="border-b border-[var(--rule)] bg-[var(--paper-sunk)]">
 						<th
 							v-for="col in columns"
 							:key="col.key"
 							scope="col"
-							class="u-label whitespace-nowrap px-3 py-2 font-medium"
+							class="u-label whitespace-nowrap border-b border-[var(--rule)] bg-[var(--paper-sunk)] px-3 py-2 font-medium"
 							:style="col.width ? { width: col.width } : null"
 						>{{ col.label }}</th>
 					</tr>
@@ -105,6 +114,10 @@ const props = defineProps({
 	// Rows become keyboard-focusable as well as clickable — a table row that
 	// only responds to a mouse is unreachable for anyone navigating by keyboard.
 	clickable: { type: Boolean, default: false },
+	//: How tall the table may get before its rows scroll instead of the page.
+	//: Viewport-relative so it adapts to the window rather than assuming one,
+	//: and generous enough that a handful of rows never triggers it.
+	maxHeight: { type: String, default: "min(68vh, 46rem)" },
 });
 
 defineEmits(["page", "row-click"]);

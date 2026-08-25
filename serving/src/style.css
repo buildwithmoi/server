@@ -271,6 +271,76 @@ body {
 	border-radius: 4px;
 }
 
+/* ------------------------------------------------------------- terminal */
+
+/*
+ * Dark in BOTH themes, deliberately. The rest of this interface follows the
+ * viewer's preference because it is the app's own surface; a terminal is a
+ * window onto somebody else's, and every terminal anyone has used looks like
+ * this. Following the light theme here would make it read as a text area that
+ * happens to be monospaced.
+ *
+ * The colours are fixed rather than tokenised for the same reason — there is
+ * no light variant of a terminal to switch to.
+ */
+.u-term {
+	background: #14161a;
+	color: #d7dae0;
+	font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+	font-variant-ligatures: none;
+	border: 1px solid #23262c;
+}
+
+.u-term-input:focus-within {
+	border-color: #3d434d;
+}
+
+.u-term textarea::placeholder {
+	color: #5b616b;
+}
+
+/* Tailwind's form styles put a blue focus ring on a textarea, which inside a
+   near-black panel reads as a browser artefact rather than as focus. The panel
+   border does the job instead — see `.u-term-input:focus-within` above. */
+.u-term textarea:focus,
+.u-term textarea:focus-visible {
+	outline: none;
+	box-shadow: none;
+	border-color: transparent;
+	--tw-ring-shadow: 0 0 #0000;
+	--tw-ring-offset-shadow: 0 0 #0000;
+}
+
+/* Green for the prompt only. It is the one thing the eye scans for when
+   looking back through output, and it is never the sole carrier of meaning —
+   the `$` glyph says the same thing without colour. */
+.u-term-prompt {
+	color: #7fb069;
+	user-select: none;
+}
+
+.u-term-out {
+	color: #a9aeb8;
+}
+
+.u-term-dim {
+	color: #6b7280;
+}
+
+/* A non-zero exit. Paired with the number, never colour alone. */
+.u-term-bad {
+	color: #e08a7a;
+}
+
+/* The shared scrollbar draws its thumb with a `var(--paper)` border so it
+   appears inset against the page. Inside the terminal that is a pale ring on a
+   near-black panel, so the panel supplies its own. */
+.u-term.u-scroll::-webkit-scrollbar-thumb,
+.u-term .u-scroll::-webkit-scrollbar-thumb {
+	background: #3d434d;
+	border-color: #14161a;
+}
+
 .u-scroll::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;

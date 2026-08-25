@@ -87,7 +87,9 @@
 				<div v-if="loading" class="flex flex-col gap-2 p-3">
 					<Skeleton v-for="n in 5" :key="n" height="1.1rem" />
 				</div>
-				<RankBars v-else-if="byCountry.length" :items="byCountry" label-key="country" value-key="total" />
+				<div v-else-if="byCountry.length" class="u-scroll max-h-[19rem] overflow-y-auto">
+					<RankBars :items="byCountry" label-key="country" value-key="total" />
+				</div>
 				<EmptyState v-else title="No located traffic yet" icon="globe"
 				            hint="Addresses are resolved to a country a few minutes after they are first seen." />
 			</section>
@@ -100,8 +102,9 @@
 				<div v-if="loading" class="flex flex-col gap-2 p-3">
 					<Skeleton v-for="n in 5" :key="n" height="1.1rem" />
 				</div>
-				<RankBars v-else-if="topSources.length" :items="topSources" label-key="ip"
-				          value-key="attempts" note-key="country" mono />
+				<div v-else-if="topSources.length" class="u-scroll max-h-[19rem] overflow-y-auto">
+					<RankBars :items="topSources" label-key="ip" value-key="attempts" note-key="country" mono />
+				</div>
 				<EmptyState v-else title="No failed attempts" icon="shield"
 				            hint="Nothing has been knocking on this server in the selected window." />
 			</section>
@@ -113,8 +116,9 @@
 				<div v-if="loading" class="flex flex-col gap-2 p-3">
 					<Skeleton v-for="n in 4" :key="n" height="1.1rem" />
 				</div>
-				<RankBars v-else-if="usernames.length" :items="usernames" label-key="username"
-				          value-key="attempts" mono />
+				<div v-else-if="usernames.length" class="u-scroll max-h-[19rem] overflow-y-auto">
+					<RankBars :items="usernames" label-key="username" value-key="attempts" mono />
+				</div>
 				<EmptyState v-else title="No username guessing" icon="terminal" />
 			</section>
 
@@ -129,7 +133,7 @@
 				<div v-if="loading" class="flex flex-col gap-2 p-3">
 					<Skeleton v-for="n in 6" :key="n" height="1.1rem" />
 				</div>
-				<ul v-else-if="recent.length" class="flex flex-col">
+				<ul v-else-if="recent.length" class="u-scroll flex max-h-[19rem] flex-col overflow-y-auto">
 					<li
 						v-for="event in recent"
 						:key="event.name"

@@ -18,7 +18,15 @@
 				</div>
 			</div>
 
-			<nav class="mt-1 flex flex-col gap-0.5 px-2" aria-label="Sections">
+			<!--
+				`min-h-0` is the load-bearing half. A flex child will not shrink
+				below its content without it, so `overflow-y-auto` never engages
+				and the nav pushes the footer — Collapse, Alerts, Sign out —
+				off the bottom of a short window instead of scrolling. The list
+				has grown to twelve entries; on a laptop with a browser bar that
+				is already tight.
+			-->
+			<nav class="u-scroll mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2" aria-label="Sections">
 				<RouterLink
 					v-for="item in nav"
 					:key="item.name"
@@ -51,7 +59,7 @@
 				</RouterLink>
 			</nav>
 
-			<div class="mt-auto border-t border-[var(--rule)] p-3" :class="collapsed ? 'px-2' : ''">
+			<div class="shrink-0 border-t border-[var(--rule)] p-3" :class="collapsed ? 'px-2' : ''">
 				<button
 					class="mb-2 hidden w-full items-center gap-2.5 rounded-md py-[7px] text-[13px] text-[var(--ink-soft)] transition-colors duration-150 hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)] lg:flex"
 					:class="collapsed ? 'justify-center px-0' : 'px-2.5'"

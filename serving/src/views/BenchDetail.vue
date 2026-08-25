@@ -24,7 +24,7 @@
 			@started="onStarted"
 		/>
 
-		<ConsoleDialog
+		<TerminalDialog
 			v-model="showConsole"
 			:bench="name"
 			:bench-path="bench.bench_path || ''"
@@ -121,6 +121,7 @@
 						<span class="text-[11.5px] text-[var(--ink-faint)]">{{ bench.apps.length }}</span>
 					</header>
 					<div class="u-scroll overflow-x-auto">
+						<div class="u-scroll max-h-[22rem] overflow-y-auto">
 						<table class="w-full border-collapse text-left">
 							<thead>
 								<tr class="border-b border-[var(--rule)] bg-[var(--paper-sunk)]">
@@ -152,6 +153,7 @@
 								</tr>
 							</tbody>
 						</table>
+						</div>
 					</div>
 				</section>
 
@@ -161,7 +163,7 @@
 							<h2 class="u-display text-[13.5px]">Sites</h2>
 							<span class="text-[11.5px] text-[var(--ink-faint)]">{{ bench.sites.length }}</span>
 						</header>
-						<ul class="divide-y divide-[var(--rule)]">
+						<ul class="u-scroll max-h-[22rem] divide-y divide-[var(--rule)] overflow-y-auto">
 							<li v-for="site in bench.sites" :key="site.site_name" class="px-4 py-2.5">
 								<div class="flex items-center justify-between gap-3">
 									<span class="u-mono text-[13px]">{{ site.site_name }}</span>
@@ -188,7 +190,7 @@
 								all
 							</RouterLink>
 						</header>
-						<ul v-if="bench.installs?.length" class="divide-y divide-[var(--rule)]">
+						<ul v-if="bench.installs?.length" class="u-scroll max-h-[22rem] divide-y divide-[var(--rule)] overflow-y-auto">
 							<li v-for="req in bench.installs" :key="req.name"
 							    class="flex items-center justify-between gap-3 px-4 py-2 text-[13px]">
 								<OutcomeMark
@@ -218,7 +220,7 @@ import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import BenchCommandDialog from "../components/BenchCommandDialog.vue";
-import ConsoleDialog from "../components/ConsoleDialog.vue";
+import TerminalDialog from "../components/TerminalDialog.vue";
 import SslDialog from "../components/SslDialog.vue";
 import LogsDialog from "../components/LogsDialog.vue";
 import BackupsDialog from "../components/BackupsDialog.vue";
@@ -292,7 +294,7 @@ const actions = computed(() => [
 		condition: () => bench.value.exists_on_disk !== false,
 	},
 	{
-		label: "Run any command…",
+		label: "Terminal",
 		icon: "terminal",
 		description: "A shell in the bench directory, for the one-off the catalogue has no entry for. Recorded.",
 		danger: true,

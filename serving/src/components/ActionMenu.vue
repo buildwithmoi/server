@@ -35,7 +35,7 @@
 			<div
 				v-if="open"
 				role="menu"
-				class="absolute right-0 z-50 mt-1 w-[290px] overflow-hidden rounded-lg border border-[var(--rule-strong)] bg-[var(--paper-raised)] py-1 shadow-[0_10px_30px_-12px_rgba(0,0,0,0.3)]"
+				class="u-scroll absolute right-0 z-50 mt-1 max-h-[min(70vh,32rem)] w-[290px] overflow-y-auto overscroll-contain rounded-lg border border-[var(--rule-strong)] bg-[var(--paper-raised)] py-1 shadow-[0_10px_30px_-12px_rgba(0,0,0,0.3)]"
 			>
 				<template v-for="(item, index) in visible" :key="item.label">
 					<div

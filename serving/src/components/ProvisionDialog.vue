@@ -1,7 +1,7 @@
 <template>
 	<Dialog
 		v-model="open"
-		:options="{ title: 'Build a new bench', size: 'xl' }"
+		:options="{ title: 'Build a new bench', size: '3xl' }"
 		:disable-outside-click-to-close="busy"
 	>
 		<template #body-content>
