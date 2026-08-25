@@ -154,6 +154,7 @@ const VERBS = {
 	Command: { active: "Running", done: "Ran", noun: "Command" },
 	SSL: { active: "Setting up SSL for", done: "SSL set up for", noun: "SSL" },
 	Restore: { active: "Restoring", done: "Restored", noun: "Restore" },
+	Console: { active: "Running", done: "Ran", noun: "Console" },
 };
 const verbsFor = (job) => VERBS[job.operation] || VERBS.Clone;
 

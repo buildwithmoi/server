@@ -518,6 +518,90 @@ def run_bench_command(
 	return run_install_request(doc.name)
 
 
+@frappe.whitelist(methods=["POST"])
+def run_console_command(bench: str, command: str, confirm: str | None = None) -> dict:
+	"""Run an arbitrary command in a bench directory, and record that it happened.
+
+	THE CATALOGUE IS STILL THE DEFAULT. `run_bench_command` assembles a fixed
+	argv from a validated entry and is what should be used for anything done
+	twice. This is the escape hatch for the one-off, and it exists because the
+	alternative was not "nobody runs arbitrary commands" — it was "somebody
+	opens an SSH session and nothing records it".
+
+	WHAT MAKES IT ACCEPTABLE is that it is loud rather than filtered. There is
+	no blocklist: refusing `rm -rf /` while allowing a shell one-liner that does
+	the same thing would imply a safety that does not exist. Instead the
+	app-wide install switch gates it, and every command becomes a Security
+	Event — hash-chained, forwarded off the box as it is written, and in the
+	daily digest. An operator who wants to run something unrecorded still has
+	to leave the app, which is the point.
+
+	`confirm` must equal the bench name. Same reasoning as a destructive
+	catalogue command: hard to do by accident, impossible by reflex.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	from server.bench import console as bench_console
+
+	try:
+		text = bench_console.validate(command)
+	except bench_console.Refusal as exc:
+		frappe.throw(str(exc), title="Cannot Run That")
+
+	if (confirm or "").strip() != bench:
+		frappe.throw(
+			f"This runs a shell command as the bench user and every use is recorded. "
+			f"Type “{bench}” to confirm you meant it.",
+			title="Confirmation Required",
+		)
+
+	bench_doc = frappe.get_doc("Server Bench", bench)
+	bench_doc.assert_usable()
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "App Install Request",
+			"operation": "Console",
+			"bench": bench,
+			"console_command": text,
+			"status": "Draft",
+		}
+	)
+	doc.insert()
+
+	# Raised BEFORE the job is queued, so the record exists even if the worker
+	# never picks it up or dies mid-command. A command that was attempted is
+	# the fact worth keeping; whether it finished is on the request row.
+	from server.server.doctype.security_event.security_event import raise_event
+
+	# THE SUBJECT CARRIES THE REQUEST NAME, AND THAT IS LOAD-BEARING.
+	# `raise_event` dedupes on subject-plus-day, which is exactly right for a
+	# standing condition — "disk is filling" should say so once a day, not once
+	# a scan. It is exactly wrong for an audit trail. Verified by running five
+	# different commands and finding ONE finding with occurrences=5, holding the
+	# text of the first and no trace of the other four. An audit record that
+	# silently merges distinct events is worse than none, because it looks
+	# complete.
+	raise_event(
+		"Medium",
+		"console",
+		f"Shell command on {bench}: {bench_console.summarise(text, 50)} ({doc.name})",
+		f"{frappe.session.user} ran, in {bench_doc.bench_path}:\n\n{bench_siteconfig.scrub(text)}\n\n"
+		f"Recorded as {doc.name}, where the full output is kept.",
+		"If you ran it, no action. If you did not, this is somebody with a System Manager "
+		"session running shell commands as the bench user — treat the account as compromised, "
+		"and read the output on the request row to see what they did. Turning off "
+		"“Allow App Install” in Server Settings stops this and every other subprocess this "
+		"app can start.",
+		source_doctype="App Install Request",
+		source_name=doc.name,
+	)
+
+	frappe.db.commit()
+	return run_install_request(doc.name)
+
+
 @frappe.whitelist()
 def site_config(bench: str, site: str) -> dict:
 	"""A site's configuration, with every secret redacted.

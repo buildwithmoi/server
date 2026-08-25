@@ -242,6 +242,22 @@ def for_command(label: str) -> list[Step]:
 	return make(CHECK, ("run", label, "Run the command and stream its output."))
 
 
+def for_console(label: str) -> list[Step]:
+	"""A console command: check, run, then re-read the bench.
+
+	The rescan is here BECAUSE the command was arbitrary, not despite it. For a
+	catalogue entry we know whether it can change the bench; for this one we
+	know nothing — a `git checkout` in an app directory moves a branch, and the
+	app list would keep showing the old one until somebody happened to rescan.
+	Re-reading afterwards is the only way the bench view stays true.
+	"""
+	return make(
+		("check", "Check before running", "Confirm the bench is usable and installs are allowed."),
+		("run", label, "Run it in the bench directory and stream the output."),
+		RESCAN,
+	)
+
+
 def for_ssl(mode: str, dry_run: bool) -> list[Step]:
 	if mode == "issue":
 		return make(

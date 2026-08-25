@@ -14,6 +14,7 @@ declare module 'vue' {
     BackupsDialog: typeof import('./src/components/BackupsDialog.vue')['default']
     BarTimeline: typeof import('./src/components/BarTimeline.vue')['default']
     BenchCommandDialog: typeof import('./src/components/BenchCommandDialog.vue')['default']
+    ConsoleDialog: typeof import('./src/components/ConsoleDialog.vue')['default']
     DataTable: typeof import('./src/components/DataTable.vue')['default']
     EmptyState: typeof import('./src/components/EmptyState.vue')['default']
     HealthPanel: typeof import('./src/components/HealthPanel.vue')['default']

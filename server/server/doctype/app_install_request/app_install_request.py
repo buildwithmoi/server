@@ -36,6 +36,7 @@ OP_PULL = "Pull"
 OP_COMMAND = "Command"
 OP_SSL = "SSL"
 OP_RESTORE = "Restore"
+OP_CONSOLE = "Console"
 
 #: Form labels for the two SSL operations, mapped to the modes `bench.ssl` uses.
 SSL_MODES = {"Issue Or Reinstall": "issue", "Renew": "renew"}
@@ -51,6 +52,8 @@ class AppInstallRequest(Document):
 			self._validate_ssl()
 		elif self.operation == OP_RESTORE:
 			self._validate_restore()
+		elif self.operation == OP_CONSOLE:
+			self._validate_console()
 		elif self.operation == OP_PULL:
 			self._validate_pull()
 		else:
@@ -63,6 +66,24 @@ class AppInstallRequest(Document):
 			frappe.throw(f"{self.branch!r} is not a valid branch name.")
 		if self.install_on_site and not VALID_SITE.match(self.install_on_site):
 			frappe.throw(f"{self.install_on_site!r} is not a valid site name.")
+
+	def _validate_console(self):
+		"""An arbitrary command, refused only when it is not a command at all.
+
+		The refusals live in `bench/console.py` so they can be tested without a
+		site; this is the half that needs the document. `app_name` doubles as
+		the human label everywhere a job is listed, so it carries the head of
+		the command — a dock full of entries all reading "Console" would be
+		useless the moment two are running.
+		"""
+		from server.bench import console
+
+		try:
+			self.console_command = console.validate(self.console_command)
+		except console.Refusal as exc:
+			frappe.throw(str(exc), title="Cannot Run That")
+
+		self.app_name = f"Console · {console.summarise(self.console_command, 40)}"
 
 	def _validate_command(self):
 		"""A command must exist in the catalogue and be one we will run.
@@ -256,6 +277,9 @@ class AppInstallRequest(Document):
 
 	def is_restore(self) -> bool:
 		return self.operation == OP_RESTORE
+
+	def is_console(self) -> bool:
+		return self.operation == OP_CONSOLE
 
 	def resolve_backup(self, bench_path: str):
 		"""The backup this request restores, however it was chosen.

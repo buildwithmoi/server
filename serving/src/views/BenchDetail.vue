@@ -24,6 +24,13 @@
 			@started="onStarted"
 		/>
 
+		<ConsoleDialog
+			v-model="showConsole"
+			:bench="name"
+			:bench-path="bench.bench_path || ''"
+			@started="onStarted"
+		/>
+
 		<SslDialog v-model="showSsl" :bench="name" @started="onStarted" />
 
 		<LogsDialog v-model="showLogs" :bench="name" />
@@ -211,6 +218,7 @@ import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import BenchCommandDialog from "../components/BenchCommandDialog.vue";
+import ConsoleDialog from "../components/ConsoleDialog.vue";
 import SslDialog from "../components/SslDialog.vue";
 import LogsDialog from "../components/LogsDialog.vue";
 import BackupsDialog from "../components/BackupsDialog.vue";
@@ -226,6 +234,7 @@ const resource = benchResource();
 const rescanning = ref(false);
 const showInstall = ref(false);
 const showCommands = ref(false);
+const showConsole = ref(false);
 const showSsl = ref(false);
 const showLogs = ref(false);
 const showBackups = ref(false);
@@ -280,6 +289,14 @@ const actions = computed(() => [
 		icon: "terminal",
 		description: "migrate, backup, clear cache, and the rest",
 		onClick: () => (showCommands.value = true),
+		condition: () => bench.value.exists_on_disk !== false,
+	},
+	{
+		label: "Run any command…",
+		icon: "terminal",
+		description: "A shell in the bench directory, for the one-off the catalogue has no entry for. Recorded.",
+		danger: true,
+		onClick: () => (showConsole.value = true),
 		condition: () => bench.value.exists_on_disk !== false,
 	},
 	{

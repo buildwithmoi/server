@@ -131,6 +131,8 @@ def _preflight(request, bench_doc, settings, on_step=None) -> list[str]:
 
 	if request.is_command():
 		return _preflight_command(request, bench_doc)
+	if request.is_console():
+		return _preflight_console(request)
 	if request.is_ssl():
 		return _preflight_ssl(request, bench_doc)
 	if request.is_restore():
@@ -229,6 +231,29 @@ def _preflight_ssl(request, bench_doc) -> list[str]:
 	return [
 		"Renew certificates" + (" (dry run — nothing installed)" if request.ssl_dry_run else ""),
 		"nginx stops for the check and starts again afterwards, even if renewal fails.",
+	]
+
+
+def _preflight_console(request) -> list[str]:
+	"""Re-validate the command, and say plainly what will not work.
+
+	The note is not decoration. `stdin` is closed for every job in this app, so
+	an interactive program exits immediately — and the operator who typed `top`
+	needs to read WHY in the log rather than conclude the feature is broken.
+	"""
+	from server.bench import console
+
+	try:
+		command = console.validate(request.console_command)
+	except console.Refusal as exc:
+		raise InstallAborted(str(exc)) from exc
+
+	# Deliberately does NOT echo the command — the run step does that, and
+	# printing it in both places made the log show it twice.
+	del command
+	return [
+		f"Running in {request.bench} with stdin closed.",
+		"Anything interactive (vim, top, mariadb, bench console) will exit straight away.",
 	]
 
 
@@ -746,6 +771,10 @@ def _plan_for(request) -> list:
 	if request.is_command():
 		command = commands.get(request.bench_command or "")
 		return step_plan.for_command(command.label if command else "Run the command")
+	if request.is_console():
+		from server.bench import console
+
+		return step_plan.for_console(console.summarise(request.console_command or "", 50))
 	if request.is_ssl():
 		return step_plan.for_ssl(request.ssl_mode_key(), bool(request.ssl_dry_run))
 	if request.is_restore():
@@ -1007,6 +1036,28 @@ def run_install_request(name: str) -> dict:
 							error=_explain_failure(
 								code, timed_out, command.timeout, request, f"bench {command.label.lower()}"
 							),
+						)
+				elif request.is_console():
+					from server.bench import console
+
+					step("run")
+					argv = console.build_argv(request.console_command)
+					# Stored as the operator typed it, not as the three-element
+					# argv — `/bin/bash -lc "…"` in the log would be noise around
+					# the only part anyone wants to read. Scrubbed on the way in
+					# like every other line, in case a secret was typed into it.
+					shown = siteconfig.scrub(request.console_command)
+					request.db_set("command", shown, update_modified=False)
+					frappe.db.commit()
+					emit(f"$ {shown}")
+
+					timeout = console.DEFAULT_TIMEOUT
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit, should_cancel)
+					if code != 0:
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_failure(code, timed_out, timeout, request, "the command"),
 						)
 				elif request.is_ssl():
 					step("issue" if request.ssl_mode_key() == ssl.MODE_ISSUE else "renew")
@@ -1322,6 +1373,10 @@ def _worst_case_seconds(request, settings) -> int:
 	if request.is_command():
 		command = commands.get(request.bench_command or "")
 		return command.timeout if command else budget
+	if request.is_console():
+		from server.bench import console
+
+		return console.DEFAULT_TIMEOUT
 	if request.is_ssl():
 		return ssl.SSL_TIMEOUT
 	if request.is_restore():

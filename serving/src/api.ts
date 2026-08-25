@@ -543,6 +543,10 @@ export function runInstallResource() {
 	return createResource({ url: `${M}.run_install_request` });
 }
 
+export function runConsoleResource() {
+	return createResource({ url: `${M}.run_console_command` });
+}
+
 export function checkRepoResource() {
 	return createResource({ url: `${M}.check_repo_access` });
 }
