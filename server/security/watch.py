@@ -30,6 +30,7 @@ from server.server.doctype.server_settings.server_settings import get_settings
 #: How often each detector is scheduled, so "late" is derived from its own
 #: cadence rather than one global guess. Must match hooks.py.
 SCHEDULE_SECONDS = {
+	"site": 60 * 60,
 	"sshd": 15 * 60,
 	"filesystem": 15 * 60,
 	"filesystem-deep": 24 * 60 * 60,
@@ -1111,3 +1112,142 @@ def scan_sshd(record_only: bool = False) -> dict:
 
 def run_sshd_scan() -> dict:
 	return _scheduled("sshd", scan_sshd)
+
+
+# ----------------------------------------------------------------------
+# The application on top of the operating system
+# ----------------------------------------------------------------------
+
+
+def _site_accounts() -> dict:
+	"""Who can use this site, and with what.
+
+	Reads names and flags only. No password hashes, no API secrets, no session
+	keys — the same rule the rest of this package follows, and it matters more
+	here because everything in this table is a credential of some kind.
+	"""
+	managers = frappe.get_all(
+		"Has Role",
+		filters={"role": "System Manager", "parenttype": "User"},
+		pluck="parent",
+		limit_page_length=0,
+	)
+	enabled_managers = frappe.get_all(
+		"User",
+		filters={"name": ["in", managers or [""]], "enabled": 1},
+		pluck="name",
+		limit_page_length=0,
+	)
+
+	dormant = frappe.get_all(
+		"User",
+		filters={
+			"enabled": 1,
+			"last_login": ["is", "not set"],
+			"user_type": "System User",
+			"name": ["not in", ("Administrator", "Guest")],
+		},
+		pluck="name",
+		limit_page_length=0,
+	)
+
+	keyed = frappe.get_all(
+		"User",
+		filters={"api_key": ["is", "set"], "enabled": 1},
+		pluck="name",
+		limit_page_length=0,
+	)
+
+	administrator = frappe.db.get_value("User", "Administrator", ["enabled"], as_dict=True)
+	# Whether a password exists, never what it is. `__Auth` holds the hash, and
+	# asking whether the ROW exists answers the question without reading it.
+	has_password = bool(
+		frappe.db.sql(
+			"""SELECT 1 FROM `__Auth`
+			   WHERE doctype = 'User' AND name = 'Administrator' AND fieldname = 'password'
+			   LIMIT 1"""
+		)
+	)
+
+	return {
+		"system_managers": enabled_managers,
+		"enabled_never_logged_in": dormant,
+		"api_key_holders": keyed,
+		"administrator_enabled": bool(administrator and administrator.enabled),
+		"administrator_has_password": has_password,
+	}
+
+
+def _bench_sites(bench_path: str) -> list[str]:
+	"""Site directories on this bench.
+
+	A directory holding a `site_config.json`, which is what makes it a site —
+	`sites/` also holds `assets`, `apps.txt` and the common config.
+	"""
+	import os
+
+	sites_dir = os.path.join(bench_path, "sites")
+	try:
+		names = sorted(os.listdir(sites_dir))
+	except OSError:
+		return []
+	return [
+		name
+		for name in names
+		if os.path.isfile(os.path.join(sites_dir, name, "site_config.json"))
+	]
+
+
+def scan_site(record_only: bool = False) -> dict:
+	"""Check the security state of the frappe sites this bench serves.
+
+	Every other detector here watches the operating system. This one watches
+	the application on top of it, which is where the credentials actually are.
+	"""
+	from server.security import site, site_rules
+
+	settings = get_settings()
+	bench_path = settings.bench_root or "/home/patoo/fb-16-server"
+	# The bench this app is installed in, not every bench on the box: reading
+	# another bench's site configs would mean this app holding credentials for
+	# sites it has nothing to do with.
+	import os
+
+	if not os.path.isdir(os.path.join(bench_path, "sites")):
+		bench_path = frappe.utils.get_bench_path()
+
+	sites = _bench_sites(bench_path)
+	try:
+		accounts = _site_accounts()
+	except Exception as exc:  # noqa: BLE001
+		frappe.logger("server").warning(f"site account inventory failed: {exc}")
+		accounts = {}
+
+	snapshot = site.collect(bench_path, sites, accounts=accounts)
+	findings = site_rules.judge(snapshot)
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"sites": len(sites),
+		"configs": len(snapshot.configs),
+		"findings": len(findings),
+		"raised": len(raised),
+	}
+
+
+def run_site_scan() -> dict:
+	return _scheduled("site", scan_site)

@@ -234,7 +234,14 @@ scheduler_events = {
 	# moments ago. It is idempotent — a second run over the same window
 	# rewrites the same rows — which is what makes it safe on a schedule and
 	# safe to run by hand while looking at something.
-	"hourly": ["server.ssh.sessionize.enqueue_sessionize"],
+	"hourly": [
+		"server.ssh.sessionize.enqueue_sessionize",
+		# The application's own security state: credentials on disk, dangerous
+		# settings, backup recency, who holds System Manager. Hourly rather
+		# than quarter-hourly — these change when a person changes them, and
+		# a backup going stale is measured in days.
+		"server.security.watch.run_site_scan",
+	],
 	"daily": [
 		# `dpkg --verify` re-hashes every file every installed package owns:
 		# 40 seconds of solid I/O here, against 0.8 for the rest of the
