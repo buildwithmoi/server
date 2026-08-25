@@ -295,6 +295,13 @@ const props = defineProps({
 	sites: { type: Array, default: () => [] },
 	/** Which tab to open on. The menu has a separate entry for each. */
 	initialOperation: { type: String, default: "Clone" },
+	/**
+	 * Repository and branch to start from, when opened from somewhere that
+	 * already knows them — the restore dialog naming an app the backup needs.
+	 * The account is still chosen by hand; only the operator knows which one
+	 * holds it.
+	 */
+	prefill: { type: Object, default: null },
 });
 const emit = defineEmits(["update:modelValue", "started"]);
 
@@ -441,6 +448,9 @@ watch(
 		if (!isOpen) return;
 		error.value = "";
 		operation.value = props.initialOperation;
+		// Applied before the repository list loads, so the branch survives the
+		// profile watcher that clears both when an account is chosen.
+		wanted.value = props.prefill ? { ...props.prefill } : null;
 		profilesRes.fetch().then(() => {
 			if (!profile.value) {
 				profile.value = (profilesRes.data || []).find((p) => p.is_default)?.name
@@ -452,11 +462,31 @@ watch(
 	},
 );
 
+/** A repository/branch we were asked to start from, until it is applied. */
+const wanted = ref(null);
+
 watch(profile, (value) => {
 	repo.value = null;
 	branch.value = null;
 	if (value) reposRes.submit({ profile: value });
 });
+
+// Once an account's repositories arrive, select the one we were sent looking
+// for. Matched by name rather than assumed to exist: an app in a backup may
+// simply not be in the account that was picked, and saying nothing would be
+// better than selecting the wrong repository.
+watch(
+	() => reposRes.data,
+	(repos) => {
+		const target = wanted.value;
+		if (!target || !repos?.length) return;
+		const match = repos.find((r) => r.name === target.repo || r.repo === target.repo);
+		if (!match) return;
+		repo.value = { label: match.name || match.repo, value: match.name || match.repo };
+		if (target.branch) branch.value = { label: target.branch, value: target.branch };
+		wanted.value = null;
+	},
+);
 
 /**
  * Selecting a repository fills in its default branch IMMEDIATELY, from the

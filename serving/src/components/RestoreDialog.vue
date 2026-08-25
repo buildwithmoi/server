@@ -202,6 +202,12 @@
 									<span class="u-item-label u-mono block">{{ app.app_name }}</span>
 									<span class="u-item-detail block">{{ app.note }}</span>
 								</span>
+								<Button
+									v-if="!app.present"
+									size="sm"
+									class="shrink-0"
+									@click="getApp(app)"
+								>Get it</Button>
 								<span class="u-item-detail shrink-0 tabular-nums">
 									{{ app.git_branch || "—" }}
 								</span>
@@ -384,7 +390,7 @@ const props = defineProps({
 	sites: { type: Array, default: () => [] },
 	defaultSite: { type: String, default: "" },
 });
-const emit = defineEmits(["update:modelValue", "started"]);
+const emit = defineEmits(["update:modelValue", "started", "install-app"]);
 
 const SOURCES = [
 	{
@@ -540,6 +546,18 @@ function optionsFor(kind) {
 
 const needs = computed(() => contents.data || null);
 const missingApps = computed(() => needs.value?.missing || []);
+
+/**
+ * Hand the app off to the install dialog, with its branch already filled in.
+ *
+ * The restore stays open behind it: the operator is part way through a form
+ * they will come back to, and losing the site, the dump and the typed
+ * confirmation to fetch a missing app would make the check more annoying than
+ * the failure it prevents.
+ */
+function getApp(app) {
+	emit("install-app", { repo: app.app_name, branch: app.git_branch || "" });
+}
 
 function pickFile() {
 	fileInput.value?.click();

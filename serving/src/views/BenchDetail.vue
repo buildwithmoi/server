@@ -50,6 +50,7 @@
 			:sites="bench.sites.map((s) => s.site_name)"
 			:default-site="bench.default_site || ''"
 			@started="onStarted"
+			@install-app="onInstallApp"
 		/>
 
 		<InstallDialog
@@ -57,6 +58,7 @@
 			:bench="name"
 			:sites="bench.sites.map((s) => s.site_name)"
 			:initial-operation="installMode"
+			:prefill="installPrefill"
 			@started="onStarted"
 		/>
 
@@ -230,6 +232,7 @@ const showBackups = ref(false);
 const showConfig = ref(false);
 const showRestore = ref(false);
 const installMode = ref("Clone");
+const installPrefill = ref(null);
 
 const name = computed(() => String(route.params.name || ""));
 const bench = computed(() => resource.data || { apps: [], sites: [], installs: [] });
@@ -330,6 +333,14 @@ const actions = computed(() => [
 
 function openInstall(mode) {
 	installMode.value = mode;
+	installPrefill.value = null;
+	showInstall.value = true;
+}
+
+/** Opened from the restore dialog, which knows the app and its branch. */
+function onInstallApp(prefill) {
+	installMode.value = "Clone";
+	installPrefill.value = prefill;
 	showInstall.value = true;
 }
 
