@@ -20,6 +20,7 @@ declare module 'vue' {
     InstallDialog: typeof import('./src/components/InstallDialog.vue')['default']
     JobDock: typeof import('./src/components/JobDock.vue')['default']
     JobSteps: typeof import('./src/components/JobSteps.vue')['default']
+    LogsDialog: typeof import('./src/components/LogsDialog.vue')['default']
     OutcomeMark: typeof import('./src/components/OutcomeMark.vue')['default']
     RankBars: typeof import('./src/components/RankBars.vue')['default']
     RestoreDialog: typeof import('./src/components/RestoreDialog.vue')['default']

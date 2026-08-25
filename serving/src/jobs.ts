@@ -15,7 +15,7 @@
  */
 
 import { computed, ref } from "vue";
-import { installRequestResource, installRequestsResource } from "./api";
+import { cancelInstallResource, installRequestResource, installRequestsResource } from "./api";
 
 export interface JobStep {
 	key: string;
@@ -183,4 +183,18 @@ export function formatElapsed(seconds: number): string {
 	const s = seconds % 60;
 	if (m < 60) return `${m}m ${String(s).padStart(2, "0")}s`;
 	return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * Ask a running job to stop.
+ *
+ * The worker owns the process, so this only raises a flag it polls — there is
+ * nothing in the browser or the web process that could signal a subprocess in
+ * another OS process. The status the poller reports next is the real answer.
+ */
+export async function cancelJob(name: string): Promise<string> {
+	const job = jobs.value[name];
+	if (job) job.status = "Cancelling";
+	const result = await cancelInstallResource().submit({ name });
+	return result?.message || "Stopping.";
 }

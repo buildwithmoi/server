@@ -90,6 +90,14 @@
 									class="text-[11.5px] text-[var(--ink-faint)] hover:text-[var(--ink)]"
 									@click.stop="dismiss(job.name)"
 								>Dismiss</button>
+								<!-- Stopping mid-way leaves partial work behind, so the
+								     label says so rather than implying a clean undo. -->
+								<button
+									v-else
+									class="u-danger text-[11.5px] hover:underline disabled:opacity-50"
+									:disabled="cancelling.has(job.name)"
+									@click.stop="stop(job)"
+								>{{ cancelling.has(job.name) ? "Stopping…" : "Stop this" }}</button>
 							</div>
 						</div>
 					</Transition>
@@ -103,8 +111,22 @@
 import { nextTick, onUnmounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import JobSteps from "./JobSteps.vue";
+import { toast } from "frappe-ui";
 import OutcomeMark from "./OutcomeMark.vue";
-import { allJobs, dismiss, elapsed, expand, expandedJob, formatElapsed } from "../jobs";
+import { allJobs, cancelJob, dismiss, elapsed, expand, expandedJob, formatElapsed } from "../jobs";
+
+/** Jobs a stop has been asked for, so the button cannot be pressed twice. */
+const cancelling = ref(new Set());
+
+async function stop(job) {
+	cancelling.value = new Set(cancelling.value).add(job.name);
+	try {
+		toast.success(await cancelJob(job.name));
+	} catch (err) {
+		cancelling.value = new Set([...cancelling.value].filter((n) => n !== job.name));
+		toast.error(err.messages?.[0] || err.message || "Could not stop it");
+	}
+}
 
 const logEls = ref({});
 const now = ref(Date.now());

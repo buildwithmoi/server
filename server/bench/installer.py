@@ -45,6 +45,22 @@ STREAM_INTERVAL = 0.25
 #: leaves a usable trail rather than an empty Output field.
 PERSIST_EVERY_LINES = 40
 
+#: How often a running job checks whether someone asked it to stop.
+CANCEL_POLL_SECONDS = 2.0
+
+#: Cancellation goes through Redis, not the database.
+#:
+#: The worker sits inside one long transaction, and MariaDB's REPEATABLE READ
+#: means a flag committed by the web process afterwards is invisible to it — the
+#: worker would keep reading its own stale snapshot and never see the request.
+#: The cache has no such snapshot.
+CANCEL_KEY = "server:cancel-request:{name}"
+
+#: A job whose worker died leaves the row saying Running forever, and for a
+#: restore that also leaves the database root password sitting in the record.
+#: Anything past its own timeout by this much is presumed dead.
+STALE_GRACE_SECONDS = 300
+
 #: git redraws progress with \r; both count as end-of-line for the log.
 _LINE_BREAK = re.compile(r"[\r\n]")
 
@@ -362,7 +378,9 @@ def build_install_app_argv(request, settings) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> tuple[int, bool]:
+def _stream(
+	argv: list[str], cwd: str, env: dict, timeout: int, on_line, should_cancel=None
+) -> tuple[int, bool]:
 	"""Run a command, streaming combined output. Returns (exit_code, timed_out).
 
 	The flag matters. A watchdog kill surfaces as exit -15, which is
@@ -402,6 +420,7 @@ def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> tupl
 	)
 
 	timed_out = threading.Event()
+	finished = threading.Event()
 
 	def _on_deadline():
 		timed_out.set()
@@ -410,6 +429,24 @@ def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> tupl
 	watchdog = threading.Timer(timeout, _on_deadline)
 	watchdog.daemon = True
 	watchdog.start()
+
+	# Cancellation runs on its own poller for the same reason the timeout does:
+	# the read loop blocks on the pipe, so a job that has gone quiet — which is
+	# exactly the one you want to cancel — would never notice the request.
+	def _watch_for_cancel():
+		while not finished.wait(CANCEL_POLL_SECONDS):
+			try:
+				if should_cancel():
+					on_line("--- cancelled; stopping the process group ---")
+					_kill_group(proc)
+					return
+			except Exception:  # noqa: BLE001 - a broken check must not kill the job
+				return
+
+	canceller = None
+	if should_cancel:
+		canceller = threading.Thread(target=_watch_for_cancel, daemon=True)
+		canceller.start()
 
 	try:
 		pending = ""
@@ -435,6 +472,7 @@ def _stream(argv: list[str], cwd: str, env: dict, timeout: int, on_line) -> tupl
 			on_line(pending.rstrip())
 	finally:
 		watchdog.cancel()
+		finished.set()
 		if proc.stdout:
 			proc.stdout.close()
 		try:
@@ -486,6 +524,64 @@ def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
 # ---------------------------------------------------------------------------
 
 
+def reap_stale_requests() -> dict:
+	"""Close out jobs whose worker is gone.
+
+	A worker can die between picking a job up and finishing it — OOM killer, a
+	restarted supervisor, a `bench restart` during a deploy. Nothing else
+	notices: the row says Running, the dock spins forever, and the lock file
+	stays behind so the next attempt on that bench is refused too.
+
+	For a restore it is worse than cosmetic. The database root password is
+	cleared in finish(), and a worker that was killed never reaches it — so the
+	credential sits in the record until something clears it. That something is
+	this.
+
+	Deliberately generous. A job is only presumed dead once it is past its own
+	timeout by a wide margin, because killing a live job that was merely slow
+	would be far worse than leaving a dead one for another five minutes.
+	"""
+	settings = get_settings()
+	limit = settings.get_install_timeout() + STALE_GRACE_SECONDS
+	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-limit)
+
+	stale = frappe.get_all(
+		"App Install Request",
+		filters={"status": ["in", ("Running", "Queued")], "modified": ["<", cutoff]},
+		fields=["name", "status", "operation", "started_at"],
+	)
+
+	closed = []
+	for row in stale:
+		try:
+			request = frappe.get_doc("App Install Request", row.name)
+			request.db_set(
+				{
+					"status": "Failed",
+					"exit_code": NEVER_RAN,
+					"finished_at": frappe.utils.now_datetime(),
+					"error_summary": (
+						f"Stopped reporting. This was still marked {row.status} more than "
+						f"{limit // 60} minutes after it should have finished, so its worker is "
+						"presumed dead. Whether the command itself completed is unknown — check "
+						"the bench before re-running."
+					),
+				},
+				update_modified=False,
+			)
+			if request.is_restore():
+				request.clear_restore_secrets()
+			frappe.cache.delete_value(CANCEL_KEY.format(name=row.name))
+			closed.append(row.name)
+		except Exception:
+			frappe.logger("server").warning(f"could not reap {row.name}", exc_info=True)
+
+	if closed:
+		frappe.db.commit()
+		frappe.logger("server").info(f"reaped stale install requests: {', '.join(closed)}")
+	return {"checked": len(stale), "closed": closed}
+
+
 def _plan_for(request) -> list:
 	"""The steps this request will run through, decided before it starts."""
 	if request.is_command():
@@ -531,6 +627,9 @@ def run_install_request(name: str) -> dict:
 			STEP_EVENT, {"name": name, "steps": payload}, doctype="App Install Request", docname=name
 		)
 
+	def should_cancel() -> bool:
+		return bool(frappe.cache.get_value(CANCEL_KEY.format(name=name)))
+
 	def step(key: str) -> None:
 		plan.start(key)
 		push_steps(force=True)
@@ -551,6 +650,19 @@ def run_install_request(name: str) -> dict:
 
 	def finish(status: str, exit_code: int | None = None, error: str | None = None) -> dict:
 		started = request.started_at
+
+		# A cancelled job reports as cancelled, not as a failure. Both arrive
+		# here as a non-zero exit — the process really was killed — but "you
+		# stopped this" and "this broke" are different things to be told, and
+		# only one of them is worth investigating.
+		if status == "Failed" and should_cancel():
+			status = "Cancelled"
+			error = (
+				"Cancelled. The command was stopped part way through, so whatever it had already "
+				"done is still done — check the steps above for how far it got."
+			)
+		frappe.cache.delete_value(CANCEL_KEY.format(name=name))
+
 		if status in ("Success", "Completed With Warnings"):
 			plan.succeed()
 			plan.abandon("Not needed.")
@@ -632,7 +744,7 @@ def run_install_request(name: str) -> dict:
 
 					# The catalogue carries its own timeout: a clear-cache should
 					# not inherit the hour a bench update legitimately needs.
-					code, timed_out = _stream(argv, bench_doc.bench_path, env, command.timeout, emit)
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, command.timeout, emit, should_cancel)
 					if code != 0:
 						return finish(
 							"Failed",
@@ -654,7 +766,7 @@ def run_install_request(name: str) -> dict:
 					frappe.db.commit()
 					emit(f"$ {' '.join(argv)}")
 
-					code, timed_out = _stream(argv, bench_doc.bench_path, env, ssl.SSL_TIMEOUT, emit)
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, ssl.SSL_TIMEOUT, emit, should_cancel)
 					if code != 0:
 						return finish(
 							"Failed",
@@ -681,7 +793,7 @@ def run_install_request(name: str) -> dict:
 						with_files = bool(request.restore_public_files or request.restore_private_files)
 						safety = restore.build_backup_argv(settings.bench_executable, site, with_files)
 						emit(f"$ {' '.join(safety)}")
-						code, timed_out = _stream(safety, bench_doc.bench_path, env, timeout, emit)
+						code, timed_out = _stream(safety, bench_doc.bench_path, env, timeout, emit, should_cancel)
 						if code != 0:
 							# Refuse to continue. The backup is the only thing
 							# standing between a bad restore and lost data, so
@@ -716,7 +828,7 @@ def run_install_request(name: str) -> dict:
 					frappe.db.commit()
 					emit(f"$ {shown}")
 
-					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit, should_cancel)
 					if code != 0:
 						return finish(
 							"Failed",
@@ -737,7 +849,7 @@ def run_install_request(name: str) -> dict:
 
 					# cwd is the APP, not the bench: git has to run inside the
 					# checkout it is updating.
-					code, timed_out = _stream(argv, request.app_path, env, timeout, emit)
+					code, timed_out = _stream(argv, request.app_path, env, timeout, emit, should_cancel)
 					if code != 0:
 						return finish(
 							"Failed",
@@ -751,7 +863,7 @@ def run_install_request(name: str) -> dict:
 					frappe.db.commit()
 					emit(f"$ {' '.join(argv)}")
 
-					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit, should_cancel)
 					if code != 0:
 						# Ask the FILESYSTEM whether the work happened, rather than
 						# trusting the exit code alone. This is not string-matching
@@ -792,7 +904,7 @@ def run_install_request(name: str) -> dict:
 						# (code, timed_out) tuple to `code`, so the comparison
 						# below was always true and a successful install-app was
 						# reported as a failure every single time.
-						code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+						code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit, should_cancel)
 						if code != 0:
 							return finish(
 								"Failed",

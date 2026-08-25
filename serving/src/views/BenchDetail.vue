@@ -9,6 +9,10 @@
 				<template #prefix><Icon name="lock" :size="14" /></template>
 				Set SSL
 			</Button>
+			<Button @click="showLogs = true">
+				<template #prefix><Icon name="layers" :size="14" /></template>
+				Logs
+			</Button>
 			<ActionMenu label="Actions" :options="actions" />
 		</template>
 
@@ -21,6 +25,8 @@
 		/>
 
 		<SslDialog v-model="showSsl" :bench="name" @started="onStarted" />
+
+		<LogsDialog v-model="showLogs" :bench="name" />
 
 		<RestoreDialog
 			v-model="showRestore"
@@ -189,6 +195,7 @@ import OutcomeMark from "../components/OutcomeMark.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import BenchCommandDialog from "../components/BenchCommandDialog.vue";
 import SslDialog from "../components/SslDialog.vue";
+import LogsDialog from "../components/LogsDialog.vue";
 import RestoreDialog from "../components/RestoreDialog.vue";
 import InstallDialog from "../components/InstallDialog.vue";
 import Skeleton from "../components/Skeleton.vue";
@@ -201,6 +208,7 @@ const rescanning = ref(false);
 const showInstall = ref(false);
 const showCommands = ref(false);
 const showSsl = ref(false);
+const showLogs = ref(false);
 const showRestore = ref(false);
 const installMode = ref("Clone");
 

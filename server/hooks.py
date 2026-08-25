@@ -170,6 +170,13 @@ scheduler_events = {
 		# Offset by two minutes so a geolocation batch never starts in the same
 		# tick as an ingest run.
 		"2-59/5 * * * *": ["server.geo.registry.enqueue_resolve_pending"],
+		# A worker can die between picking a job up and finishing it, and
+		# nothing else notices: the row says Running forever, the dock spins,
+		# and for a restore the database root password stays in the record
+		# because the code that clears it never ran. Ten minutes is frequent
+		# enough to matter and rare enough to cost nothing — the query is one
+		# indexed range scan that almost always returns nothing.
+		"*/10 * * * *": ["server.bench.installer.reap_stale_requests"],
 	},
 	# "daily" is added together with the SSH Session doctype — a hook pointing at
 	# a module that does not exist yet would create a Scheduled Job Type row that

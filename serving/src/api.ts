@@ -235,6 +235,30 @@ export interface SslReadiness {
 	certificates_note: string;
 }
 
+export interface LogFile {
+	name: string;
+	path: string;
+	scope: string;
+	size: number;
+	size_text: string;
+	modified: number;
+	modified_text: string;
+	description: string;
+	is_rotation: boolean;
+}
+
+export function logsResource() {
+	return createResource({ url: `${M}.list_logs` });
+}
+
+export function readLogResource() {
+	return createResource({ url: `${M}.read_log` });
+}
+
+export function cancelInstallResource() {
+	return createResource({ url: `${M}.cancel_install_request` });
+}
+
 export function systemHealthResource() {
 	return createResource({ url: `${M}.system_health` });
 }

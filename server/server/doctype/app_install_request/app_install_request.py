@@ -284,8 +284,17 @@ class AppInstallRequest(Document):
 		They are only ever needed for the length of one subprocess. Keeping a
 		database root password after that is a standing risk for no benefit,
 		and this app exists because a server was broken into.
+
+		The delete has to hit `__Auth`, not the column. A Password field stores
+		the encrypted value in `__Auth` and leaves a `*****` placeholder in the
+		doctype's own column, so clearing the column removes the mask and leaves
+		the secret exactly where it was — which is what an earlier version of
+		this method did, and it looked like it was working.
 		"""
+		from frappe.utils.password import remove_encrypted_password
+
 		for field in ("restore_db_password", "restore_encryption_key"):
+			remove_encrypted_password(self.doctype, self.name, field)
 			if self.get(field):
 				self.db_set(field, None, update_modified=False)
 

@@ -17,6 +17,7 @@ import frappe
 from server import dashboard, system
 from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer
+from server.bench import logs as bench_logs
 from server.bench import restore as bench_restore
 from server.bench import ssl as bench_ssl
 from server.geo import registry
@@ -508,6 +509,38 @@ def run_bench_command(
 
 
 @frappe.whitelist()
+def list_logs(bench: str) -> dict:
+	"""Every log file this bench keeps, most recently written first."""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	files = bench_logs.list_logs(doc.bench_path, doc.site_names())
+	return {"bench": doc.name, "files": [f.__dict__ for f in files]}
+
+
+@frappe.whitelist()
+def read_log(bench: str, path: str, lines: int = 300, search: str | None = None) -> dict:
+	"""The tail of one log file, optionally filtered.
+
+	The path comes from a browser, so it is checked against the bench's own log
+	directories with resolved paths before anything is opened. A log reader that
+	will read any file on the server is a file-disclosure hole, not a feature.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	roots = [directory for directory, _ in bench_logs.log_directories(doc.bench_path, doc.site_names())]
+
+	if not bench_logs.is_inside(roots, path):
+		frappe.throw(
+			f"{path} is not one of {doc.name}'s log files.",
+			title="Not A Log File",
+		)
+
+	result = bench_logs.tail(path, int(lines or 300), (search or "").strip() or None)
+	result["path"] = path
+	return result
+
+
+@frappe.whitelist()
 def system_health() -> dict:
 	"""Disk, memory, load and where the disk went.
 
@@ -823,6 +856,44 @@ def list_install_requests(start: int = 0, page_length: int = 20) -> dict:
 			limit_page_length=min(max(int(page_length), 1), 100),
 		),
 		"total": frappe.db.count("App Install Request"),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def cancel_install_request(name: str) -> dict:
+	"""Ask a running job to stop.
+
+	Sets a flag the worker polls rather than reaching for the process directly:
+	the process belongs to a worker in another OS process, and there is nothing
+	in this one that could signal it.
+
+	A job that has already finished is left alone — "cancel" arriving a second
+	after "done" must not rewrite a successful run as cancelled.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("App Install Request", name)
+
+	if doc.is_terminal():
+		return {"name": name, "status": doc.status, "cancelled": False, "message": "Already finished."}
+
+	if doc.status == "Queued":
+		# Never picked up, so there is no process to kill and nothing has
+		# happened yet. Close it out directly.
+		doc.db_set(
+			{"status": "Cancelled", "error_summary": "Cancelled before it started.", "exit_code": -1},
+			update_modified=False,
+		)
+		if doc.is_restore():
+			doc.clear_restore_secrets()
+		frappe.db.commit()
+		return {"name": name, "status": "Cancelled", "cancelled": True}
+
+	frappe.cache.set_value(installer.CANCEL_KEY.format(name=name), 1, expires_in_sec=3600)
+	return {
+		"name": name,
+		"status": doc.status,
+		"cancelled": True,
+		"message": "Stopping. The step that is running will be killed.",
 	}
 
 
