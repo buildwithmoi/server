@@ -267,6 +267,10 @@ scheduler_events = {
 		# "still fine" costs a real server real throughput. Debian's own
 		# debsums cron runs weekly.
 		"server.security.watch.run_filesystem_deep_scan",
+		# What software arrived or left, and what is waiting to be patched.
+		# Daily: dpkg.log is a record of the past and does not become more
+		# true for being read every quarter of an hour.
+		"server.security.watch.run_package_scan",
 	],
 
 }

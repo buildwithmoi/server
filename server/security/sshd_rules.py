@@ -360,6 +360,37 @@ def judge_keys(snapshot: sshd.Snapshot) -> list[Finding]:
 	return findings
 
 
+def judge_effective_drift(previous_hash: str, snapshot: sshd.Snapshot) -> list[Finding]:
+	"""The MERGED configuration changed, whatever the files say.
+
+	This is the case the spec singled out, and it is not the same as a file
+	changing: cloud-init rewrites its drop-in on some reboots and silently
+	re-enables password authentication, and an OpenSSH upgrade can move a
+	default with no file edit at all. Both change what sshd DOES while leaving
+	the file somebody would think to check exactly as it was.
+
+	The specific values are judged by the rules above every scan, so this
+	reports the movement rather than the value — including a change to
+	something no rule here has an opinion about yet.
+	"""
+	if not previous_hash or not snapshot.effective_hash or previous_hash == snapshot.effective_hash:
+		return []
+
+	return [
+		_finding(
+			HIGH,
+			"The effective SSH configuration changed",
+			f"The merged settings sshd is actually using are no longer what they were "
+			f"({previous_hash[:12]} → {snapshot.effective_hash[:12]}). This is independent of the "
+			f"config FILES, which are reported separately — a drop-in rewritten on reboot, or a "
+			f"default moved by an upgrade, changes this without changing those.",
+			"Compare against what you expect: `sudo sshd -T | sort`. Any authentication finding "
+			"raised alongside this one says what actually moved. If nothing else was raised, "
+			"something changed that this app has no rule about yet, which is worth reading anyway.",
+		)
+	]
+
+
 def judge_drift(previous: dict, snapshot: sshd.Snapshot) -> list[Finding]:
 	"""An SSH configuration file is not what it was.
 
@@ -473,7 +504,11 @@ ALL_RULES = (
 )
 
 
-def judge(snapshot: sshd.Snapshot, previous_hashes: dict | None = None) -> list[Finding]:
+def judge(
+	snapshot: sshd.Snapshot,
+	previous_hashes: dict | None = None,
+	previous_effective: str = "",
+) -> list[Finding]:
 	"""Every rule, in the order a person would want to read them.
 
 	WHEN THE EFFECTIVE CONFIGURATION COULD NOT BE READ, THE SETTINGS RULES DO
@@ -494,5 +529,6 @@ def judge(snapshot: sshd.Snapshot, previous_hashes: dict | None = None) -> list[
 	for rule in rules:
 		findings.extend(rule(snapshot))
 	findings.extend(judge_drift(previous_hashes or {}, snapshot))
+	findings.extend(judge_effective_drift(previous_effective, snapshot))
 	findings.extend(judge_coverage(list(snapshot.surfaces)))
 	return findings

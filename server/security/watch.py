@@ -30,6 +30,7 @@ from server.server.doctype.server_settings.server_settings import get_settings
 #: How often each detector is scheduled, so "late" is derived from its own
 #: cadence rather than one global guess. Must match hooks.py.
 SCHEDULE_SECONDS = {
+	"packages": 24 * 60 * 60,
 	"self": 60 * 60,
 	"web": 60 * 60,
 	"site": 60 * 60,
@@ -1061,6 +1062,7 @@ def run_filesystem_deep_scan() -> dict:
 # ----------------------------------------------------------------------
 
 SSHD_BASELINE_PREFIX = "sshd-config:"
+SSHD_EFFECTIVE_KEY = "sshd:effective"
 
 
 def scan_sshd(record_only: bool = False) -> dict:
@@ -1075,11 +1077,14 @@ def scan_sshd(record_only: bool = False) -> dict:
 
 	snapshot = sshd.collect()
 	previous = baseline.get_many(SSHD_BASELINE_PREFIX)
-	findings = sshd_rules.judge(snapshot, previous)
+	previous_effective = baseline.get(SSHD_EFFECTIVE_KEY)
+	findings = sshd_rules.judge(snapshot, previous, previous_effective)
 
 	# Record after judging, so a change is reported exactly once.
 	for path, digest in snapshot.file_hashes.items():
 		baseline.record(f"{SSHD_BASELINE_PREFIX}{path}", digest)
+	if snapshot.effective_hash:
+		baseline.record(SSHD_EFFECTIVE_KEY, snapshot.effective_hash)
 	gone = set(previous) - set(snapshot.file_hashes)
 	# Only forget a file when the configuration was actually readable this
 	# time. If `sshd -T` and the files were ALL unreadable, everything looks
@@ -1260,6 +1265,7 @@ def run_site_scan() -> dict:
 # ----------------------------------------------------------------------
 
 WEB_BASELINE_KEY = "web:guest-endpoints"
+NGINX_BASELINE_PREFIX = "nginx:"
 
 
 def scan_web(record_only: bool = False) -> dict:
@@ -1297,7 +1303,12 @@ def scan_web(record_only: bool = False) -> dict:
 		except (ValueError, AttributeError):
 			previous = None
 
-	findings = web_rules.judge(snapshot, previous)
+	previous_configs = baseline.get_many(NGINX_BASELINE_PREFIX)
+	findings = web_rules.judge(snapshot, previous, previous_configs)
+
+	for frontend in snapshot.frontends:
+		if frontend.config_hash:
+			baseline.record(f"{NGINX_BASELINE_PREFIX}{frontend.path}", frontend.config_hash)
 
 	if current:
 		baseline.record(
@@ -1455,3 +1466,91 @@ def scan_self(record_only: bool = False) -> dict:
 
 def run_self_scan() -> dict:
 	return _scheduled("self", scan_self)
+
+
+# ----------------------------------------------------------------------
+# Installed software
+# ----------------------------------------------------------------------
+
+PACKAGE_SEEN_KEY = "packages:last-scan"
+#: How far back the very first package scan looks. See the note in scan_packages.
+FIRST_RUN_LOOKBACK_DAYS = 7
+PACKAGE_UPDATE_PREFIX = "package-update:"
+
+
+def scan_packages(record_only: bool = False) -> dict:
+	"""What software arrived or left, and what is waiting to be patched.
+
+	Daily. `/var/log/dpkg.log` is a record of the past and does not become
+	more true for being read every fifteen minutes, and `apt list
+	--upgradable` reflects the last `apt update` rather than the present
+	moment either.
+	"""
+	import json as _json
+	from datetime import datetime
+
+	from server.security import packages, packages_rules
+	from server.server.doctype.security_baseline import security_baseline as baseline
+
+	# Only what happened since the last look, so an upgrade run is reported
+	# once rather than every day for as long as it stays in the log.
+	stored = frappe.db.get_value("Security Baseline", PACKAGE_SEEN_KEY, "detail")
+	since = None
+	if stored:
+		try:
+			since = datetime.fromisoformat(_json.loads(stored)["at"])
+		except (ValueError, KeyError, TypeError):
+			since = None
+
+	if since is None:
+		# FIRST RUN. dpkg.log goes back to the day the machine was built, so an
+		# unbounded first look reports the operating system being installed —
+		# 1,208 packages here, including gcc and netcat, as though somebody had
+		# just put them there. A week is enough to catch anything that arrived
+		# just before monitoring did, without opening with a finding that is
+		# entirely noise and teaches the reader to skip this category.
+		since = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-FIRST_RUN_LOOKBACK_DAYS)
+
+	first_seen = baseline.get_many(PACKAGE_UPDATE_PREFIX)
+	snapshot = packages.collect(since=since, first_seen=first_seen)
+	findings = packages_rules.judge(snapshot)
+
+	now = frappe.utils.now_datetime()
+
+	# Record when each security update was FIRST seen pending, and forget the
+	# ones that have been applied — otherwise a package fixed months ago keeps
+	# its old first-seen date and reports as overdue the next time it appears.
+	pending = {update.package for update in snapshot.security_updates}
+	for package in pending:
+		if package not in first_seen:
+			baseline.record(f"{PACKAGE_UPDATE_PREFIX}{package}", "pending", {"at": now.isoformat()})
+	baseline.forget([f"{PACKAGE_UPDATE_PREFIX}{p}" for p in set(first_seen) - pending])
+
+	baseline.record(PACKAGE_SEEN_KEY, "scanned", {"at": now.isoformat()})
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"changes": len(snapshot.events),
+		"upgradable": len(snapshot.upgradable),
+		"security_updates": len(snapshot.security_updates),
+		"findings": len(findings),
+		"raised": len(raised),
+	}
+
+
+def run_package_scan() -> dict:
+	return _scheduled("packages", scan_packages)

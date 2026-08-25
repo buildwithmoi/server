@@ -232,6 +232,59 @@ def judge_endpoints(endpoints: list[web.Endpoint], previous: set[str] | None = N
 	return findings
 
 
+def judge_config_drift(previous: dict, frontends: list[web.Frontend]) -> list[Finding]:
+	"""An nginx server block is not what it was.
+
+	The settings above are judged on their own merits every scan, so this is
+	not about catching a bad value — it is about noticing a change nobody
+	mentioned. A proxy rule added to route one path somewhere else is not a
+	wrong setting anywhere in this file's grammar, and it is exactly how a
+	site starts serving somebody else's content.
+	"""
+	if not previous:
+		return []
+
+	findings = []
+	current = {f.path: f.config_hash for f in frontends if f.config_hash}
+
+	for path, digest in sorted(current.items()):
+		was = previous.get(path)
+		if was is None:
+			findings.append(
+				_finding(
+					MEDIUM,
+					f"A new nginx configuration appeared: {path}",
+					"A server block that was not there at the last check. Only the hash is "
+					"compared; the file itself is never stored.",
+					"Confirm you or a deploy added it. A new server block can claim a hostname "
+					"that an existing one was serving.",
+				)
+			)
+		elif was != digest:
+			findings.append(
+				_finding(
+					MEDIUM,
+					f"An nginx configuration changed: {path}",
+					f"Contents changed ({was[:12]} → {digest[:12]}).",
+					"If a certificate renewal or a deploy did this, no action. If not, read the "
+					"diff: a `proxy_pass` or a `root` that moved is not an invalid setting, so "
+					"nothing else here will report it.",
+				)
+			)
+
+	for path in sorted(set(previous) - set(current)):
+		findings.append(
+			_finding(
+				MEDIUM,
+				f"An nginx configuration was removed: {path}",
+				f"{path} was present at the last check and is not now.",
+				"Whatever it served is now handled by the default server block, or not at all.",
+			)
+		)
+
+	return findings
+
+
 def judge_coverage(surfaces: list) -> list[Finding]:
 	blind = [s for s in surfaces if not s.readable]
 	if not blind:
@@ -251,9 +304,14 @@ def judge_coverage(surfaces: list) -> list[Finding]:
 	]
 
 
-def judge(snapshot: web.Snapshot, previous_endpoints: set[str] | None = None) -> list[Finding]:
+def judge(
+	snapshot: web.Snapshot,
+	previous_endpoints: set[str] | None = None,
+	previous_configs: dict | None = None,
+) -> list[Finding]:
 	findings: list[Finding] = []
 	findings.extend(judge_transport(list(snapshot.frontends)))
+	findings.extend(judge_config_drift(previous_configs or {}, list(snapshot.frontends)))
 	findings.extend(judge_certificates(list(snapshot.certificates)))
 	findings.extend(judge_endpoints(list(snapshot.endpoints), previous_endpoints))
 	findings.extend(judge_coverage(list(snapshot.surfaces)))

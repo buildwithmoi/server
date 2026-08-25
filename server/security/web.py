@@ -29,6 +29,7 @@ Frappe-free: it parses files. The list of installed apps is passed in.
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import re
 import subprocess
@@ -91,6 +92,10 @@ class Frontend:
 	headers: dict = field(default_factory=dict)
 	certificate: str = ""
 	tls_protocols: tuple[str, ...] = ()
+	#: SHA-256 of the file, so a change is answerable without storing it. An
+	#: nginx config names internal upstreams and file paths; the hash answers
+	#: "did this change" and nothing else.
+	config_hash: str = ""
 
 	@property
 	def plaintext_only(self) -> bool:
@@ -159,6 +164,7 @@ def parse_nginx(text: str, path: str = "") -> Frontend:
 
 	return Frontend(
 		path=path,
+		config_hash=hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
 		ports=tuple(sorted(set(ports))),
 		serves_tls=serves_tls,
 		server_names=tuple(names),

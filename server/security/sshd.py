@@ -115,6 +115,11 @@ class Snapshot:
 	match_blocks: tuple[MatchBlock, ...] = ()
 	#: path -> sha256, so a config edit is visible even if nothing we watch changed.
 	file_hashes: dict = field(default_factory=dict)
+	#: sha256 over the WATCHED effective settings. Distinct from the file
+	#: hashes on purpose: cloud-init rewriting a drop-in changes the merged
+	#: value with no edit to the file anyone would think to look at, and an
+	#: OpenSSH upgrade changes defaults with no file edit at all.
+	effective_hash: str = ""
 	surfaces: tuple[Surface, ...] = ()
 
 	def get(self, key: str, default: str = "") -> str:
@@ -284,6 +289,25 @@ def collect_config_files() -> tuple[dict[str, str], list[MatchBlock], list[Surfa
 	return hashes, blocks, surfaces
 
 
+def effective_hash(settings: dict) -> str:
+	"""Hash the settings worth watching, in a stable order.
+
+	Only WATCHED: `sshd -T` prints about fifty values and most are irrelevant
+	to whether the door is locked. Hashing all of them would raise a drift
+	finding every time an OpenSSH upgrade reordered the default cipher list,
+	which is how a drift check gets switched off.
+	"""
+	import hashlib
+
+	canonical = "\n".join(
+		f"{key} {value}"
+		for key in WATCHED
+		if key in settings
+		for value in sorted(settings[key])
+	)
+	return hashlib.sha256(canonical.encode()).hexdigest() if canonical else ""
+
+
 def collect() -> Snapshot:
 	"""Everything this module can see about sshd, and what it could not."""
 	effective, surfaces = collect_effective()
@@ -292,5 +316,6 @@ def collect() -> Snapshot:
 		effective=effective,
 		match_blocks=tuple(blocks),
 		file_hashes=hashes,
+		effective_hash=effective_hash(effective),
 		surfaces=tuple(surfaces + config_surfaces),
 	)
