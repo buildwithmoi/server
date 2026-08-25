@@ -200,6 +200,12 @@ scheduler_events = {
 		# worker. Reading /etc/passwd is trivial; the cost is the dpkg lookups
 		# the persistence scan does, and there is no reason to pay both at once.
 		"5-59/15 * * * *": ["server.security.watch.run_account_scan"],
+		# Sockets and processes every five minutes, offset from the SSH ingest
+		# so the two never land on the same tick. This is the detector for the
+		# part of the incident that had consequences — the proxying and the
+		# outbound brute force that got the address blocked — and connections
+		# are short-lived, so a slower cadence would simply miss them.
+		"2-59/5 * * * *": ["server.security.watch.run_network_scan"],
 	},
 	# "daily" is added together with the SSH Session doctype — a hook pointing at
 	# a module that does not exist yet would create a Scheduled Job Type row that
@@ -303,6 +309,10 @@ default_log_clearing_doctypes = {
 	"Security Event": 365,
 	"Persistence Change": 365,
 	"System Account Change": 365,
+	# Aggregated per destination per hour, so ninety days of it is small — and
+	# "when did this host start talking to that address" is the question worth
+	# being able to answer months later.
+	"Outbound Connection Summary": 90,
 }
 
 # Translation

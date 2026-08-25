@@ -768,6 +768,7 @@ def run_security_scan(record_only: int | bool = 0) -> dict:
 	return {
 		"persistence": watch.scan(record_only=quiet),
 		"accounts": watch.scan_accounts(record_only=quiet),
+		"network": watch.scan_network(record_only=quiet),
 	}
 
 
@@ -803,9 +804,14 @@ def security_overview() -> dict:
 			"System Account", {"status": "Active", "can_log_in": 1}
 		),
 		"keys": frappe.db.count("Authorized Key", {"status": "Active"}),
+		"listening_ports": frappe.db.count("Listening Socket", {"status": "Active"}),
+		"public_ports": frappe.db.count(
+			"Listening Socket", {"status": "Active", "listening_publicly": 1}
+		),
 		"unreviewed": (
 			frappe.db.count("Persistence Item", {"status": "Active", "is_baseline": 0})
 			+ frappe.db.count("System Account", {"status": "Active", "is_baseline": 0})
+			+ frappe.db.count("Listening Socket", {"status": "Active", "is_baseline": 0})
 		),
 		"last_scan": frappe.db.get_value(
 			"Security Event", {}, "creation", order_by="creation desc"

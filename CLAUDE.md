@@ -213,6 +213,13 @@ Rules that cost real time to learn. `server/tests/test_app_wiring.py` enforces t
    None)` removes the `*****` mask and leaves the encrypted value in `__Auth`;
    `remove_encrypted_password` is what deletes it.
 
+### A DocField must never be called `process`
+
+`Meta.__init__` builds itself from the DocType document, so a field named `process` shadows
+`frappe.model.meta.Meta.process()` and the migration dies with `TypeError: 'NoneType' object is not
+callable` — pointing at frappe's own code, with nothing naming the field responsible. Cost an hour.
+Same hazard for any other `Meta` method name.
+
 ## Conventions
 
 - **Python is tab-indented** (ruff `indent-style = "tab"`), double quotes, line length 110, target

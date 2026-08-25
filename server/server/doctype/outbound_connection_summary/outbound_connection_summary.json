@@ -1,0 +1,94 @@
+{
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "in_create": 0,
+ "sort_field": "hour_bucket",
+ "sort_order": "DESC",
+ "description": "Where this host connected out to, aggregated per destination per hour. Raw connections are far too many to keep and the aggregate is what gets investigated — 'this address, this port, this often' is the question anyone actually asks.",
+ "fields": [
+  {
+   "fieldname": "hour_bucket",
+   "fieldtype": "Datetime",
+   "label": "Hour",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "remote_address",
+   "fieldtype": "Data",
+   "label": "Destination",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "remote_port",
+   "fieldtype": "Int",
+   "label": "Port",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "process_name",
+   "fieldtype": "Data",
+   "label": "Process",
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "Named process_name, not process: a DocField called `process` shadows frappe.model.meta.Meta.process() when the DocType is built, and the migration dies with 'NoneType object is not callable'."
+  },
+  {
+   "fieldname": "binary",
+   "fieldtype": "Small Text",
+   "label": "Binary",
+   "read_only": 1
+  },
+  {
+   "fieldname": "connection_count",
+   "fieldtype": "Int",
+   "label": "Times Seen",
+   "read_only": 1,
+   "default": "1",
+   "description": "How many scans saw this destination in this hour. A beacon that keeps failing shows up here as a high count that never became useful."
+  },
+  {
+   "fieldname": "syn_sent",
+   "fieldtype": "Check",
+   "label": "Never Connected",
+   "read_only": 1,
+   "description": "Seen only in SYN-SENT. The incident's beacon looked exactly like this — retrying forever because its destination had already been blocked."
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "Outbound Connection Summary",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "hour_bucket",
+  "remote_address",
+  "remote_port",
+  "cb_1",
+  "process_name",
+  "binary",
+  "connection_count",
+  "syn_sent"
+ ]
+}

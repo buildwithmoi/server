@@ -1,0 +1,133 @@
+{
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "description": "One port this host is listening on. Diffed against a baseline like the persistence surface: a bench opens its web, socketio and redis ports and nothing else, so a port that was not open at the last scan is worth reading.",
+ "fields": [
+  {
+   "fieldname": "protocol",
+   "fieldtype": "Data",
+   "label": "Protocol",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "port",
+   "fieldtype": "Int",
+   "label": "Port",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "local_address",
+   "fieldtype": "Data",
+   "label": "Bound To",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "listening_publicly",
+   "fieldtype": "Check",
+   "label": "Public",
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "Bound to every interface rather than to loopback. The difference between a service for this host and a service for the internet."
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "process_name",
+   "fieldtype": "Data",
+   "label": "Process Name",
+   "read_only": 1,
+   "description": "What the process calls itself, which is one prctl call from a lie. Named process_name, not process: a DocField called `process` shadows frappe.model.meta.Meta.process() when the DocType is built, and the migration dies with 'NoneType object is not callable'."
+  },
+  {
+   "fieldname": "binary",
+   "fieldtype": "Small Text",
+   "label": "Binary",
+   "read_only": 1,
+   "description": "From /proc/<pid>/exe, which the kernel maintains. This is the evidence; the name above is not."
+  },
+  {
+   "fieldname": "binary_verified",
+   "fieldtype": "Check",
+   "label": "Binary Verified",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pid",
+   "fieldtype": "Int",
+   "label": "PID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_state",
+   "fieldtype": "Section Break",
+   "label": "State"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Active\nGone",
+   "default": "Active",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "is_baseline",
+   "fieldtype": "Check",
+   "label": "Accepted As Baseline",
+   "read_only": 1
+  },
+  {
+   "fieldname": "first_seen",
+   "fieldtype": "Datetime",
+   "label": "First Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "Listening Socket",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "protocol",
+  "port",
+  "local_address",
+  "listening_publicly",
+  "cb_1",
+  "process_name",
+  "binary",
+  "binary_verified",
+  "pid",
+  "sec_state",
+  "status",
+  "is_baseline",
+  "first_seen",
+  "last_seen"
+ ]
+}

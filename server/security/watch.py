@@ -213,7 +213,7 @@ def _raise_baseline_notice(count: int) -> str | None:
 
 
 #: Everything that is recorded before it is trusted.
-BASELINE_DOCTYPES = ("Persistence Item", "System Account", "Authorized Key")
+BASELINE_DOCTYPES = ("Persistence Item", "System Account", "Authorized Key", "Listening Socket")
 
 
 def accept_baseline() -> dict:
@@ -508,4 +508,243 @@ def run_account_scan() -> dict:
 		return scan_accounts()
 	except Exception as exc:
 		frappe.logger("server").error(f"account scan failed: {exc}", exc_info=True)
+		return {"error": str(exc)}
+
+
+# ----------------------------------------------------------------------
+# Network
+# ----------------------------------------------------------------------
+
+#: Where the consecutive-SYN-SENT count lives between scans. A beacon retries
+#: constantly, so it accumulates in minutes; losing the count to a redis
+#: restart costs one detection cycle and nothing more.
+BEACON_KEY = "server:security:syn-sent"
+
+#: Where the last firewall ruleset hash lives, to notice it changing.
+FIREWALL_KEY = "server:security:firewall-hash"
+
+
+def _git_host_addresses() -> tuple[str, ...]:
+	"""Addresses this estate legitimately reaches over SSH.
+
+	Resolved rather than configured, because a git host's addresses change and
+	a stale allowlist would start reporting `bench get-app` as an intrusion.
+	Resolution failing is not an error — the check simply becomes stricter.
+	"""
+	import socket as pysocket
+
+	from server.security.network_rules import GIT_HOSTS
+
+	found: set[str] = set()
+	for host in GIT_HOSTS:
+		try:
+			for info in pysocket.getaddrinfo(host, 22, proto=pysocket.IPPROTO_TCP):
+				found.add(info[4][0])
+		except OSError:
+			continue
+	return tuple(found)
+
+
+def scan_network(record_only: bool = False) -> dict:
+	"""Compare listening ports and outbound traffic against what is expected."""
+	from server.security import network, network_rules
+
+	snapshot = network.collect()
+	now = frappe.utils.now_datetime()
+	findings: list = []
+
+	findings.extend(_scan_listeners(snapshot, now))
+	findings.extend(
+		network_rules.judge_outbound(snapshot.sockets, git_host_addresses=_git_host_addresses())
+	)
+	findings.extend(network_rules.judge_beacons(_track_beacons(snapshot)))
+	_record_outbound(snapshot, now)
+
+	for process in snapshot.processes:
+		findings.extend(network_rules.judge_process(process))
+
+	previous_firewall = frappe.cache.get_value(FIREWALL_KEY) or ""
+	findings.extend(network_rules.judge_firewall(previous_firewall, snapshot))
+	if snapshot.firewall_hash:
+		frappe.cache.set_value(FIREWALL_KEY, snapshot.firewall_hash)
+
+	findings.extend(network_rules.judge_coverage(snapshot.surfaces))
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+				source_doctype="Listening Socket",
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"sockets": len(snapshot.sockets),
+		"processes": len(snapshot.processes),
+		"findings": len(findings),
+		"raised": raised,
+		"unreadable": [s.as_dict() for s in snapshot.blind_spots],
+		"record_only": record_only,
+	}
+
+
+def _scan_listeners(snapshot, now) -> list:
+	from server.security import network_rules
+
+	listeners = {
+		(s.protocol, s.local_port, s.local_address): s
+		for s in snapshot.sockets
+		if s.state == "LISTEN"
+	}
+	stored = {
+		(row.protocol, row.port, row.local_address): row
+		for row in frappe.get_all(
+			"Listening Socket",
+			filters={"status": "Active"},
+			fields=["name", "protocol", "port", "local_address", "process_name", "binary"],
+			limit_page_length=0,
+		)
+	}
+	first_run = not stored
+	findings = []
+
+	for key, socket in listeners.items():
+		if key in stored:
+			frappe.db.set_value(
+				"Listening Socket", stored[key].name, "last_seen", now, update_modified=False
+			)
+			continue
+
+		frappe.get_doc(
+			{
+				"doctype": "Listening Socket",
+				"protocol": socket.protocol,
+				"port": socket.local_port,
+				"local_address": socket.local_address,
+				"listening_publicly": 1 if socket.listening_publicly else 0,
+				"process_name": socket.process,
+				"binary": socket.binary,
+				"binary_verified": 1 if socket.binary_verified else 0,
+				"pid": socket.pid,
+				"status": "Active",
+				"is_baseline": 0,
+				"first_seen": now,
+				"last_seen": now,
+			}
+		).insert(ignore_permissions=True)
+		if not first_run:
+			findings.extend(network_rules.judge_new_listener(socket))
+
+	for key, row in stored.items():
+		if key in listeners:
+			continue
+		frappe.db.set_value("Listening Socket", row.name, "status", "Gone", update_modified=False)
+		findings.extend(
+			network_rules.judge_listener_gone(
+				_listener_from_row(row)
+			)
+		)
+	return findings
+
+
+def _listener_from_row(row):
+	from server.security.network import Socket
+
+	return Socket(
+		protocol=row.protocol,
+		state="LISTEN",
+		local_address=row.local_address,
+		local_port=row.port,
+		process=row.get("process_name") or "",
+		binary=row.get("binary") or "",
+	)
+
+
+def _track_beacons(snapshot) -> dict:
+	"""Count consecutive scans that saw SYN-SENT to the same endpoint.
+
+	Kept in the cache rather than the database: it is a counter that resets,
+	not a record worth keeping, and the endpoints that matter reach the
+	threshold within a quarter of an hour.
+	"""
+	from server.security.network import STATE_SYN_SENT
+
+	pending = {
+		(s.remote_address, s.remote_port)
+		for s in snapshot.sockets
+		if s.state == STATE_SYN_SENT and s.remote_is_external
+	}
+	previous = frappe.cache.get_value(BEACON_KEY) or {}
+	counts = {}
+	for endpoint in pending:
+		key = f"{endpoint[0]}:{endpoint[1]}"
+		counts[key] = int(previous.get(key, 0)) + 1
+
+	frappe.cache.set_value(BEACON_KEY, counts, expires_in_sec=3600)
+	return {tuple(key.rsplit(":", 1)[0:1]) + (int(key.rsplit(":", 1)[1]),): value for key, value in counts.items()}
+
+
+def _record_outbound(snapshot, now) -> None:
+	"""Aggregate outbound destinations into the current hour.
+
+	Raw connections are far too many to keep, and "this address, this port,
+	this often" is the question anyone actually asks.
+	"""
+	from server.security.network import STATE_SYN_SENT
+
+	bucket = now.replace(minute=0, second=0, microsecond=0)
+	for socket in snapshot.sockets:
+		if not socket.remote_is_external or socket.state == "LISTEN":
+			continue
+
+		existing = frappe.db.get_value(
+			"Outbound Connection Summary",
+			{
+				"hour_bucket": bucket,
+				"remote_address": socket.remote_address,
+				"remote_port": socket.remote_port,
+			},
+			["name", "connection_count"],
+			as_dict=True,
+		)
+		if existing:
+			frappe.db.set_value(
+				"Outbound Connection Summary",
+				existing.name,
+				{
+					"connection_count": (existing.connection_count or 0) + 1,
+					"syn_sent": 1 if socket.state == STATE_SYN_SENT else 0,
+				},
+				update_modified=False,
+			)
+			continue
+
+		frappe.get_doc(
+			{
+				"doctype": "Outbound Connection Summary",
+				"hour_bucket": bucket,
+				"remote_address": socket.remote_address,
+				"remote_port": socket.remote_port,
+				"process_name": socket.process,
+				"binary": socket.binary,
+				"connection_count": 1,
+				"syn_sent": 1 if socket.state == STATE_SYN_SENT else 0,
+			}
+		).insert(ignore_permissions=True)
+
+
+def run_network_scan() -> dict:
+	"""Scheduled entry point. Never raises."""
+	try:
+		return scan_network()
+	except Exception as exc:
+		frappe.logger("server").error(f"network scan failed: {exc}", exc_info=True)
 		return {"error": str(exc)}
