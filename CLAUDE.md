@@ -220,6 +220,32 @@ Rules that cost real time to learn. `server/tests/test_app_wiring.py` enforces t
 callable` — pointing at frappe's own code, with nothing naming the field responsible. Cost an hour.
 Same hazard for any other `Meta` method name.
 
+## Two ways this app has silently lost functionality
+
+Both were found by running the code rather than reading it, and neither made
+anything look broken.
+
+- **A repeated key in `scheduler_events["cron"]` discards jobs.** It is a plain
+  dict literal, so writing the same schedule string twice is not an error —
+  Python keeps the last value. It cost two live jobs at once: geolocation
+  stopped resolving addresses, and `reap_stale_requests` stopped running, which
+  is the job that clears a database root password out of a request abandoned by
+  a dead worker. Put every job for a given schedule in one list.
+  `test_no_scheduler_slot_is_declared_twice` now fails on it.
+- **A field with a declared default on a Single reads back as `0` once anything
+  has been written to that Single.** Defaults apply only while nothing has been
+  saved. Adding a `Check` with `default: 1` to `Server Settings` therefore
+  switches itself *off* on every existing site. Re-list
+  `server.patches.seed_server_settings` with a trailing `# comment` — frappe
+  matches Patch Log on the whole line, so that is how a patch is made to run
+  again. Ask `tabSingles` whether a field exists rather than reading the loaded
+  document, which cannot tell "never set" from "set to off".
+
+Also still true, and still worth not rediscovering: a DocField named `process`
+shadows `frappe.model.meta.Meta.process()` and makes `migrate` die with a
+`TypeError` pointing at frappe's own code. `Listening Socket` and `Outbound
+Connection Summary` use `process_name`.
+
 ## Conventions
 
 - **Python is tab-indented** (ruff `indent-style = "tab"`), double quotes, line length 110, target

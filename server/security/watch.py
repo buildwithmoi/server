@@ -30,6 +30,8 @@ from server.server.doctype.server_settings.server_settings import get_settings
 #: How often each detector is scheduled, so "late" is derived from its own
 #: cadence rather than one global guess. Must match hooks.py.
 SCHEDULE_SECONDS = {
+	"filesystem": 15 * 60,
+	"filesystem-deep": 24 * 60 * 60,
 	"persistence": 15 * 60,
 	"accounts": 15 * 60,
 	"network": 5 * 60,
@@ -863,3 +865,174 @@ def check_detectors_are_running() -> dict:
 
 	frappe.db.commit()
 	return {"overdue": late, "raised": raised}
+
+
+# ----------------------------------------------------------------------
+# Filesystem
+# ----------------------------------------------------------------------
+
+FILESYSTEM_DOCTYPE = "Watched File"
+
+
+def _stored_files() -> dict[tuple[str, str], object]:
+	rows = frappe.get_all(
+		FILESYSTEM_DOCTYPE,
+		filters={"status": "Active"},
+		fields=["name", "kind", "identifier", "content_hash", "package", "is_baseline"],
+		limit_page_length=0,
+	)
+	return {(row.kind, row.identifier): row for row in rows}
+
+
+def _insert_file(item, now, accepted: bool) -> None:
+	frappe.get_doc(
+		{
+			"doctype": FILESYSTEM_DOCTYPE,
+			"kind": item.kind,
+			"identifier": item.identifier,
+			"path": item.path,
+			"content_hash": item.content_hash,
+			"package": item.package,
+			"package_owned": 1 if item.package_owned else 0,
+			"detail": json.dumps(item.detail),
+			"status": "Active",
+			"is_baseline": 1 if accepted else 0,
+			"first_seen": now,
+			"last_seen": now,
+		}
+	).insert(ignore_permissions=True)
+
+
+def _record_file_change(change_type: str, item, previous_hash: str, now) -> None:
+	frappe.get_doc(
+		{
+			"doctype": "Filesystem Change",
+			"event_time": now,
+			"kind": item.kind,
+			"identifier": item.identifier,
+			"change_type": change_type,
+			"old_hash": previous_hash,
+			"new_hash": item.content_hash,
+			"package": item.package,
+			"detail": json.dumps(item.detail),
+		}
+	).insert(ignore_permissions=True)
+
+
+def scan_filesystem(record_only: bool = False, deep: bool = False) -> dict:
+	"""Sweep the disk and report what changed.
+
+	`deep` adds `dpkg --verify`, which re-hashes every file every installed
+	package owns: measured at 40 seconds of solid I/O against 0.8 for
+	everything else. That is why it runs daily and the rest runs quarter-hourly
+	— a replaced system binary does not put itself back while nobody is
+	looking, so checking within the day loses nothing, and re-reading the whole
+	disk every fifteen minutes to hear "still fine" costs a real server real
+	throughput.
+	"""
+	from server.security import filesystem, filesystem_rules
+
+	snapshot = filesystem.collect(deep=deep)
+	previous = _stored_files()
+	first_run = not previous
+	now = frappe.utils.now_datetime()
+
+	seen: set[tuple[str, str]] = set()
+	findings: list = []
+
+	for item in snapshot.items:
+		key = (item.kind, item.identifier)
+		seen.add(key)
+		stored = previous.get(key)
+
+		if stored is None:
+			_insert_file(item, now, accepted=first_run)
+			if first_run:
+				# Nothing to diff against, but a wrong shape is wrong today —
+				# and a host rebuilt from a compromised snapshot carries the
+				# intruder's files into its very first baseline.
+				findings.extend(filesystem_rules.shape_findings(item))
+			else:
+				_record_file_change(filesystem_rules.APPEARED, item, "", now)
+				findings.extend(filesystem_rules.judge_setuid(filesystem_rules.APPEARED, item))
+		elif item.content_hash and stored.content_hash != item.content_hash:
+			frappe.db.set_value(
+				FILESYSTEM_DOCTYPE,
+				stored.name,
+				{
+					"content_hash": item.content_hash,
+					"package": item.package,
+					"package_owned": 1 if item.package_owned else 0,
+					"detail": json.dumps(item.detail),
+					"last_seen": now,
+				},
+				update_modified=False,
+			)
+			_record_file_change(filesystem_rules.MODIFIED, item, stored.content_hash, now)
+			findings.extend(
+				filesystem_rules.judge_setuid(filesystem_rules.MODIFIED, item, stored.content_hash)
+			)
+		else:
+			frappe.db.set_value(FILESYSTEM_DOCTYPE, stored.name, "last_seen", now, update_modified=False)
+
+		# These two are judged on presence, not on change: a binary sitting in
+		# /tmp is a finding every day it is still sitting there, and a
+		# world-writable system file does not become acceptable by persisting.
+		if item.kind == filesystem.KIND_TEMP_BINARY:
+			findings.extend(filesystem_rules.judge_temp_binary(item))
+		elif item.kind == filesystem.KIND_WORLD_WRITABLE:
+			findings.extend(filesystem_rules.judge_world_writable(item))
+
+	for key, stored in previous.items():
+		if key in seen:
+			continue
+		# A deep-only kind is absent from a fast sweep because it was not
+		# looked for, not because it is gone. Marking it Gone would raise a
+		# "binary disappeared" finding every quarter of an hour.
+		if not deep and key[0] == filesystem.KIND_PACKAGE:
+			continue
+		frappe.db.set_value(FILESYSTEM_DOCTYPE, stored.name, "status", "Gone", update_modified=False)
+		gone = filesystem.Item(kind=stored.kind, identifier=stored.identifier, path=stored.identifier)
+		_record_file_change(filesystem_rules.DISAPPEARED, gone, stored.content_hash or "", now)
+		findings.extend(filesystem_rules.judge_setuid(filesystem_rules.DISAPPEARED, gone))
+
+	if deep:
+		findings.extend(
+			filesystem_rules.judge_package_integrity(
+				[i for i in snapshot.items if i.kind == filesystem.KIND_PACKAGE]
+			)
+		)
+	findings.extend(filesystem_rules.judge_coverage(list(snapshot.surfaces)))
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+				source_doctype=FILESYSTEM_DOCTYPE,
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"items": len(snapshot.items),
+		"findings": len(findings),
+		"raised": len(raised),
+		"deep": deep,
+	}
+
+
+def run_filesystem_scan() -> dict:
+	"""The quarter-hourly sweep: setuid, temp directories, world-writable."""
+	return _scheduled("filesystem", scan_filesystem)
+
+
+def run_filesystem_deep_scan() -> dict:
+	"""The daily sweep, which adds package verification."""
+	return _scheduled("filesystem-deep", lambda record_only: scan_filesystem(record_only, deep=True))

@@ -176,14 +176,32 @@ scheduler_events = {
 		"*/5 * * * *": ["server.ssh.ingest.enqueue_ingest"],
 		# Offset by two minutes so a geolocation batch never starts in the same
 		# tick as an ingest run.
-		"2-59/5 * * * *": ["server.geo.registry.enqueue_resolve_pending"],
+		# NOTE: one entry per schedule string. This is a dict literal, so a
+		# repeated key silently discards everything but the last value — which
+		# is how `enqueue_resolve_pending` and `reap_stale_requests` both
+		# stopped being scheduled at all without anything appearing to break.
+		# `test_no_scheduler_slot_is_declared_twice` now fails on it.
+		"2-59/5 * * * *": [
+			"server.geo.registry.enqueue_resolve_pending",
+			# Sockets and processes, offset from the SSH ingest so the two
+			# never land on the same tick. This is the detector for the part
+			# of the incident that had consequences — the proxying and the
+			# outbound brute force that got the address blocked — and
+			# connections are short-lived, so a slower cadence would miss them.
+			"server.security.watch.run_network_scan",
+		],
 		# A worker can die between picking a job up and finishing it, and
 		# nothing else notices: the row says Running forever, the dock spins,
 		# and for a restore the database root password stays in the record
 		# because the code that clears it never ran. Ten minutes is frequent
 		# enough to matter and rare enough to cost nothing — the query is one
 		# indexed range scan that almost always returns nothing.
-		"*/10 * * * *": ["server.bench.installer.reap_stale_requests"],
+		"*/10 * * * *": [
+			"server.bench.installer.reap_stale_requests",
+			# Watching the watcher, and pushing anything the collector missed.
+			"server.security.watch.check_detectors_are_running",
+			"server.security.forward.retry_pending",
+		],
 		# Intrusion sweeps run just after an ingest tick, so they read events
 		# that were written moments ago rather than events from five minutes
 		# before the ingest that would have found them.
@@ -200,24 +218,25 @@ scheduler_events = {
 		# worker. Reading /etc/passwd is trivial; the cost is the dpkg lookups
 		# the persistence scan does, and there is no reason to pay both at once.
 		"5-59/15 * * * *": ["server.security.watch.run_account_scan"],
-		# Sockets and processes every five minutes, offset from the SSH ingest
-		# so the two never land on the same tick. This is the detector for the
-		# part of the incident that had consequences — the proxying and the
-		# outbound brute force that got the address blocked — and connections
-		# are short-lived, so a slower cadence would simply miss them.
-		"2-59/5 * * * *": ["server.security.watch.run_network_scan"],
-		# Watching the watcher, and pushing anything the collector missed.
-		# Local self-checking catches a crashed scheduler, which is the common
-		# case; it cannot catch a hostile root, which is what the externally
-		# pollable heartbeat endpoint is for.
-		"*/10 * * * *": [
-			"server.security.watch.check_detectors_are_running",
-			"server.security.forward.retry_pending",
-		],
+		# Setuid binaries, temp-directory droppers and world-writable system
+		# files: 0.8 seconds measured, so it rides the ordinary schedule.
+		# `dpkg --verify` is the expensive half and runs daily instead.
+		"7-59/15 * * * *": ["server.security.watch.run_filesystem_scan"],
 	},
-	# "daily" is added together with the SSH Session doctype — a hook pointing at
-	# a module that does not exist yet would create a Scheduled Job Type row that
-	# fails every time it fires.
+	"daily": [
+		# `dpkg --verify` re-hashes every file every installed package owns:
+		# 40 seconds of solid I/O here, against 0.8 for the rest of the
+		# filesystem sweep. Daily is also the honest cadence for what it
+		# finds — a replaced system binary does not put itself back while
+		# nobody is watching, so catching it within the day loses nothing,
+		# and re-reading the whole disk every quarter hour to be told
+		# "still fine" costs a real server real throughput. Debian's own
+		# debsums cron runs weekly.
+		"server.security.watch.run_filesystem_deep_scan",
+	],
+	# Session correlation is added together with the SSH Session doctype — a
+	# hook pointing at a module that does not exist yet would create a
+	# Scheduled Job Type row that fails every time it fires.
 }
 
 # Testing

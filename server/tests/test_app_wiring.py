@@ -79,6 +79,62 @@ class TestHooksResolve(unittest.TestCase):
 
 
 @unittest.skipUnless(frappe is not None, "requires frappe on the path")
+class TestSchedulerSlotsAreUnique(unittest.TestCase):
+	"""A repeated cron key silently discards every job but the last.
+
+	`scheduler_events["cron"]` is a plain dict literal, so writing the same
+	schedule string twice is not an error and not a warning — Python keeps the
+	last value and the earlier jobs simply stop existing. It cost this app two
+	live jobs at once: geolocation stopped resolving addresses, and
+	`reap_stale_requests` stopped running, which is the job that clears a
+	database root password out of a request abandoned by a dead worker.
+
+	Nothing about the app looks broken when this happens, which is exactly why
+	it needs a test rather than a code review.
+	"""
+
+	def test_no_scheduler_slot_is_declared_twice(self):
+		import ast
+		import collections
+
+		tree = ast.parse((MODULE / "hooks.py").read_text())
+		for node in ast.walk(tree):
+			if not (isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "scheduler_events"):
+				continue
+			for group, value in zip(node.value.keys, node.value.values, strict=False):
+				if not isinstance(value, ast.Dict):
+					continue
+				keys = [k.value for k in value.keys]
+				repeated = [k for k, count in collections.Counter(keys).items() if count > 1]
+				with self.subTest(group=group.value):
+					self.assertEqual(repeated, [], f"{group.value} declares {repeated} more than once")
+
+	def test_every_scheduled_job_actually_resolves(self):
+		"""A hook pointing at a missing module creates a job that fails forever.
+
+		frappe registers a Scheduled Job Type from the hook regardless of
+		whether the target exists, so the failure surfaces as a row erroring
+		every tick rather than as anything at import time.
+		"""
+		# Read the hooks module directly rather than through
+		# `frappe.get_hooks`, which needs a site — the point of this file is
+		# that it runs without one.
+		hooks = importlib.import_module("server.hooks")
+		targets = []
+		for entries in getattr(hooks, "scheduler_events", {}).values():
+			if isinstance(entries, dict):
+				for jobs in entries.values():
+					targets.extend(jobs)
+			else:
+				targets.extend(entries)
+
+		self.assertTrue(targets, "no scheduled jobs declared")
+		for dotted in [t for t in targets if t.startswith("server.")]:
+			with self.subTest(job=dotted):
+				self.assertTrue(callable(_resolve(dotted)))
+
+
+@unittest.skipUnless(frappe is not None, "requires frappe on the path")
 class TestPatchesResolve(unittest.TestCase):
 	def test_every_patch_imports_and_has_execute(self):
 		patches = MODULE / "patches.txt"
