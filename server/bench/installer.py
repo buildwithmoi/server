@@ -817,34 +817,53 @@ def run_install_request(name: str) -> dict:
 	last_flush = [time.monotonic()]
 
 	def flush() -> None:
+		"""Persist buffered output. Also must not raise — see emit()."""
 		if not pending:
 			return
-		request.append_output("\n".join(pending) + "\n")
-		pending.clear()
-		last_flush[0] = time.monotonic()
-		frappe.db.commit()
+		try:
+			request.append_output("\n".join(pending) + "\n")
+			pending.clear()
+			last_flush[0] = time.monotonic()
+			frappe.db.commit()
+		except Exception:
+			pending.clear()
+			frappe.logger("server").warning(f"could not persist output for {name}", exc_info=True)
 
 	def emit(line: str) -> None:
-		pending.append(line)
-		produced[0] += 1
-		buffer.append(line)
-		# The tail is all that is needed after the fact — `_tail` for the error
-		# summary, and the SSL quiet-failure markers, which bench prints at the
-		# end. Everything is still in the `output` column.
-		if len(buffer) > TAIL_LINES:
-			del buffer[: len(buffer) - TAIL_LINES]
-		plan.line(line)
-		now = time.monotonic()
-		if now - last_emit[0] >= STREAM_INTERVAL:
-			last_emit[0] = now
-			frappe.publish_realtime(
-				LOG_EVENT, {"name": name, "line": line}, doctype="App Install Request", docname=name
-			)
-			push_steps()
-		if len(pending) >= PERSIST_EVERY_LINES or (
-			pending and time.monotonic() - last_flush[0] >= PERSIST_EVERY_SECONDS
-		):
-			flush()
+		"""Record one line of output. MUST NOT raise.
+
+		Every failure path in this job calls emit() on its way out, so an
+		exception in here surfaces from inside the handler that was reporting
+		the first one — and the job dies with the row still saying Running,
+		which no amount of error handling downstream can recover. It happened:
+		a stray reference to a variable that had been removed took a backup job
+		down and left it spinning in the dock indefinitely.
+		"""
+		try:
+			pending.append(line)
+			buffer.append(line)
+			# The tail is all that is needed after the fact — _tail for the
+			# error summary, and the SSL quiet-failure markers, which bench
+			# prints at the end. Everything is still in the `output` column.
+			if len(buffer) > TAIL_LINES:
+				del buffer[: len(buffer) - TAIL_LINES]
+			plan.line(line)
+
+			now = time.monotonic()
+			if now - last_emit[0] >= STREAM_INTERVAL:
+				last_emit[0] = now
+				frappe.publish_realtime(
+					LOG_EVENT, {"name": name, "line": line}, doctype="App Install Request", docname=name
+				)
+				push_steps()
+			if len(pending) >= PERSIST_EVERY_LINES or (
+				pending and time.monotonic() - last_flush[0] >= PERSIST_EVERY_SECONDS
+			):
+				flush()
+		except Exception:
+			# Logged, never raised. Losing a log line is a nuisance; losing the
+			# job's terminal status is an outage nobody is told about.
+			frappe.logger("server").warning(f"could not record output for {name}", exc_info=True)
 
 	def finish(status: str, exit_code: int | None = None, error: str | None = None) -> dict:
 		started = request.started_at
