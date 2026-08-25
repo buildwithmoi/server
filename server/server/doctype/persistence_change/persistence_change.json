@@ -1,0 +1,110 @@
+{
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "in_create": 1,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 0,
+ "description": "One change to the persistence surface. Kept for a year: these are the records you need to reconstruct a breach that ran for eight months, and they cost almost nothing to keep.",
+ "fields": [
+  {
+   "fieldname": "event_time",
+   "fieldtype": "Datetime",
+   "label": "Time",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "kind",
+   "fieldtype": "Data",
+   "label": "Kind",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "identifier",
+   "fieldtype": "Small Text",
+   "label": "Identifier",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "change_type",
+   "fieldtype": "Select",
+   "label": "Change",
+   "options": "Appeared\nModified\nDisappeared",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "old_hash",
+   "fieldtype": "Data",
+   "label": "Previous Hash",
+   "read_only": 1,
+   "length": 64
+  },
+  {
+   "fieldname": "new_hash",
+   "fieldtype": "Data",
+   "label": "New Hash",
+   "read_only": 1,
+   "length": 64
+  },
+  {
+   "fieldname": "package",
+   "fieldtype": "Data",
+   "label": "Owning Package",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_detail",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Long Text",
+   "label": "Detail",
+   "read_only": 1,
+   "options": "JSON"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "Persistence Change",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "event_time",
+  "kind",
+  "identifier",
+  "change_type",
+  "cb_1",
+  "old_hash",
+  "new_hash",
+  "package",
+  "sec_detail",
+  "detail"
+ ]
+}

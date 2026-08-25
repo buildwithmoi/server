@@ -1,0 +1,199 @@
+{
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "in_create": 1,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 0,
+ "description": "One security finding. Deliberately polymorphic — the detectors differ, but triage, acknowledgement and routing are the same for all of them.",
+ "fields": [
+  {
+   "fieldname": "event_time",
+   "fieldtype": "Datetime",
+   "label": "Time",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "severity",
+   "fieldtype": "Select",
+   "label": "Severity",
+   "options": "Critical\nHigh\nMedium\nInfo",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "description": "Critical is out-of-band and immediate. High is an hourly digest, Medium a daily one, Info dashboard only. The tier decides routing, so it is set by the detector and never by hand."
+  },
+  {
+   "fieldname": "category",
+   "fieldtype": "Data",
+   "label": "Category",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "description": "Which detector raised it — persistence, accounts, network, filesystem. Used for grouping and for suppression scoped to one detector."
+  },
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "label": "Subject",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "length": 200,
+   "description": "One line, and the deduplication key together with the date. Must identify the CONDITION, not the measurement — a value that drifts makes every reading a new alert."
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "New\nAcknowledged\nResolved\nSuppressed",
+   "default": "New",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "acknowledged_by",
+   "fieldtype": "Link",
+   "label": "Acknowledged By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "acknowledged_at",
+   "fieldtype": "Datetime",
+   "label": "Acknowledged At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "suppressed_until",
+   "fieldtype": "Datetime",
+   "label": "Suppressed Until",
+   "description": "Silence expires on its own. Permanent suppression is how alerting dies, so there is no way to set one."
+  },
+  {
+   "fieldname": "suppression_reason",
+   "fieldtype": "Small Text",
+   "label": "Suppression Reason"
+  },
+  {
+   "fieldname": "sec_detail",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Long Text",
+   "label": "What Happened",
+   "read_only": 1
+  },
+  {
+   "fieldname": "runbook",
+   "fieldtype": "Long Text",
+   "label": "What To Do",
+   "read_only": 1,
+   "description": "What it means, what to check, and what a false positive looks like. With one operator, an alert whose response has to be reconstructed from memory each time gets ignored within a month."
+  },
+  {
+   "fieldname": "sec_source",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "fieldname": "host",
+   "fieldtype": "Data",
+   "label": "Host",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Data",
+   "label": "Source DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Data",
+   "label": "Source Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_2",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "dedupe_key",
+   "fieldtype": "Data",
+   "label": "Dedupe Key",
+   "read_only": 1,
+   "length": 200,
+   "search_index": 1,
+   "description": "Subject plus the day. Two events with the same key are the same condition reported twice, and only the first is kept."
+  },
+  {
+   "fieldname": "occurrences",
+   "fieldtype": "Int",
+   "label": "Occurrences",
+   "read_only": 1,
+   "default": "1",
+   "description": "How many times this condition was seen while the alert stood open. Counted rather than duplicated."
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "Security Event",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "event_time",
+  "severity",
+  "category",
+  "subject",
+  "cb_1",
+  "status",
+  "acknowledged_by",
+  "acknowledged_at",
+  "suppressed_until",
+  "suppression_reason",
+  "sec_detail",
+  "detail",
+  "runbook",
+  "sec_source",
+  "host",
+  "source_doctype",
+  "source_name",
+  "cb_2",
+  "dedupe_key",
+  "occurrences",
+  "last_seen"
+ ]
+}

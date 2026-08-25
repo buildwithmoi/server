@@ -716,6 +716,100 @@ BACKUP_USAGE_TTL = 300
 
 
 @frappe.whitelist()
+def security_events(
+	severity: str | None = None,
+	status: str | None = None,
+	limit: int = 50,
+) -> dict:
+	"""Findings from the security detectors, newest first."""
+	_assert_server_admin()
+	filters = {}
+	if severity:
+		filters["severity"] = severity
+	if status:
+		filters["status"] = status
+
+	rows = frappe.get_all(
+		"Security Event",
+		filters=filters,
+		fields=[
+			"name", "event_time", "severity", "category", "subject", "detail", "runbook",
+			"status", "occurrences", "last_seen", "host",
+		],
+		order_by="event_time desc",
+		limit=min(int(limit or 50), 200),
+	)
+	# Counted per severity with the query builder — frappe v16 refuses a SQL
+	# function written as a string in `fields`.
+	counts = frappe.get_all(
+		"Security Event",
+		filters={"status": "New"},
+		fields=["severity", {"COUNT": "name", "as": "total"}],
+		group_by="severity",
+	)
+	return {
+		"events": rows,
+		"open_by_severity": {row.severity: row.total for row in counts},
+		"unreviewed_baseline": frappe.db.count("Persistence Item", {"status": "Active", "is_baseline": 0}),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def run_security_scan(record_only: int | bool = 0) -> dict:
+	"""Run the persistence scan now.
+
+	`record_only` stores the result without raising anything — the log-only
+	mode for watching a detector for a week before letting it page anyone.
+	"""
+	_assert_server_admin()
+	from server.security import watch
+
+	return watch.scan(record_only=bool(frappe.parse_json(record_only)))
+
+
+@frappe.whitelist(methods=["POST"])
+def accept_security_baseline() -> dict:
+	"""Mark everything currently recorded as reviewed and expected.
+
+	Deliberately an explicit action. A server rebuilt from a snapshot of a
+	compromised host would otherwise record that host's persistence as normal
+	on its first scan and never mention it again.
+	"""
+	_assert_server_admin()
+	from server.security import watch
+
+	return watch.accept_baseline()
+
+
+@frappe.whitelist(methods=["POST"])
+def acknowledge_security_event(name: str, suppress_hours: int = 0, reason: str = "") -> dict:
+	"""Acknowledge a finding, optionally silencing it for a while.
+
+	Silence expires on its own and the reason is required to set one — there is
+	no permanent suppression, because that is how alerting dies quietly.
+	"""
+	_assert_server_admin()
+	hours = int(suppress_hours or 0)
+	values = {
+		"status": "Acknowledged",
+		"acknowledged_by": frappe.session.user,
+		"acknowledged_at": frappe.utils.now_datetime(),
+	}
+	if hours > 0:
+		if not (reason or "").strip():
+			frappe.throw("Say why it is being silenced.", title="Reason Required")
+		values["status"] = "Suppressed"
+		values["suppressed_until"] = frappe.utils.add_to_date(
+			frappe.utils.now_datetime(), hours=min(hours, 24 * 30)
+		)
+		values["suppression_reason"] = reason.strip()
+
+	frappe.db.set_value("Security Event", name, values, update_modified=False)
+	frappe.db.commit()
+	return {"name": name, "status": values["status"]}
+
+
+@frappe.whitelist()
 def system_health() -> dict:
 	"""Disk, memory, load and where the disk went.
 

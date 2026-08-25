@@ -191,6 +191,11 @@ scheduler_events = {
 		# Disk moves slowly; hourly is plenty and keeps the alert rare enough
 		# to still mean something when it arrives.
 		"7 * * * *": ["server.alerts.run_disk_checks"],
+		# The persistence surface, every fifteen minutes. Everything an
+		# attacker uses to survive a reboot lives in a small, enumerable set of
+		# places, and a clean host changes almost none of them — so the diff is
+		# nearly all signal. The scan itself takes about three seconds.
+		"*/15 * * * *": ["server.security.watch.run_persistence_scan"],
 	},
 	# "daily" is added together with the SSH Session doctype — a hook pointing at
 	# a module that does not exist yet would create a Scheduled Job Type row that
@@ -288,6 +293,11 @@ scheduler_events = {
 default_log_clearing_doctypes = {
 	"SSH Auth Event": 90,
 	"SSH Sudo Command": 180,
+	# A year each. These are what you read when reconstructing a compromise
+	# that ran for months — the incident behind this app went undetected for
+	# eight — and they are small enough that keeping them costs nothing.
+	"Security Event": 365,
+	"Persistence Change": 365,
 }
 
 # Translation

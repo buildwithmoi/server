@@ -372,6 +372,47 @@ def _disk_hints(paths: list[str]) -> str:
 
 
 # ----------------------------------------------------------------------
+# Security findings
+# ----------------------------------------------------------------------
+
+#: Which severities reach a person immediately. High and below are visible in
+#: the interface and go out in a digest; waking someone for a Medium is how the
+#: Criticals stop being read.
+NOTIFY_IMMEDIATELY = ("Critical", "High")
+
+
+def notify_security_event(name: str) -> bool:
+	"""Send a Security Event to whoever is on the hook for this box.
+
+	Deduplication already happened when the event was raised — an event that
+	exists is one that has not been reported today — so this notifies without
+	its own suppression logic.
+	"""
+	settings = get_settings()
+	recipients = settings.get_alert_recipients()
+	if not recipients:
+		return False
+
+	event = frappe.get_doc("Security Event", name)
+	if event.severity not in NOTIFY_IMMEDIATELY:
+		return False
+
+	_notify(
+		recipients,
+		f"[{event.severity}] {event.subject}",
+		(
+			f"<p><b>{frappe.utils.escape_html(event.subject)}</b></p>"
+			f"<p>{frappe.utils.escape_html(event.detail or '')}</p>"
+			+ (f"<p><b>What to do</b><br>{frappe.utils.escape_html(event.runbook)}</p>" if event.runbook else "")
+			+ f"<p style='color:#888'>Detector: {event.category}. Raised on {event.host or 'this host'}.</p>"
+		),
+		"Security Event",
+		name,
+	)
+	return True
+
+
+# ----------------------------------------------------------------------
 # Scheduler entry points
 # ----------------------------------------------------------------------
 
