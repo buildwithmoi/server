@@ -4,10 +4,12 @@
 			<div class="flex flex-col gap-3.5">
 				<div class="flex flex-col gap-1.5">
 					<span class="u-label">Command</span>
-					<Autocomplete
+					<SearchSelect
 						v-model="picked"
 						:options="options"
-						placeholder="Type to search commands…"
+						placeholder="Choose a command"
+						search-placeholder="Search by name or what it does"
+						empty-text="No command matches that."
 						:loading="resource.loading"
 					/>
 					<p class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
@@ -34,9 +36,9 @@
 					<!-- Not runnable: say why, rather than hiding it from search. -->
 					<div
 						v-if="!command.runnable"
-						class="flex items-start gap-2.5 rounded-md border border-[var(--ink)] px-3 py-2.5"
+						class="u-note u-note-warn flex items-start gap-2.5"
 					>
-						<Icon name="alert" :size="15" class="mt-0.5 shrink-0" />
+						<Icon name="alert" :size="15" class="u-warn mt-0.5 shrink-0" />
 						<p class="text-[12.5px] leading-relaxed">{{ command.unsupported_reason }}</p>
 					</div>
 
@@ -70,10 +72,10 @@
 						     is not something you do by reflex. -->
 						<div
 							v-if="command.risk === 'destructive'"
-							class="flex flex-col gap-2 rounded-md border border-[var(--ink)] px-3 py-2.5"
+							class="u-note u-note-danger flex flex-col gap-2"
 						>
 							<div class="flex items-start gap-2.5">
-								<Icon name="alert" :size="15" class="mt-0.5 shrink-0" />
+								<Icon name="alert" :size="15" class="u-danger mt-0.5 shrink-0" />
 								<p class="text-[12.5px] leading-relaxed">
 									This can lose data, and nothing here takes a backup first. Type
 									<span class="font-medium">{{ command.label }}</span> to confirm.
@@ -106,8 +108,9 @@
 
 <script setup>
 import { computed, h, ref, watch } from "vue";
-import { Autocomplete, Button, Dialog, toast } from "frappe-ui";
+import { Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
+import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
 import { benchCommandsResource, runBenchCommandResource } from "../api";
 
@@ -128,13 +131,7 @@ const emit = defineEmits(["update:modelValue", "started"]);
 const RiskTag = (p) =>
 	h(
 		"span",
-		{
-			class:
-				"shrink-0 rounded border px-1.5 py-[1px] text-[10.5px] uppercase tracking-wide " +
-				(p.risk === "destructive"
-					? "border-[var(--ink)] font-semibold text-[var(--ink)]"
-					: "border-[var(--rule-strong)] text-[var(--ink-faint)]"),
-		},
+		{ class: `u-chip shrink-0 ${CHIP[p.risk] || "u-chip"}` },
 		p.risk === "unsupported" ? "not runnable" : p.risk,
 	);
 RiskTag.props = ["risk"];
@@ -157,15 +154,24 @@ const runnableCount = computed(() => catalogue.value.filter((c) => c.runnable).l
 const unsupportedCount = computed(() => catalogue.value.length - runnableCount.value);
 const command = computed(() => catalogue.value.find((c) => c.id === picked.value?.value) || null);
 
+const CHIP = {
+	read: "u-chip",
+	routine: "u-chip",
+	destructive: "u-chip-danger",
+	unsupported: "u-chip-warn",
+};
+
 const options = computed(() =>
 	catalogue.value.map((c) => ({
 		label: c.label,
 		value: c.id,
-		// Searching matches the description too, so "cache" finds "Clear cache"
-		// and "index" finds the search rebuild.
-		description: [c.scope, c.runnable ? c.risk : "not runnable", c.description]
-			.join(" · ")
-			.slice(0, 110),
+		description: c.description,
+		// Risk belongs in a chip, not buried in the middle of the sentence that
+		// explains what the command does.
+		chip: c.runnable ? c.risk : "n/a",
+		chipClass: CHIP[c.risk] || "u-chip",
+		// Searched but not shown, so `bench migrate` finds Migrate.
+		keywords: `${c.scope} ${c.preview} ${c.risk}`,
 	})),
 );
 

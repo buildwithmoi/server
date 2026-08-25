@@ -26,7 +26,7 @@ def _code_to_name() -> dict[str, str]:
 	try:
 		with open(path, encoding="utf-8") as fh:
 			data = json.load(fh)
-	except OSError, ValueError:
+	except (OSError, ValueError):
 		frappe.logger("server").error(f"could not read {path}", exc_info=True)
 		return {}
 

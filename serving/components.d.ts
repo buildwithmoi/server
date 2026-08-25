@@ -8,6 +8,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    ActionMenu: typeof import('./src/components/ActionMenu.vue')['default']
     AppShell: typeof import('./src/components/AppShell.vue')['default']
     BarTimeline: typeof import('./src/components/BarTimeline.vue')['default']
     BenchCommandDialog: typeof import('./src/components/BenchCommandDialog.vue')['default']
@@ -19,9 +20,12 @@ declare module 'vue' {
     JobDock: typeof import('./src/components/JobDock.vue')['default']
     OutcomeMark: typeof import('./src/components/OutcomeMark.vue')['default']
     RankBars: typeof import('./src/components/RankBars.vue')['default']
+    RestoreDialog: typeof import('./src/components/RestoreDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SearchSelect: typeof import('./src/components/SearchSelect.vue')['default']
     Skeleton: typeof import('./src/components/Skeleton.vue')['default']
+    SslDialog: typeof import('./src/components/SslDialog.vue')['default']
     StatCard: typeof import('./src/components/StatCard.vue')['default']
   }
 }

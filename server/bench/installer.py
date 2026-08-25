@@ -35,7 +35,7 @@ import time
 import frappe
 from frappe.utils.synchronization import LockTimeoutError, filelock
 
-from server.bench import commands, doctor, scanner
+from server.bench import commands, doctor, restore, scanner, ssl
 from server.server.doctype.server_settings.server_settings import get_settings
 
 #: How often, at most, to push log lines to a watching browser.
@@ -93,6 +93,10 @@ def _preflight(request, bench_doc, settings) -> list[str]:
 
 	if request.is_command():
 		return _preflight_command(request, bench_doc)
+	if request.is_ssl():
+		return _preflight_ssl(request, bench_doc)
+	if request.is_restore():
+		return _preflight_restore(request, bench_doc)
 	if request.is_pull():
 		return _preflight_pull(request)
 	return _preflight_clone(request, bench_doc)
@@ -119,6 +123,100 @@ def _preflight_command(request, bench_doc) -> list[str]:
 		# Recorded in the log itself, so the record of what happened carries the
 		# warning that was shown before it happened.
 		notes.append("This command is destructive and no backup was taken automatically.")
+	return notes
+
+
+def _preflight_ssl(request, bench_doc) -> list[str]:
+	"""Refuse an SSL run that cannot possibly work.
+
+	Every one of these takes milliseconds and each maps to a failure that would
+	otherwise surface minutes later — one of them (no DNS multitenancy) as a
+	successful run that did nothing at all.
+	"""
+	mode = request.ssl_mode_key()
+	if not mode:
+		raise InstallAborted("No SSL operation was chosen.")
+
+	if not ssl.certbot_path():
+		raise InstallAborted(
+			"certbot is not installed on this server. Install it with "
+			"`sudo apt install certbot python3-certbot-nginx`, then try again."
+		)
+
+	if not ssl.has_passwordless_sudo():
+		raise InstallAborted(
+			"certbot and nginx both need root, and this job has no terminal to type a password "
+			"into. Give this user a NOPASSWD sudoers rule before running SSL from here."
+		)
+
+	if mode == ssl.MODE_ISSUE:
+		site = (request.install_on_site or "").strip()
+		if site not in bench_doc.site_names():
+			raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
+		if not ssl.is_dns_multitenant(bench_doc.bench_path):
+			raise InstallAborted(
+				"This bench is not DNS-multitenant, and bench refuses to set up SSL without it — "
+				"while still exiting 0, so it would look like it worked. Run "
+				"`bench config dns_multitenant on` first."
+			)
+		domain, extras = ssl.site_domains(bench_doc.bench_path, site)
+		target = (request.ssl_domain or "").strip() or domain
+		if not ssl.VALID_DOMAIN.match(target):
+			raise InstallAborted(
+				f"{target!r} is not a public domain name, so Let's Encrypt cannot certify it. "
+				"Point a real domain at this server and set it as the site's host_name."
+			)
+		if request.ssl_domain and request.ssl_domain.strip() not in extras:
+			raise InstallAborted(
+				f"{request.ssl_domain} is not one of {site}'s configured domains "
+				f"({', '.join(extras) or 'none'}). bench only certifies a domain the site already "
+				"knows about — add it with `bench setup add-domain` first."
+			)
+		return [f"Issue certificate for {target} · nginx will restart"]
+
+	return [
+		"Renew certificates" + (" (dry run — nothing installed)" if request.ssl_dry_run else ""),
+		"nginx stops for the check and starts again afterwards, even if renewal fails.",
+	]
+
+
+def _preflight_restore(request, bench_doc) -> list[str]:
+	"""Refuse a restore that cannot work, before the database is dropped.
+
+	The ordering matters: everything that would leave the site broken is
+	checked before anything that merely fails.
+	"""
+	site = (request.install_on_site or "").strip()
+	if site not in bench_doc.site_names():
+		raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
+
+	try:
+		backup = restore.find(bench_doc.bench_path, site, request.restore_backup_key or "")
+	except restore.RestoreRefused as exc:
+		raise InstallAborted(str(exc)) from exc
+
+	if not os.path.isfile(backup.database):
+		raise InstallAborted(f"{backup.database} is gone. Nothing was changed.")
+
+	password = request.get_password("restore_db_password", raise_exception=False)
+	if not password:
+		raise InstallAborted(
+			"The database root password is missing. bench restore cannot drop and recreate the "
+			"database without it, and there is no terminal here for it to ask on."
+		)
+
+	if backup.encrypted and not request.get_password("restore_encryption_key", raise_exception=False):
+		raise InstallAborted(
+			"That backup is encrypted and its encryption key was not supplied. Restoring would "
+			"drop the database and then fail to load anything into it."
+		)
+
+	notes = [f"Restore {site} from {backup.taken_at} ({backup.source} backup)"]
+	mismatch = restore.describe_mismatch(backup, site)
+	if mismatch:
+		notes.append(mismatch)
+	if not request.restore_backup_first:
+		notes.append("No backup was taken first — this was explicitly turned off.")
 	return notes
 
 
@@ -407,6 +505,10 @@ def run_install_request(name: str) -> dict:
 			},
 			update_modified=False,
 		)
+		if request.is_restore():
+			# Every terminal path runs through here, so this is the one place
+			# the credentials cannot escape by way of an early return.
+			request.clear_restore_secrets()
 		frappe.db.commit()
 		frappe.publish_realtime(
 			DONE_EVENT,
@@ -468,6 +570,85 @@ def run_install_request(name: str) -> dict:
 							error=_explain_failure(
 								code, timed_out, command.timeout, request, f"bench {command.label.lower()}"
 							),
+						)
+				elif request.is_ssl():
+					argv = ssl.build_argv(
+						request.ssl_mode_key(),
+						settings.bench_executable,
+						request.install_on_site or None,
+						request.ssl_domain or None,
+						bool(request.ssl_dry_run),
+					)
+					request.db_set("command", " ".join(argv), update_modified=False)
+					frappe.db.commit()
+					emit(f"$ {' '.join(argv)}")
+
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, ssl.SSL_TIMEOUT, emit)
+					if code != 0:
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_failure(
+								code, timed_out, ssl.SSL_TIMEOUT, request, "the SSL command"
+							),
+						)
+
+					# bench reports several SSL failures by printing and then
+					# exiting 0. Trusting the exit code alone would record
+					# "Success" for a site still on plain HTTP.
+					quiet = ssl.quiet_failure(request.output or "")
+					if quiet:
+						return finish("Failed", exit_code=code, error=quiet)
+				elif request.is_restore():
+					site = request.install_on_site
+					backup = restore.find(bench_doc.bench_path, site, request.restore_backup_key)
+
+					if request.restore_backup_first:
+						# Files are only worth backing up when files are about
+						# to be overwritten; a dump is fast, a files tar is not.
+						with_files = bool(request.restore_public_files or request.restore_private_files)
+						safety = restore.build_backup_argv(settings.bench_executable, site, with_files)
+						emit(f"$ {' '.join(safety)}")
+						code, timed_out = _stream(safety, bench_doc.bench_path, env, timeout, emit)
+						if code != 0:
+							# Refuse to continue. The backup is the only thing
+							# standing between a bad restore and lost data, so
+							# failing to take one is a reason to stop, not a
+							# warning to print on the way past.
+							return finish(
+								"Failed",
+								exit_code=code,
+								error=(
+									"The safety backup failed, so nothing was restored and the site "
+									"is untouched. "
+									+ _explain_failure(code, timed_out, timeout, request, "bench backup")
+								),
+							)
+						emit("")
+
+					argv = restore.build_argv(
+						settings.bench_executable,
+						site,
+						backup,
+						request.get_password("restore_db_password", raise_exception=False),
+						request.restore_db_username or None,
+						request.get_password("restore_encryption_key", raise_exception=False),
+						bool(request.restore_public_files),
+						bool(request.restore_private_files),
+					)
+					# Stored and streamed redacted. The real argv never reaches
+					# the database or the browser.
+					shown = " ".join(restore.redact(argv))
+					request.db_set("command", shown, update_modified=False)
+					frappe.db.commit()
+					emit(f"$ {shown}")
+
+					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit)
+					if code != 0:
+						return finish(
+							"Failed",
+							exit_code=code,
+							error=_explain_failure(code, timed_out, timeout, request, "bench restore"),
 						)
 				elif request.is_pull():
 					app = scanner.read_app(request.app_path)

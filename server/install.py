@@ -29,6 +29,16 @@ REQUIRED_COMMANDS = {
 	"ssh": "authenticating to GitHub for private repositories",
 }
 
+#: Needed only by the features that use them, so a server without these is
+#: reported as limited rather than broken. Making certbot a hard requirement
+#: would flag every bench that serves over plain HTTP behind something else.
+OPTIONAL_COMMANDS = {
+	"certbot": (
+		"issuing and renewing Let's Encrypt certificates from Benches → Set SSL. "
+		"Install with: sudo apt install certbot python3-certbot-nginx"
+	),
+}
+
 
 def check_prerequisites() -> dict:
 	"""Report what this machine can and cannot do. Never raises."""
@@ -46,6 +56,11 @@ def check_prerequisites() -> dict:
 		"path": bench_exe,
 		"purpose": "installing apps into benches",
 	}
+
+	optional = {}
+	for name, purpose in OPTIONAL_COMMANDS.items():
+		path = shutil.which(name)
+		optional[name] = {"found": bool(path), "path": path, "purpose": purpose}
 
 	auth_log = (settings.auth_log_path or "").strip()
 	logs = {
@@ -65,7 +80,22 @@ def check_prerequisites() -> dict:
 			"sudo usermod -aG adm $USER (then log out and back in)."
 		)
 
-	return {"commands": commands, "logs": logs, "problems": problems, "ok": not problems}
+	# Advisory, never a problem: these limit what the app can do, they do not
+	# stop it working.
+	notes = [
+		f"{name} not found — {info['purpose']}"
+		for name, info in optional.items()
+		if not info["found"]
+	]
+
+	return {
+		"commands": commands,
+		"optional": optional,
+		"logs": logs,
+		"problems": problems,
+		"notes": notes,
+		"ok": not problems,
+	}
 
 
 def _journal_readable() -> bool:
@@ -88,7 +118,7 @@ def _journal_readable() -> bool:
 			timeout=20,
 			check=False,
 		)
-	except OSError, subprocess.SubprocessError:
+	except (OSError, subprocess.SubprocessError):
 		return False
 	return result.returncode == 0 and bool(result.stdout.strip())
 
@@ -133,11 +163,21 @@ def _print_report(report: dict):
 		f"{'readable' if logs['auth_log_readable'] else 'not readable'}"
 	)
 
+	for name, info in report.get("optional", {}).items():
+		mark = "ok " if info["found"] else "-- "
+		print(f"   {mark}{name:<12} {info['path'] or 'not installed (optional)'}")
+
 	if report["problems"]:
 		print("")
 		print("  Before this can collect anything:")
 		for problem in report["problems"]:
 			print(f"   - {problem}")
+
+	if report.get("notes"):
+		print("")
+		print("  Optional, only if you want the feature:")
+		for note in report["notes"]:
+			print(f"   - {note}")
 
 	print("")
 	print("  Next: open /serving, then turn on SSH Monitoring in Server Settings.")

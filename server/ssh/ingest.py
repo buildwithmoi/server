@@ -145,7 +145,7 @@ def _insert(doc: dict, stats: IngestStats) -> None:
 		frappe.db.savepoint(savepoint)
 		frappe.get_doc(doc).insert(ignore_permissions=True)
 		stats.inserted += 1
-	except frappe.UniqueValidationError, frappe.DuplicateEntryError:
+	except (frappe.UniqueValidationError, frappe.DuplicateEntryError):
 		frappe.db.rollback(save_point=savepoint)
 		stats.skipped += 1
 

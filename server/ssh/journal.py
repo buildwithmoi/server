@@ -63,7 +63,7 @@ def is_available() -> bool:
 			timeout=15,
 			check=False,
 		)
-	except OSError, subprocess.SubprocessError:
+	except (OSError, subprocess.SubprocessError):
 		return False
 	return result.returncode == 0
 
@@ -86,7 +86,7 @@ def can_read_system_records() -> bool:
 			timeout=20,
 			check=False,
 		)
-	except OSError, subprocess.SubprocessError:
+	except (OSError, subprocess.SubprocessError):
 		return False
 	if result.returncode != 0:
 		return False

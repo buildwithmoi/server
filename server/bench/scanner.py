@@ -113,7 +113,7 @@ def _read_json(path: str) -> dict:
 	try:
 		with open(path, encoding="utf-8") as fh:
 			return json.load(fh)
-	except OSError, ValueError:
+	except (OSError, ValueError):
 		return {}
 
 
@@ -138,7 +138,7 @@ def _git(cwd: str, *args: str) -> str | None:
 			timeout=GIT_TIMEOUT,
 			check=False,
 		)
-	except OSError, subprocess.SubprocessError:
+	except (OSError, subprocess.SubprocessError):
 		return None
 	if result.returncode != 0:
 		return None
@@ -264,7 +264,7 @@ def _read_python_version(bench_path: str) -> str | None:
 			timeout=GIT_TIMEOUT,
 			check=False,
 		)
-	except OSError, subprocess.SubprocessError:
+	except (OSError, subprocess.SubprocessError):
 		return None
 	return (result.stdout or result.stderr).strip().replace("Python ", "") or None
 

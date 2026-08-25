@@ -5,12 +5,27 @@
 				<template #prefix><Icon name="terminal" :size="14" /></template>
 				Bench Commands
 			</Button>
-			<Dropdown :options="actions" :button="{ label: 'Actions', iconRight: null }" placement="right" />
+			<Button @click="showSsl = true">
+				<template #prefix><Icon name="lock" :size="14" /></template>
+				Set SSL
+			</Button>
+			<ActionMenu label="Actions" :options="actions" />
 		</template>
 
 		<BenchCommandDialog
 			v-model="showCommands"
 			:bench="name"
+			:sites="bench.sites.map((s) => s.site_name)"
+			:default-site="bench.default_site || ''"
+			@started="onStarted"
+		/>
+
+		<SslDialog v-model="showSsl" :bench="name" @started="onStarted" />
+
+		<RestoreDialog
+			v-model="showRestore"
+			:bench="name"
+			:bench-path="bench.bench_path || ''"
 			:sites="bench.sites.map((s) => s.site_name)"
 			:default-site="bench.default_site || ''"
 			@started="onStarted"
@@ -164,14 +179,17 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
-import { Button, Dropdown, toast } from "frappe-ui";
+import { Button, toast } from "frappe-ui";
 import { useRoute, useRouter } from "vue-router";
 
 import AppShell from "../components/AppShell.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
+import ActionMenu from "../components/ActionMenu.vue";
 import BenchCommandDialog from "../components/BenchCommandDialog.vue";
+import SslDialog from "../components/SslDialog.vue";
+import RestoreDialog from "../components/RestoreDialog.vue";
 import InstallDialog from "../components/InstallDialog.vue";
 import Skeleton from "../components/Skeleton.vue";
 import { benchResource, rescanBenchesResource } from "../api";
@@ -182,6 +200,8 @@ const resource = benchResource();
 const rescanning = ref(false);
 const showInstall = ref(false);
 const showCommands = ref(false);
+const showSsl = ref(false);
+const showRestore = ref(false);
 const installMode = ref("Clone");
 
 const name = computed(() => String(route.params.name || ""));
@@ -213,40 +233,55 @@ const facts = computed(() => [
 const actions = computed(() => [
 	{
 		label: "Install an app…",
+		icon: "download",
 		description: "Clone a repository from a GitHub account",
 		onClick: () => openInstall("Clone"),
 		condition: () => bench.value.exists_on_disk !== false,
 	},
 	{
 		label: "Update an app…",
+		icon: "refresh",
 		description: "git pull inside an app already in this bench",
 		onClick: () => openInstall("Pull"),
 		condition: () => bench.value.exists_on_disk !== false && bench.value.apps.length > 0,
 	},
 	{
 		label: "Run a bench command…",
+		icon: "terminal",
 		description: "migrate, backup, clear cache, and the rest",
 		onClick: () => (showCommands.value = true),
 		condition: () => bench.value.exists_on_disk !== false,
 	},
 	{
+		label: "Restore a site…",
+		icon: "database",
+		description: "Replace a site from one of its backups",
+		onClick: () => (showRestore.value = true),
+		danger: true,
+		condition: () => bench.value.exists_on_disk !== false && bench.value.sites.length > 0,
+	},
+	{
 		label: "Rescan this bench",
+		icon: "refresh",
 		description: "Re-read apps, sites and git state from disk",
 		onClick: rescan,
 	},
 	{
 		label: "Copy bench path",
+		icon: "panel",
 		description: bench.value.bench_path,
 		onClick: () => copy(bench.value.bench_path, "Bench path copied"),
 	},
 	{
 		label: "Open default site",
+		icon: "globe",
 		description: bench.value.default_site || "no default site",
 		onClick: () => openSite(),
 		condition: () => Boolean(bench.value.default_site && bench.value.webserver_port),
 	},
 	{
 		label: "Install history",
+		icon: "layers",
 		description: "Every request that targeted this bench",
 		onClick: () => router.push({ name: "Installs" }),
 	},

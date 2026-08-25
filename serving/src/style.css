@@ -35,14 +35,28 @@
 	--focus: #0a0a0a;
 
 	/*
-	 * The single accent in an otherwise monochrome interface, and it means one
-	 * thing: work is happening right now. That is an ACTIVITY signal, not a
-	 * severity one — severity stays monochrome (filled/hollow/dash plus a word)
-	 * so it survives greyscale and colour blindness. Spending the only colour on
-	 * "something is running" is what makes it impossible to miss.
+	 * SEMANTIC COLOUR, ON A MONOCHROME BASE.
+	 *
+	 * The interface is greyscale so that the few things that matter can afford
+	 * to shout. Colour is reserved for state, never for decoration: nothing is
+	 * tinted merely to look nice.
+	 *
+	 * Colour is added to severity, never substituted for it. Every marker keeps
+	 * its shape (filled / hollow / dash) and its word, so the meaning survives
+	 * greyscale printing and the roughly one man in twelve who cannot separate
+	 * red from green.
 	 */
-	--live: #16a34a;
-	--live-soft: rgba(22, 163, 74, 0.18);
+	--live: #65a30d;           /* work happening right now */
+	--live-soft: rgba(132, 204, 22, 0.2);
+	--ok: #4d7c0f;             /* finished, succeeded */
+	--ok-bg: #f7fee7;
+	--ok-border: #bef264;
+	--warn: #b45309;           /* finished, but read the note */
+	--warn-bg: #fffbeb;
+	--warn-border: #fcd34d;
+	--danger: #b91c1c;         /* failed, or about to destroy something */
+	--danger-bg: #fef2f2;
+	--danger-border: #fca5a5;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -57,6 +71,17 @@
 		--rule: #262626;
 		--rule-strong: #3a3a3a;
 		--focus: #f5f5f5;
+		--live: #a3e635;
+		--live-soft: rgba(163, 230, 53, 0.22);
+		--ok: #a3e635;
+		--ok-bg: #1a2408;
+		--ok-border: #3f6212;
+		--warn: #fbbf24;
+		--warn-bg: #2a1f05;
+		--warn-border: #78350f;
+		--danger: #f87171;
+		--danger-bg: #2a0d0d;
+		--danger-border: #7f1d1d;
 	}
 }
 
@@ -258,3 +283,64 @@ body {
 .u-scroll::-webkit-scrollbar-track {
 	background: transparent;
 }
+
+
+/* ------------------------------------------------------------ typography */
+
+/*
+ * ONE LABEL/DETAIL PAIR, USED EVERYWHERE.
+ *
+ * Menus, option lists and settings rows were each inventing their own weights,
+ * so a label and its explanation ended up looking equally important and the
+ * eye had nothing to land on. The label is near-black and carries the weight;
+ * the detail is smaller, lighter and set in the faint ink. Everything that
+ * shows a name above an explanation uses these two.
+ */
+.u-item-label {
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1.35;
+	color: var(--ink);
+	letter-spacing: -0.005em;
+}
+
+.u-item-detail {
+	font-size: 11.5px;
+	line-height: 1.45;
+	color: var(--ink-faint);
+}
+
+/* --------------------------------------------------------------- state */
+
+.u-ok { color: var(--ok); }
+.u-warn { color: var(--warn); }
+.u-danger { color: var(--danger); }
+
+.u-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	border: 1px solid var(--rule-strong);
+	border-radius: 5px;
+	padding: 1px 6px;
+	font-size: 10.5px;
+	font-weight: 550;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: var(--ink-faint);
+}
+
+.u-chip-ok { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); }
+.u-chip-warn { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+.u-chip-danger { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
+
+.u-note {
+	border: 1px solid var(--rule-strong);
+	border-radius: 8px;
+	padding: 10px 12px;
+	background: var(--paper-sunk);
+}
+.u-note-ok { border-color: var(--ok-border); background: var(--ok-bg); }
+.u-note-warn { border-color: var(--warn-border); background: var(--warn-bg); }
+.u-note-danger { border-color: var(--danger-border); background: var(--danger-bg); }

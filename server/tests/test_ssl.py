@@ -1,0 +1,172 @@
+# Copyright (c) 2026, Carbonite Solutions Ltd and contributors
+# For license information, please see license.txt
+
+"""Let's Encrypt argv and readiness tests.
+
+Frappe-free and network-free. Nothing here talks to certbot or Let's Encrypt —
+what is being tested is the argv that would be handed to them, which is exactly
+the part that has to be right before anything stops nginx.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+
+from server.bench import ssl
+
+BENCH_EXE = "/usr/local/bin/bench"
+
+
+def make_site(root: str, site: str, config: dict | None = None) -> None:
+	path = os.path.join(root, "sites", site)
+	os.makedirs(path, exist_ok=True)
+	with open(os.path.join(path, "site_config.json"), "w") as handle:
+		json.dump(config or {}, handle)
+
+
+class TestIssueArgv(unittest.TestCase):
+	def test_uses_non_interactive_flag(self):
+		"""`-n` is not optional.
+
+		Without it bench asks "this stops nginx, continue?", and a job with no
+		stdin answers that by aborting — so the run would fail every time.
+		"""
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com")
+		self.assertEqual(argv, [BENCH_EXE, "setup", "lets-encrypt", "erp.example.com", "-n"])
+
+	def test_custom_domain_is_appended(self):
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com", "shop.example.com")
+		self.assertEqual(argv[-2:], ["--custom-domain", "shop.example.com"])
+
+	def test_issue_needs_a_site(self):
+		with self.assertRaises(ssl.SSLRefused):
+			ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, None)
+
+	def test_rejects_a_domain_that_is_not_one(self):
+		for bad in ("localhost", "not a domain", "example.com; rm -rf /", "-evil.com", "   "):
+			with self.subTest(domain=bad), self.assertRaises(ssl.SSLRefused):
+				ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "site", bad)
+
+	def test_no_custom_domain_means_the_site_own_domain(self):
+		"""Empty is a choice, not a bad value — it means "certify the site"."""
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com", "")
+		self.assertNotIn("--custom-domain", argv)
+
+	def test_unknown_mode_is_refused(self):
+		with self.assertRaises(ssl.SSLRefused):
+			ssl.build_argv("delete-everything", BENCH_EXE, "site")
+
+
+class TestRenewArgv(unittest.TestCase):
+	def setUp(self):
+		if not ssl.certbot_path():
+			self.skipTest("certbot is not installed on this machine")
+
+	def test_renew_does_not_use_the_bench_command(self):
+		"""bench's own renew asks for confirmation and cannot be automated.
+
+		`bench renew-lets-encrypt` calls click.confirm with no non-interactive
+		escape, so it must never appear in an argv built here.
+		"""
+		argv = ssl.build_argv(ssl.MODE_RENEW, BENCH_EXE)
+		self.assertNotIn("renew-lets-encrypt", argv)
+		self.assertIn("renew", argv)
+		self.assertEqual(argv[:2], ["sudo", "-n"])
+
+	def test_nginx_is_restarted_by_a_post_hook(self):
+		"""The post-hook runs even when renewal fails.
+
+		Stopping nginx and starting it again in sequence — which is what bench
+		does — leaves every site offline if the middle step raises.
+		"""
+		argv = ssl.build_argv(ssl.MODE_RENEW, BENCH_EXE)
+		self.assertIn("--post-hook", argv)
+		self.assertEqual(argv[argv.index("--post-hook") + 1], "systemctl start nginx")
+
+	def test_dry_run_is_opt_in(self):
+		self.assertNotIn("--dry-run", ssl.build_argv(ssl.MODE_RENEW, BENCH_EXE))
+		self.assertIn("--dry-run", ssl.build_argv(ssl.MODE_RENEW, BENCH_EXE, dry_run=True))
+
+
+class TestQuietFailure(unittest.TestCase):
+	"""bench reports several SSL failures by printing and exiting 0."""
+
+	def test_missing_multitenancy_is_caught(self):
+		message = ssl.quiet_failure(f"some output\n{ssl.NO_MULTITENANCY}\nmore output")
+		self.assertIsNotNone(message)
+		self.assertIn("dns_multitenant", message)
+
+	def test_other_quiet_failures_are_reported_verbatim(self):
+		message = ssl.quiet_failure("No site named erp.example.com")
+		self.assertIn("No site named erp.example.com", message)
+
+	def test_a_successful_run_is_not_flagged(self):
+		self.assertIsNone(ssl.quiet_failure("Congratulations! Your certificate has been saved."))
+
+
+class TestSiteDomains(unittest.TestCase):
+	def test_host_name_wins_over_the_site_name(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, "site1.local", {"host_name": "https://erp.example.com/"})
+			domain, extras = ssl.site_domains(root, "site1.local")
+			# The scheme and trailing slash have to come off — certbot wants a
+			# hostname, not a URL.
+			self.assertEqual(domain, "erp.example.com")
+			self.assertEqual(extras, [])
+
+	def test_falls_back_to_the_site_name(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, "erp.example.com", {})
+			domain, _ = ssl.site_domains(root, "erp.example.com")
+			self.assertEqual(domain, "erp.example.com")
+
+	def test_extra_domains_are_collected(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, "s", {"domains": ["a.example.com", {"domain": "b.example.com"}]})
+			_, extras = ssl.site_domains(root, "s")
+			self.assertEqual(extras, ["a.example.com", "b.example.com"])
+
+	def test_missing_config_is_not_an_error(self):
+		with tempfile.TemporaryDirectory() as root:
+			self.assertEqual(ssl.site_domains(root, "nope")[0], "nope")
+
+
+class TestMultitenancy(unittest.TestCase):
+	def test_reads_common_site_config(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites"))
+			path = os.path.join(root, "sites", "common_site_config.json")
+			with open(path, "w") as handle:
+				json.dump({"dns_multitenant": True}, handle)
+			self.assertTrue(ssl.is_dns_multitenant(root))
+
+	def test_absent_means_false(self):
+		with tempfile.TemporaryDirectory() as root:
+			self.assertFalse(ssl.is_dns_multitenant(root))
+
+
+class TestReadiness(unittest.TestCase):
+	def test_reports_every_check_and_a_row_per_site(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, "erp.example.com", {})
+			report = ssl.readiness(root, [{"name": "erp.example.com", "is_default": True}])
+
+			self.assertEqual({c["key"] for c in report["checks"]}, {"certbot", "sudo", "multitenant"})
+			self.assertEqual(len(report["sites"]), 1)
+			self.assertTrue(report["sites"][0]["is_default"])
+			# ready must never be true while a blocking check is failing.
+			blocking_ok = all(c["ok"] for c in report["checks"] if c["blocking"])
+			self.assertEqual(report["ready"], blocking_ok)
+
+	def test_a_site_that_cannot_be_certified_says_so(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, "localhost", {})
+			report = ssl.readiness(root, [{"name": "localhost", "is_default": True}])
+			self.assertIn("not a public domain", report["sites"][0]["note"])
+
+
+if __name__ == "__main__":
+	unittest.main()

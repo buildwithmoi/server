@@ -2,14 +2,17 @@
 	<div class="flex h-full bg-[var(--paper)] text-[var(--ink)]">
 		<!-- ------------------------------------------------------- sidebar -->
 		<aside
-			class="fixed inset-y-0 left-0 z-40 flex w-[228px] shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper)] transition-transform duration-200 ease-[var(--ease)] lg:static lg:translate-x-0"
-			:class="open ? 'translate-x-0' : '-translate-x-full'"
+			class="fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper)] transition-all duration-200 ease-[var(--ease)] lg:static lg:translate-x-0"
+			:class="[
+				open ? 'translate-x-0' : '-translate-x-full',
+				collapsed ? 'w-[60px]' : 'w-[228px]',
+			]"
 		>
-			<div class="flex items-center gap-2.5 px-4 py-4">
-				<span class="grid h-7 w-7 place-items-center rounded-[7px] bg-[var(--ink)] text-[var(--paper)]">
+			<div class="flex items-center gap-2.5 px-3.5 py-4" :class="collapsed ? 'justify-center px-0' : ''">
+				<span class="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] bg-[var(--ink)] text-[var(--paper)]">
 					<Icon name="shield" :size="15" stroke-width="2" />
 				</span>
-				<div class="min-w-0">
+				<div v-if="!collapsed" class="min-w-0">
 					<p class="u-display truncate text-[13.5px] leading-tight">Server</p>
 					<p class="truncate text-[11px] leading-tight text-[var(--ink-faint)]">{{ siteName }}</p>
 				</div>
@@ -20,21 +23,24 @@
 					v-for="item in nav"
 					:key="item.name"
 					:to="{ name: item.name }"
-					class="group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] transition-colors duration-150"
-					:class="
+					class="group relative flex items-center gap-2.5 rounded-md py-[7px] text-[13px] transition-colors duration-150"
+					:title="collapsed ? item.label : undefined"
+					:class="[
 						isActive(item.name)
 							? 'bg-[var(--ink)] font-medium text-[var(--paper)]'
-							: 'text-[var(--ink-soft)] hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]'
-					"
+							: 'text-[var(--ink-soft)] hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]',
+						collapsed ? 'justify-center px-0' : 'px-2.5',
+					]"
 					@click="open = false"
 				>
-					<Icon :name="item.icon" :size="16" />
-					<span class="truncate">{{ item.label }}</span>
+					<Icon :name="item.icon" :size="16" class="shrink-0" />
+					<span v-if="!collapsed" class="truncate">{{ item.label }}</span>
 					<!-- The beacon. Visible from every page, because the point of
 					     backgrounding a clone is that you went somewhere else. -->
 					<span
 						v-if="item.name === 'Installs' && isRunning"
-						class="u-live-dot ml-auto h-2 w-2 shrink-0 rounded-full"
+						class="u-live-dot h-2 w-2 shrink-0 rounded-full"
+						:class="collapsed ? 'absolute right-1 top-1' : 'ml-auto'"
 						:title="`${activeJobs.length} running`"
 					/>
 					<span
@@ -45,11 +51,21 @@
 				</RouterLink>
 			</nav>
 
-			<div class="mt-auto border-t border-[var(--rule)] p-3">
+			<div class="mt-auto border-t border-[var(--rule)] p-3" :class="collapsed ? 'px-2' : ''">
+				<button
+					class="mb-2 hidden w-full items-center gap-2.5 rounded-md py-[7px] text-[13px] text-[var(--ink-soft)] transition-colors duration-150 hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)] lg:flex"
+					:class="collapsed ? 'justify-center px-0' : 'px-2.5'"
+					:title="collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+					@click="toggleCollapsed"
+				>
+					<Icon name="panel" :size="16" class="shrink-0" :class="collapsed ? '' : 'rotate-180'" />
+					<span v-if="!collapsed" class="truncate">Collapse</span>
+				</button>
+
 				<!-- Ingest state lives in the chrome, not on one page: a monitoring
 				     console that is quietly not ingesting looks exactly like a quiet
 				     server, so this must be visible from everywhere. -->
-				<div class="mb-2.5 flex items-center gap-2 px-1">
+				<div v-if="!collapsed" class="mb-2.5 flex items-center gap-2 px-1">
 					<span
 						class="h-1.5 w-1.5 shrink-0 rounded-full"
 						:class="monitoringEnabled ? 'bg-[var(--ink)] u-live' : 'bg-[var(--ink-ghost)]'"
@@ -59,11 +75,13 @@
 					</span>
 				</div>
 				<button
-					class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] text-[var(--ink-soft)] transition-colors duration-150 hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]"
+					class="flex w-full items-center gap-2.5 rounded-md py-[7px] text-[13px] text-[var(--ink-soft)] transition-colors duration-150 hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]"
+					:class="collapsed ? 'justify-center px-0' : 'px-2.5'"
+					:title="collapsed ? 'Sign out' : undefined"
 					@click="$auth.logout()"
 				>
-					<Icon name="logout" :size="16" />
-					<span class="truncate">Sign out</span>
+					<Icon name="logout" :size="16" class="shrink-0" />
+					<span v-if="!collapsed" class="truncate">Sign out</span>
 				</button>
 			</div>
 		</aside>
@@ -131,6 +149,28 @@ defineProps({
 const $auth = inject("$auth");
 const route = useRoute();
 const open = ref(false);
+
+/**
+ * Remembered per browser. A sidebar that springs back open on every navigation
+ * is worse than one that does not collapse at all — and localStorage can throw
+ * outright in a private window, so the read is guarded rather than assumed.
+ */
+const STORAGE_KEY = "server:sidebar-collapsed";
+const collapsed = ref(false);
+try {
+	collapsed.value = localStorage.getItem(STORAGE_KEY) === "1";
+} catch {
+	collapsed.value = false;
+}
+
+function toggleCollapsed() {
+	collapsed.value = !collapsed.value;
+	try {
+		localStorage.setItem(STORAGE_KEY, collapsed.value ? "1" : "0");
+	} catch {
+		// Preference simply is not remembered; the toggle still works.
+	}
+}
 
 const nav = [
 	{ name: "Dashboard", label: "Overview", icon: "gauge" },

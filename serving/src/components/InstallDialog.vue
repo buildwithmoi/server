@@ -49,11 +49,14 @@
 							{{ syncing ? "syncing…" : "re-sync list" }}
 						</button>
 					</div>
-					<Autocomplete
+					<SearchSelect
 						v-model="repo"
 						:options="repoOptions"
-						placeholder="Type to search repositories…"
+						placeholder="Choose a repository"
+						search-placeholder="Search repositories"
+						empty-text="No repository matches that."
 						:loading="reposRes.loading"
+						mono
 					/>
 					<p v-if="!repoOptions.length && !reposRes.loading" class="text-[11.5px] text-[var(--ink-faint)]">
 						Nothing cached for this account yet — use “re-sync list”.
@@ -135,22 +138,24 @@
 					</div>
 
 					<!-- A picker that can only offer what it managed to fetch is a
-					     dead end when the fetch fails, and frappe-ui's Autocomplete
-					     accepts nothing but its own options. So a typed name is
-					     always reachable, and becomes the default when there is no
-					     list to pick from. -->
+					     dead end when the fetch fails, and a select accepts nothing
+					     but its own options. So a typed name is always reachable,
+					     and becomes the default when there is no list to pick. -->
 					<input
 						v-if="manualBranch || (!branchOptions.length && !branchesRes.loading)"
 						v-model.trim="typedBranch"
 						:placeholder="preferredBranch || 'branch name'"
 						class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
 					/>
-					<Autocomplete
+					<SearchSelect
 						v-else
 						v-model="branch"
 						:options="branchOptions"
-						:placeholder="branchesRes.loading ? 'loading branches…' : 'Default branch'"
+						:placeholder="branchesRes.loading ? 'Loading branches…' : 'Default branch'"
+						search-placeholder="Search branches"
+						empty-text="No branch matches that."
 						:loading="branchesRes.loading"
+						mono
 					/>
 
 					<p v-if="branchesRes.loading" class="text-[11.5px] text-[var(--ink-faint)]">
@@ -207,8 +212,15 @@
 			<div v-else class="flex flex-col gap-3.5">
 				<div class="flex flex-col gap-1.5">
 					<span class="u-label">App</span>
-					<Autocomplete v-model="app" :options="appOptions" placeholder="Type to search apps…"
-					              :loading="appsRes.loading" />
+					<SearchSelect
+						v-model="app"
+						:options="appOptions"
+						placeholder="Choose an app"
+						search-placeholder="Search apps in this bench"
+						empty-text="No app matches that."
+						:loading="appsRes.loading"
+						mono
+					/>
 					<p v-if="selectedApp" class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
 						on <span class="u-mono">{{ selectedApp.branch }}</span> via
 						<span class="u-mono">{{ selectedApp.remote_name }}</span>
@@ -268,8 +280,9 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { Autocomplete, Button, Dialog, toast } from "frappe-ui";
+import { Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
+import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
 import {
 	benchAppsResource, createInstallResource, githubProfilesResource,
@@ -380,8 +393,10 @@ const repoOptions = computed(() =>
 		label: r.repo_name,
 		value: r.repo_name,
 		defaultBranch: r.default_branch,
-		description: [r.is_private ? "private" : "public", r.is_archived ? "archived" : null,
-		              r.description].filter(Boolean).join(" · ").slice(0, 90),
+		description: r.description || "",
+		chip: r.is_archived ? "archived" : r.is_private ? "private" : "public",
+		chipClass: r.is_archived ? "u-chip-warn" : "u-chip",
+		keywords: r.default_branch || "",
 	})),
 );
 
@@ -404,7 +419,9 @@ const appOptions = computed(() =>
 	(appsRes.data || []).map((a) => ({
 		label: a.app_name,
 		value: a.app_name,
-		description: [a.branch, a.is_dirty ? "uncommitted changes" : null].filter(Boolean).join(" · "),
+		description: a.branch || "",
+		chip: a.is_dirty ? "uncommitted" : "",
+		chipClass: "u-chip-warn",
 	})),
 );
 

@@ -19,6 +19,18 @@
   "resolved_git_url",
   "bench_command",
   "command_params",
+  "ssl_section",
+  "ssl_mode",
+  "ssl_domain",
+  "ssl_dry_run",
+  "restore_section",
+  "restore_backup_key",
+  "restore_backup_first",
+  "restore_public_files",
+  "restore_private_files",
+  "restore_db_username",
+  "restore_db_password",
+  "restore_encryption_key",
   "options_section",
   "skip_assets",
   "overwrite_existing",
@@ -42,13 +54,13 @@
  "fields": [
   {
    "default": "Clone",
-   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app already there. Command runs one of the catalogued bench commands. They are different enough that the choice is always explicit rather than inferred from which fields happen to be filled in.",
+   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app already there. Command runs one of the catalogued bench commands. SSL issues or renews a Let's Encrypt certificate. They are different enough that the choice is always explicit rather than inferred from which fields happen to be filled in.",
    "fieldname": "operation",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Operation",
-   "options": "Clone\nPull\nCommand",
+   "options": "Clone\nPull\nCommand\nSSL\nRestore",
    "reqd": 1
   },
   {
@@ -101,7 +113,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Clone\" && doc.source_type==\"GitHub Profile\"",
-   "description": "Just the repository name, e.g. gh_erp \u2014 not the full URL.",
+   "description": "Just the repository name, e.g. gh_erp — not the full URL.",
    "fieldname": "repo",
    "fieldtype": "Data",
    "label": "Repository"
@@ -157,7 +169,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "depends_on": "eval:doc.operation==\"Clone\" || doc.operation==\"Command\"",
+   "depends_on": "eval:[\"Clone\",\"Command\",\"SSL\",\"Restore\"].includes(doc.operation)",
    "description": "For a Clone, optionally run `bench --site <site> install-app` afterwards. For a site-scoped Command, the site it runs against. Leave blank on a Clone to only place the code on disk.",
    "fieldname": "install_on_site",
    "fieldtype": "Data",
@@ -177,7 +189,7 @@
   },
   {
    "default": "Draft",
-   "description": "\u201cCompleted With Warnings\u201d means the work was done but the command still exited non-zero. The case this exists for: bench finishes a get-app by calling `sudo supervisorctl status`, which fails on a host with no passwordless sudo \u2014 the app is cloned and installed, and only the cosmetic restart failed. Reporting that as Failed invites a re-run, and a re-run needs --overwrite, which archives the app that was already fine.",
+   "description": "“Completed With Warnings” means the work was done but the command still exited non-zero. The case this exists for: bench finishes a get-app by calling `sudo supervisorctl status`, which fails on a host with no passwordless sudo — the app is cloned and installed, and only the cosmetic restart failed. Reporting that as Failed invites a re-run, and a re-run needs --overwrite, which archives the app that was already fine.",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -187,7 +199,7 @@
    "read_only": 1
   },
   {
-   "description": "The authoritative success signal \u2014 0 succeeded, above 0 the command failed, -1 means it never ran because a pre-flight refused it. stdout and stderr are interleaved in the log for readability, so the log text can never be used to decide whether it worked.",
+   "description": "The authoritative success signal — 0 succeeded, above 0 the command failed, -1 means it never ran because a pre-flight refused it. stdout and stderr are interleaved in the log for readability, so the log text can never be used to decide whether it worked.",
    "fieldname": "exit_code",
    "fieldtype": "Int",
    "label": "Exit Code",
@@ -248,7 +260,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Command\"",
-   "description": "Identifier from the catalogue in server/bench/commands.py. Commands are never assembled from free text \u2014 the argv comes from a fixed entry plus parameters matched against a pattern.",
+   "description": "Identifier from the catalogue in server/bench/commands.py. Commands are never assembled from free text — the argv comes from a fixed entry plus parameters matched against a pattern.",
    "fieldname": "bench_command",
    "fieldtype": "Data",
    "label": "Command",
@@ -261,6 +273,94 @@
    "fieldtype": "Small Text",
    "label": "Command Parameters",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.operation==\"SSL\"",
+   "fieldname": "ssl_section",
+   "fieldtype": "Section Break",
+   "label": "SSL"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"SSL\"",
+   "description": "Issue Or Reinstall runs `bench setup lets-encrypt <site> -n`, which stops nginx, asks Let's Encrypt for a certificate and writes it into the site config. Renew drives certbot directly rather than `bench renew-lets-encrypt`, because that command asks for confirmation and cannot be answered by a background job.",
+   "fieldname": "ssl_mode",
+   "fieldtype": "Select",
+   "in_list_view": 0,
+   "label": "SSL Operation",
+   "options": "Issue Or Reinstall\nRenew"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"SSL\" && doc.ssl_mode==\"Issue Or Reinstall\"",
+   "description": "Leave empty to certify the site's own domain. Set it to certify one of the extra domains already configured for the site — it must already be listed there, and it must resolve to this server before Let's Encrypt will issue anything.",
+   "fieldname": "ssl_domain",
+   "fieldtype": "Data",
+   "label": "Custom Domain"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.operation==\"SSL\" && doc.ssl_mode==\"Renew\"",
+   "description": "Rehearse the renewal against Let's Encrypt's staging server. Nothing is installed. Worth doing first: Let's Encrypt rate-limits failures per IP and the block outlasts the mistake, so a rehearsal is cheaper than being locked out.",
+   "fieldname": "ssl_dry_run",
+   "fieldtype": "Check",
+   "label": "Dry Run"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "fieldname": "restore_section",
+   "fieldtype": "Section Break",
+   "label": "Restore"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Identifies one backup set — the timestamp and site name frappe shares across the database dump, the files tars and the site_config snapshot. The individual paths are resolved from disk when the job runs, so a set that has been rotated away is caught before anything is dropped rather than after.",
+   "fieldname": "restore_backup_key",
+   "fieldtype": "Data",
+   "label": "Backup Set"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Run `bench backup` immediately before restoring. bench restore drops the database and there is no undo, and the moment you want a backup is the moment it is already gone. Leave this on unless you have just taken one yourself.",
+   "fieldname": "restore_backup_first",
+   "fieldtype": "Check",
+   "label": "Back Up First"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Restore the public files tar from the same backup set, if it has one.",
+   "fieldname": "restore_public_files",
+   "fieldtype": "Check",
+   "label": "Restore Public Files"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Restore the private files tar from the same backup set, if it has one.",
+   "fieldname": "restore_private_files",
+   "fieldtype": "Check",
+   "label": "Restore Private Files"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Database super user. Left empty this is \"root\", which is almost always right.",
+   "fieldname": "restore_db_username",
+   "fieldtype": "Data",
+   "label": "Database Root Username"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Required. bench restore needs the database super user to drop and recreate the site database, and without it frappe asks on a terminal a background job does not have. Stored encrypted, cleared once the job finishes, and redacted out of the command that is logged.",
+   "fieldname": "restore_db_password",
+   "fieldtype": "Password",
+   "label": "Database Root Password"
+  },
+  {
+   "depends_on": "eval:doc.operation==\"Restore\"",
+   "description": "Only for an encrypted backup. It is the `encryption_key` from the site config of the server the backup was taken on — an encrypted dump cannot be restored without it.",
+   "fieldname": "restore_encryption_key",
+   "fieldtype": "Password",
+   "label": "Backup Encryption Key"
   }
  ],
  "index_web_pages_for_search": 0,

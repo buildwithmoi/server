@@ -17,7 +17,10 @@ import frappe
 from server import dashboard
 from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer
+from server.bench import restore as bench_restore
+from server.bench import ssl as bench_ssl
 from server.geo import registry
+from server.server.doctype.app_install_request.app_install_request import SSL_MODES
 from server.server.doctype.server_settings.server_settings import get_settings
 from server.ssh import ingest, parser, sources
 
@@ -496,6 +499,134 @@ def run_bench_command(
 			"bench_command": command,
 			"install_on_site": site,
 			"command_params": frappe.as_json(values),
+			"status": "Draft",
+		}
+	)
+	doc.insert()
+	frappe.db.commit()
+	return run_install_request(doc.name)
+
+
+@frappe.whitelist()
+def ssl_readiness(bench: str) -> dict:
+	"""Everything the SSL dialog needs to tell you whether this will work.
+
+	Read-only and deliberately synchronous — it is three filesystem reads and
+	two short probes, and answering in the dialog is the entire point. The
+	alternative is discovering that certbot is missing after nginx has already
+	been stopped.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+
+	sites = [{"name": row.site_name, "is_default": bool(row.is_default)} for row in doc.sites]
+	report = bench_ssl.readiness(doc.bench_path, sites)
+	report["bench"] = doc.name
+	report["default_site"] = next((s["name"] for s in sites if s["is_default"]), None)
+	return report
+
+
+@frappe.whitelist()
+def run_ssl(
+	bench: str,
+	mode: str,
+	site: str | None = None,
+	domain: str | None = None,
+	dry_run: int | bool = 0,
+) -> dict:
+	"""Queue one SSL operation against a bench.
+
+	Issuing takes a site offline for as long as certbot holds port 443, so it
+	goes through the same queue, lock and streamed log as everything else rather
+	than running inline in a web request.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	label = next((k for k, v in SSL_MODES.items() if v == mode), None) or mode
+	if label not in SSL_MODES:
+		frappe.throw(f"{mode!r} is not an SSL operation.", title="Unknown Operation")
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "App Install Request",
+			"operation": "SSL",
+			"bench": bench,
+			"ssl_mode": label,
+			"ssl_domain": (domain or "").strip() or None,
+			"ssl_dry_run": 1 if frappe.parse_json(dry_run) else 0,
+			"install_on_site": site,
+			"status": "Draft",
+		}
+	)
+	doc.insert()
+	frappe.db.commit()
+	return run_install_request(doc.name)
+
+
+@frappe.whitelist()
+def list_backups(bench: str, site: str) -> dict:
+	"""Backups this bench can restore from, newest first.
+
+	Sets from other sites are included rather than filtered out — restoring
+	production onto staging is a real thing to do — but each one carries the
+	sentence explaining that it is from somewhere else.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+
+	backups = bench_restore.list_backups(doc.bench_path, site)
+	return {
+		"site": site,
+		"backups": [bench_restore.as_dict(b, site) for b in backups],
+		"searched": [path for path, _ in bench_restore.backup_directories(doc.bench_path, site)],
+	}
+
+
+@frappe.whitelist()
+def run_restore(
+	bench: str,
+	site: str,
+	backup_key: str,
+	db_root_password: str,
+	db_root_username: str | None = None,
+	encryption_key: str | None = None,
+	with_public_files: int | bool = 0,
+	with_private_files: int | bool = 0,
+	backup_first: int | bool = 1,
+	confirm: str | None = None,
+) -> dict:
+	"""Queue a restore.
+
+	`confirm` must be the site name typed out. A restore drops the database and
+	this app takes no automatic undo, so the confirmation is deliberately
+	something you cannot do by reflex — the same bar as `drop-site`.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	if (confirm or "").strip() != site:
+		frappe.throw(
+			f"Restoring replaces everything in {site} and cannot be undone. "
+			f"Type “{site}” to confirm you meant it.",
+			title="Confirmation Required",
+		)
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "App Install Request",
+			"operation": "Restore",
+			"bench": bench,
+			"install_on_site": site,
+			"restore_backup_key": backup_key,
+			"restore_db_username": (db_root_username or "").strip() or None,
+			"restore_db_password": db_root_password,
+			"restore_encryption_key": (encryption_key or "").strip() or None,
+			"restore_public_files": 1 if frappe.parse_json(with_public_files) else 0,
+			"restore_private_files": 1 if frappe.parse_json(with_private_files) else 0,
+			"restore_backup_first": 1 if frappe.parse_json(backup_first) else 0,
 			"status": "Draft",
 		}
 	)

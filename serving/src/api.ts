@@ -198,6 +198,76 @@ export function runBenchCommandResource() {
 	return createResource({ url: `${M}.run_bench_command` });
 }
 
+/* ---------------------------------------------------------------------- ssl */
+
+export interface SslCheck {
+	key: string;
+	label: string;
+	ok: boolean;
+	detail: string;
+	blocking: boolean;
+}
+
+export interface SslSite {
+	site: string;
+	domain: string;
+	is_default: boolean;
+	has_cert: boolean;
+	expires_on: string | null;
+	days_left: number | null;
+	note: string;
+	custom_domains: string[];
+}
+
+export interface SslReadiness {
+	bench: string;
+	ready: boolean;
+	checks: SslCheck[];
+	sites: SslSite[];
+	default_site: string | null;
+	certificates_note: string;
+}
+
+export function sslReadinessResource() {
+	return createResource({ url: `${M}.ssl_readiness` });
+}
+
+export function runSslResource() {
+	return createResource({ url: `${M}.run_ssl` });
+}
+
+/* ------------------------------------------------------------------ restore */
+
+export interface BackupSet {
+	key: string;
+	site_slug: string;
+	taken_at: string;
+	database: string;
+	public_files: string | null;
+	private_files: string | null;
+	site_config: string | null;
+	size: number;
+	size_text: string;
+	encrypted: boolean;
+	has_files: boolean;
+	source: string;
+	mismatch: string;
+}
+
+export interface BackupListing {
+	site: string;
+	backups: BackupSet[];
+	searched: string[];
+}
+
+export function backupsResource() {
+	return createResource({ url: `${M}.list_backups` });
+}
+
+export function runRestoreResource() {
+	return createResource({ url: `${M}.run_restore` });
+}
+
 /* ------------------------------------------------------------------ benches */
 
 export interface BenchApp {

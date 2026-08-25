@@ -568,12 +568,12 @@ def journal_record_to_syslog_line(record: dict) -> SyslogLine | None:
 	raw_pid = record.get("SYSLOG_PID") or record.get("_PID")
 	try:
 		pid = int(raw_pid) if raw_pid is not None else None
-	except TypeError, ValueError:
+	except (TypeError, ValueError):
 		pid = None
 
 	try:
 		micros = int(record["__REALTIME_TIMESTAMP"])
-	except KeyError, TypeError, ValueError:
+	except (KeyError, TypeError, ValueError):
 		return None
 	stamp = datetime.fromtimestamp(micros / 1_000_000, tz=UTC)
 

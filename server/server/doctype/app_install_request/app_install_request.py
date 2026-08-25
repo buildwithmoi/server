@@ -34,6 +34,11 @@ OK_STATUSES = ("Success", "Completed With Warnings")
 OP_CLONE = "Clone"
 OP_PULL = "Pull"
 OP_COMMAND = "Command"
+OP_SSL = "SSL"
+OP_RESTORE = "Restore"
+
+#: Form labels for the two SSL operations, mapped to the modes `bench.ssl` uses.
+SSL_MODES = {"Issue Or Reinstall": "issue", "Renew": "renew"}
 
 
 class AppInstallRequest(Document):
@@ -42,6 +47,10 @@ class AppInstallRequest(Document):
 		self._validate_common()
 		if self.operation == OP_COMMAND:
 			self._validate_command()
+		elif self.operation == OP_SSL:
+			self._validate_ssl()
+		elif self.operation == OP_RESTORE:
+			self._validate_restore()
 		elif self.operation == OP_PULL:
 			self._validate_pull()
 		else:
@@ -86,6 +95,73 @@ class AppInstallRequest(Document):
 			frappe.throw(str(exc), title="Cannot Build Command")
 
 		self.app_name = command.label
+
+	def _validate_ssl(self):
+		"""An SSL request must name an operation, and a site if it issues.
+
+		Built here as well as in the worker so a domain that certbot would
+		reject is refused at save time rather than after nginx has been stopped.
+		"""
+		from server.bench import ssl
+
+		mode = SSL_MODES.get(self.ssl_mode or "")
+		if not mode:
+			frappe.throw("Choose whether to issue a certificate or renew the existing ones.")
+
+		if mode == ssl.MODE_ISSUE:
+			site = (self.install_on_site or "").strip()
+			if not site:
+				frappe.throw("Issuing a certificate needs a site.")
+			bench = frappe.get_doc("Server Bench", self.bench)
+			if site not in bench.site_names():
+				frappe.throw(
+					f"{site!r} is not a site on {self.bench}. "
+					f"Known sites: {', '.join(bench.site_names()) or 'none'}."
+				)
+
+		try:
+			ssl.build_argv(mode, "/usr/local/bin/bench", self.install_on_site, self.ssl_domain, self.ssl_dry_run)
+		except ssl.SSLRefused as exc:
+			# certbot missing is a server condition, not a bad request — it must
+			# not block saving a record that will run on a box that has it.
+			if "not installed" not in str(exc):
+				frappe.throw(str(exc), title="Cannot Build Command")
+
+		self.app_name = f"SSL · {self.ssl_mode}"
+
+	def _validate_restore(self):
+		"""A restore must name a site that exists and a backup still on disk."""
+		from server.bench import restore
+
+		site = (self.install_on_site or "").strip()
+		if not site:
+			frappe.throw("Restoring needs a site.")
+
+		bench = frappe.get_doc("Server Bench", self.bench)
+		if site not in bench.site_names():
+			frappe.throw(
+				f"{site!r} is not a site on {self.bench}. "
+				f"Known sites: {', '.join(bench.site_names()) or 'none'}."
+			)
+
+		if not self.restore_backup_key:
+			frappe.throw("Choose which backup to restore.")
+
+		# Resolved now so a rotated-away backup is refused before the record
+		# exists, rather than after the queue has picked it up.
+		try:
+			backup = restore.find(bench.bench_path, site, self.restore_backup_key)
+		except restore.RestoreRefused as exc:
+			frappe.throw(str(exc), title="Backup Not Found")
+
+		if backup.encrypted and not self.get_password("restore_encryption_key", raise_exception=False):
+			frappe.throw(
+				"That backup is encrypted. Restoring it needs the encryption key from the site it "
+				"was taken from.",
+				title="Encryption Key Required",
+			)
+
+		self.app_name = f"Restore · {site}"
 
 	def _validate_pull(self):
 		if not self.app_name:
@@ -176,6 +252,26 @@ class AppInstallRequest(Document):
 
 	def is_command(self) -> bool:
 		return self.operation == OP_COMMAND
+
+	def is_ssl(self) -> bool:
+		return self.operation == OP_SSL
+
+	def is_restore(self) -> bool:
+		return self.operation == OP_RESTORE
+
+	def clear_restore_secrets(self) -> None:
+		"""Drop the credentials once the job is over.
+
+		They are only ever needed for the length of one subprocess. Keeping a
+		database root password after that is a standing risk for no benefit,
+		and this app exists because a server was broken into.
+		"""
+		for field in ("restore_db_password", "restore_encryption_key"):
+			if self.get(field):
+				self.db_set(field, None, update_modified=False)
+
+	def ssl_mode_key(self) -> str:
+		return SSL_MODES.get(self.ssl_mode or "", "")
 
 	def is_terminal(self) -> bool:
 		return self.status in TERMINAL_STATUSES

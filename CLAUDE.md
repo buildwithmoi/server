@@ -12,11 +12,12 @@ port `9008`).
 Two halves:
 
 - `server/` — the Python Frappe app (hooks, www pages, patches, module `Server`).
-- `serving/` — a Vue 3 + TypeScript + Vite SPA scaffolded by [doppio](https://github.com/NagariaHussain/doppio)
-  (`bench add-spa`), served by the Frappe backend at `/serving`.
+- `serving/` — a Vue 3 + TypeScript + Vite SPA, originally scaffolded by
+  [doppio](https://github.com/NagariaHussain/doppio) (`bench add-spa`) but now self-contained, served by
+  the Frappe backend at `/serving`.
 
-The app currently has no DocTypes, no scheduler events, and no doc events — `server/hooks.py` is the
-stock boilerplate with a single active line: `website_route_rules`.
+It does two things: **watch SSH** (who logged in, from where, and every `sudo` they ran) and **manage
+benches** (install apps from private GitHub repos, run bench commands, set up SSL, restore sites).
 
 ## Commands
 
@@ -29,7 +30,12 @@ bench --site local.16.server console               # python REPL with frappe loa
 bench --site local.16.server clear-cache
 bench start                                        # web + socketio + workers + watch (Procfile)
 
-# Tests (there are currently none in this app)
+# Tests — 250 of them, most needing neither a site nor a database.
+# Use the BENCH VENV python: one module imports frappe, and the venv is the
+# interpreter the app actually runs under (3.14, not this box's system 3.12).
+../../env/bin/python -m unittest discover -s server/tests -t .
+../../env/bin/python -m unittest server.tests.test_restore     # one module
+
 bench --site local.16.server set-config allow_tests true
 bench --site local.16.server run-tests --app server
 bench --site local.16.server run-tests --module server.tests.test_x   # single module
@@ -65,27 +71,44 @@ This is the part that requires reading several files to understand. Requests flo
 `serving.py`, so `/serving` will not work until `yarn build` has been run at least once. `server/public/`
 is exposed to the browser through the `sites/assets/server` symlink.
 
-## Cross-app dependency on doppio
+## No cross-app dependencies
 
-[serving/src/main.ts](serving/src/main.ts) imports through `../../../doppio/libs/...`, which escapes this
-repo and resolves to `apps/doppio/libs/` in the sibling app. **The frontend will not build unless the
-doppio app is present in the bench.** doppio need not be installed on the site (it isn't here — the site
-has only `frappe` and `server`); it is a build-time source dependency plus a provider of `bench add-spa`
-and friends.
+The SPA used to import through `../../../doppio/libs/...`, which escaped this repo and required the
+doppio app to be present in the bench just to build. That is gone: `serving/src/lib/` now carries its own
+`auth`, `call`, `resource` and `socket`. The app builds and installs on a bench that has only frappe.
 
-What those shared libs give the SPA, all wired up in `main.ts`:
+Two things that were doppio bugs and are now ours to keep right:
 
-- `Auth` — provided as `$auth`; derives `isLoggedIn` from the `user_id` cookie, calls Frappe's
-  `login`/`logout` methods. `router.beforeEach` uses `meta.isLoginPage` to gate every other route.
-- `call` — provided as `$call`; `POST /api/method/<method>` with the CSRF header, unwraps `data.message`,
-  and redirects to `/login` on 401/403.
-- `resourceManager` — a global mixin adding a `resources` component option, exposed as `$resources`
-  (see [serving/src/views/Home.vue](serving/src/views/Home.vue) for the pattern).
-- `socket` — provided as `$socket`. Note it hardcodes port `9000`, while this bench runs socketio on
-  `9008`; realtime needs that reconciled. Do not edit doppio to fix it — it is a different repo.
+- the socket client reads the socketio port from the injected `boot`, rather than hardcoding `9000`
+  (this bench runs socketio on `9008`);
+- `createWebHistory("/serving")` must stay in sync with the route rule in `hooks.py` and the `--base`
+  flag in `serving/package.json`.
 
-The router uses `createWebHistory("/serving")`, so its base must stay in sync with the route rule in
-`hooks.py` and the `--base` flag in `serving/package.json`.
+## Bench operations
+
+Everything that runs a subprocess goes through one path: an **`App Install Request`** row, queued to the
+`long` worker, holding a bench-scoped lock, streaming its output to `output` and to the browser. The
+`operation` field picks the branch — `Clone`, `Pull`, `Command`, `SSL`, `Restore`. Adding a sixth means
+a branch in `installer.py`, not a new doctype.
+
+The rules that path exists to enforce, each learned from a real failure:
+
+- **`stdin` is always `DEVNULL`.** Anything that prompts must fail immediately instead of hanging. This
+  is why `bench setup lets-encrypt` gets `-n`, and why `bench renew-lets-encrypt` is *never* used —
+  it calls `click.confirm(abort=True)` with no non-interactive escape, so it would abort every time.
+  Renewal drives `certbot renew` directly, which is what bench's own cron entry does.
+- **Exit code 0 is not proof of success.** `bench setup lets-encrypt` prints "You cannot setup SSL
+  without DNS Multitenancy" and exits 0; `bench get-app` exits 1 from a trailing `supervisorctl` call
+  after the app is already installed. Hence `ssl.quiet_failure()` and `installer._clone_landed()`.
+- **Secrets never reach `command` or `output`.** `bench restore` only accepts the database root password
+  on the command line, so `restore.redact()` produces the copy that is stored and displayed. Credentials
+  live in `Password` fields and are cleared in `finish()`, which every terminal path runs through.
+- **Pre-flight before side effects.** `_preflight_restore` refuses a missing password or an unkeyed
+  encrypted backup *before* `bench restore` drops the database — finding out afterwards means an empty
+  site and no way back.
+
+`bench/ssl.py` and `bench/restore.py` are frappe-free, like `ssh/parser.py`, so they unit-test with no
+site and no database.
 
 ## Conventions
 
