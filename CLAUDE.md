@@ -36,6 +36,10 @@ bench start                                        # web + socketio + workers + 
 ../../env/bin/python -m unittest discover -s server/tests -t .
 ../../env/bin/python -m unittest server.tests.test_restore     # one module
 
+# 34 of them need a site connection and skip without one, so the run above
+# reports ~37 skips. To actually exercise those, run through a site:
+bench --site local.16.server execute frappe.utils.error.log_error --kwargs '{}' # (any bootstrap)
+
 bench --site local.16.server set-config allow_tests true
 bench --site local.16.server run-tests --app server
 bench --site local.16.server run-tests --module server.tests.test_x   # single module

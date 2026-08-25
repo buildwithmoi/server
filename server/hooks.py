@@ -160,6 +160,13 @@ after_install = "server.install.after_install"
 # frappe.cloud / erpnext.com / frappehr.com / frappe.dev
 # (frappe/utils/scheduler.py, frappe/utils/frappecloud.py). A self-hosted site
 # is never dormant.
+# Frappe skips a notification whose recipient is also its sender, which is
+# reasonable for "X mentioned you" and wrong for a machine-generated alert. On a
+# server whose only System Manager is Administrator — a fresh install, which is
+# to say the case that matters most — every alert this app raises would have
+# been silently dropped. "Alert" is precisely the type that has no human sender.
+notification_self_notify_types = ["Alert"]
+
 scheduler_events = {
 	"cron": {
 		# Five minutes bounds how stale the intrusion view can be. Reading a
@@ -177,6 +184,13 @@ scheduler_events = {
 		# enough to matter and rare enough to cost nothing — the query is one
 		# indexed range scan that almost always returns nothing.
 		"*/10 * * * *": ["server.bench.installer.reap_stale_requests"],
+		# Intrusion sweeps run just after an ingest tick, so they read events
+		# that were written moments ago rather than events from five minutes
+		# before the ingest that would have found them.
+		"4-59/5 * * * *": ["server.alerts.run_intrusion_checks"],
+		# Disk moves slowly; hourly is plenty and keeps the alert rare enough
+		# to still mean something when it arrives.
+		"7 * * * *": ["server.alerts.run_disk_checks"],
 	},
 	# "daily" is added together with the SSH Session doctype — a hook pointing at
 	# a module that does not exist yet would create a Scheduled Job Type row that

@@ -136,11 +136,18 @@ class ServerSettings(Document):
 		)
 		if not managers:
 			return []
-		return frappe.get_all(
+		# Emails, not names. frappe resolves notification recipients by matching
+		# the User.email column, and for every ordinary user name and email are
+		# the same string — but Administrator is named "Administrator" and has a
+		# separate email, so plucking the name silently matched nobody on the
+		# one setup that matters most: a fresh server whose only System Manager
+		# is Administrator.
+		users = frappe.get_all(
 			"User",
 			filters={"name": ("in", managers), "enabled": 1, "user_type": "System User"},
-			pluck="name",
+			fields=["name", "email"],
 		)
+		return [(user.email or user.name) for user in users]
 
 	def get_trusted_countries(self) -> set[str]:
 		"""Uppercase ISO-2 codes exempt from the new-country alert."""
