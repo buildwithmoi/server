@@ -16,6 +16,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import frappe
+from frappe.rate_limiter import rate_limit
 
 from server import dashboard, system
 from server.bench import commands as bench_commands
@@ -787,6 +788,7 @@ def accept_security_baseline() -> dict:
 
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(key="security_heartbeat", limit=120, seconds=60 * 60, ip_based=True)
 def security_heartbeat(token: str | None = None) -> dict:
 	"""Is this host still watching itself? For a watcher somewhere else.
 

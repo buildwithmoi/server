@@ -241,6 +241,11 @@ scheduler_events = {
 		# than quarter-hourly — these change when a person changes them, and
 		# a backup going stale is measured in days.
 		"server.security.watch.run_site_scan",
+		# TLS, security headers, certificate expiry, and the set of endpoints
+		# callable with no session. The last one is inventoried and diffed
+		# rather than judged — fifty-five guest endpoints is how a web
+		# framework works; a new one appearing is the finding.
+		"server.security.watch.run_web_scan",
 	],
 	"daily": [
 		# `dpkg --verify` re-hashes every file every installed package owns:

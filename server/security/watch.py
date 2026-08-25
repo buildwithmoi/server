@@ -30,6 +30,7 @@ from server.server.doctype.server_settings.server_settings import get_settings
 #: How often each detector is scheduled, so "late" is derived from its own
 #: cadence rather than one global guess. Must match hooks.py.
 SCHEDULE_SECONDS = {
+	"web": 60 * 60,
 	"site": 60 * 60,
 	"sshd": 15 * 60,
 	"filesystem": 15 * 60,
@@ -1251,3 +1252,82 @@ def scan_site(record_only: bool = False) -> dict:
 
 def run_site_scan() -> dict:
 	return _scheduled("site", scan_site)
+
+
+# ----------------------------------------------------------------------
+# What is exposed to the internet
+# ----------------------------------------------------------------------
+
+WEB_BASELINE_KEY = "web:guest-endpoints"
+
+
+def scan_web(record_only: bool = False) -> dict:
+	"""Check how this host is exposed over HTTP, and what can be called on it.
+
+	`network.py` answers which ports are open. This answers what is listening
+	on them and on what terms — whether traffic is encrypted, what the
+	certificate has left, and exactly which application endpoints can be
+	called with no session at all.
+	"""
+	import hashlib
+	import os
+
+	from server.security import web, web_rules
+	from server.server.doctype.security_baseline import security_baseline as baseline
+
+	settings = get_settings()
+	bench_path = settings.bench_root or frappe.utils.get_bench_path()
+	apps_path = os.path.join(bench_path, "apps")
+	if not os.path.isdir(apps_path):
+		apps_path = os.path.join(frappe.utils.get_bench_path(), "apps")
+
+	installed = frappe.get_installed_apps()
+	snapshot = web.collect(apps_path, installed)
+
+	# The endpoint set is stored as a hash plus the list, because the finding
+	# needs to name what changed and the hash is what makes "did it change"
+	# cheap. The names are not secret — they are in the source of open apps.
+	current = sorted({endpoint.dotted for endpoint in snapshot.endpoints})
+	stored = frappe.db.get_value("Security Baseline", WEB_BASELINE_KEY, "detail")
+	previous = None
+	if stored:
+		try:
+			previous = set(json.loads(stored).get("endpoints") or [])
+		except (ValueError, AttributeError):
+			previous = None
+
+	findings = web_rules.judge(snapshot, previous)
+
+	if current:
+		baseline.record(
+			WEB_BASELINE_KEY,
+			hashlib.sha256("\n".join(current).encode()).hexdigest(),
+			{"endpoints": current, "apps": installed},
+		)
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"frontends": len(snapshot.frontends),
+		"certificates": len(snapshot.certificates),
+		"endpoints": len(snapshot.endpoints),
+		"findings": len(findings),
+		"raised": len(raised),
+	}
+
+
+def run_web_scan() -> dict:
+	return _scheduled("web", scan_web)
