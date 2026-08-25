@@ -806,6 +806,12 @@ def run_install_request(name: str) -> dict:
 		return cancel_client.get(cancel_key) is not None
 
 	def step(key: str) -> None:
+		# Checked at every boundary, not only inside _stream. The poller only
+		# runs while a subprocess is running, so a cancel arriving during the
+		# pre-flight, between two commands of a restore, or during the closing
+		# rescan was simply ignored until the next command started — or never.
+		if should_cancel():
+			raise InstallAborted("Cancelled.")
 		plan.start(key)
 		push_steps(force=True)
 

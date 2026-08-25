@@ -687,6 +687,11 @@ def mark_alerts_read(name: str | None = None) -> dict:
 	return {"marked": len(names)}
 
 
+#: Where the disk-pressure breakdown is cached, and for how long.
+BACKUP_USAGE_KEY = "server:backup-usage"
+BACKUP_USAGE_TTL = 300
+
+
 @frappe.whitelist()
 def system_health() -> dict:
 	"""Disk, memory, load and where the disk went.
@@ -700,13 +705,21 @@ def system_health() -> dict:
 	paths = frappe.get_all("Server Bench", filters={"is_active": 1}, pluck="bench_path")
 	report = system.snapshot(paths)
 
-	# Only worth computing when it is about to matter — scanning every bench's
-	# backup directory on every poll would be rude.
+	# Only worth computing when it is about to matter — and then cached, because
+	# it is wanted precisely when the disk is under pressure and stat-ing every
+	# backup file on a full disk every twenty seconds is the least helpful thing
+	# this could do. Backups change on a schedule, so five minutes is fresh
+	# enough to act on.
 	report["backups"] = []
 	if report["worst_level"] != "ok":
-		for path in paths:
-			report["backups"].extend(system.backup_usage(path))
-		report["backups"].sort(key=lambda r: r["bytes"], reverse=True)
+		cached = frappe.cache.get_value(BACKUP_USAGE_KEY)
+		if cached is None:
+			cached = []
+			for path in paths:
+				cached.extend(system.backup_usage(path))
+			cached.sort(key=lambda r: r["bytes"], reverse=True)
+			frappe.cache.set_value(BACKUP_USAGE_KEY, cached, expires_in_sec=BACKUP_USAGE_TTL)
+		report["backups"] = cached
 	return report
 
 
@@ -1023,11 +1036,43 @@ def cancel_install_request(name: str) -> dict:
 	if doc.is_terminal():
 		return {"name": name, "status": doc.status, "cancelled": False, "message": "Already finished."}
 
+	# The flag goes up FIRST, and for a queued job as well as a running one.
+	#
+	# Queued used to close the row out without setting it, which left a race:
+	# the worker can pick the job up between this reading "Queued" and writing
+	# "Cancelled", after which nothing was watching and the job the operator
+	# stopped ran to completion. run_install_request also checks this flag
+	# before it writes status=Running, so setting it first closes that window
+	# from both ends.
+	key = installer.CANCEL_KEY.format(name=name)
+	try:
+		frappe.cache.set_value(key, 1, expires_in_sec=3600)
+		flagged = frappe.cache.get_value(key) is not None
+	except Exception:
+		flagged = False
+
+	if not flagged:
+		# Read back rather than assumed. Without redis the worker has no way to
+		# hear this, and saying "Stopping…" while nothing is would be worse than
+		# saying so.
+		frappe.log_error(f"could not set the cancel flag for {name}", "server: cancel")
+		frappe.throw(
+			"Could not reach Redis, so the job cannot be told to stop. It is still running. "
+			"Check that the bench's redis-queue is up.",
+			title="Cannot Stop This Job",
+		)
+
 	if doc.status == "Queued":
-		# Never picked up, so there is no process to kill and nothing has
-		# happened yet. Close it out directly.
+		# Not picked up yet, so there is no process to kill. Close it out
+		# directly; the flag above covers the case where a worker takes it in
+		# the meantime.
 		doc.db_set(
-			{"status": "Cancelled", "error_summary": "Cancelled before it started.", "exit_code": -1},
+			{
+				"status": "Cancelled",
+				"error_summary": "Cancelled before it started.",
+				"exit_code": installer.NEVER_RAN,
+				"finished_at": frappe.utils.now_datetime(),
+			},
 			update_modified=False,
 		)
 		if doc.is_restore():
@@ -1035,7 +1080,6 @@ def cancel_install_request(name: str) -> dict:
 		frappe.db.commit()
 		return {"name": name, "status": "Cancelled", "cancelled": True}
 
-	frappe.cache.set_value(installer.CANCEL_KEY.format(name=name), 1, expires_in_sec=3600)
 	return {
 		"name": name,
 		"status": doc.status,

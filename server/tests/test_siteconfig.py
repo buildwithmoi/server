@@ -257,3 +257,70 @@ class TestOutputScrubbing(unittest.TestCase):
 
 	def test_an_unanticipated_secret_key_is_scrubbed_too(self):
 		self.assertNotIn("sk_live_abc", sc.scrub("| stripe_secret_key | sk_live_abc |"))
+
+
+class TestNestedRedaction(unittest.TestCase):
+	"""site_config grows structures, not just flat keys.
+
+	An smtp block with a `password`, a `domains` list whose entries carry
+	certificate keys — the top-level check returned all of those verbatim,
+	which is the exact failure this redaction exists to prevent, one level down.
+	"""
+
+	def _read(self, config):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, config)
+			return json.dumps(sc.read(root, SITE))
+
+	def test_a_secret_inside_a_dict_is_redacted(self):
+		blob = self._read({"smtp": {"password": "MARKER-NESTED", "host": "mail.example.com"}})
+		self.assertNotIn("MARKER-NESTED", blob)
+		self.assertIn("mail.example.com", blob)
+
+	def test_a_secret_inside_a_list_is_redacted(self):
+		blob = self._read({"domains": [{"ssl_certificate_key": "MARKER-LIST", "domain": "a.com"}]})
+		self.assertNotIn("MARKER-LIST", blob)
+		self.assertIn("a.com", blob)
+
+	def test_deeply_nested_secrets_are_redacted(self):
+		blob = self._read({"a": {"b": {"c": {"api_token": "MARKER-DEEP"}}}})
+		self.assertNotIn("MARKER-DEEP", blob)
+
+	def test_bare_credential_names_are_secret(self):
+		""""password" does not end in "_password", so the suffix list missed it
+		— and bare names are exactly how a credential is spelled inside a
+		nested block."""
+		for key in ("password", "passwd", "secret", "token", "private_key"):
+			with self.subTest(key=key):
+				self.assertTrue(sc.is_secret(key))
+
+	def test_ordinary_nested_values_survive(self):
+		blob = self._read({"smtp": {"host": "mail.example.com", "port": 587}})
+		self.assertIn("mail.example.com", blob)
+		self.assertIn("587", blob)
+
+
+class TestUnsettingFields(unittest.TestCase):
+	def test_an_emptied_integer_field_means_unset(self):
+		"""It meant "invalid" — so a number could never be unset at all, and
+		clearing the field returned "must be a whole number"."""
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, {"max_file_size": 1024, "db_name": "x"})
+			sc.write(root, SITE, {"max_file_size": ""})
+			with open(sc.config_path(root, SITE)) as handle:
+				config = json.load(handle)
+			self.assertNotIn("max_file_size", config)
+			self.assertEqual(config["db_name"], "x")
+
+	def test_a_real_number_still_validates(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, {"db_name": "x"})
+			sc.write(root, SITE, {"max_file_size": "2048"})
+			with open(sc.config_path(root, SITE)) as handle:
+				self.assertEqual(json.load(handle)["max_file_size"], 2048)
+
+	def test_junk_is_still_refused(self):
+		with tempfile.TemporaryDirectory() as root:
+			make_site(root, {"db_name": "x"})
+			with self.assertRaises(sc.ConfigRefused):
+				sc.write(root, SITE, {"max_file_size": "big"})

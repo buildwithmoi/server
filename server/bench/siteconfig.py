@@ -47,6 +47,15 @@ SECRET_EXACT = {
 	"root_password",
 	"admin_password",
 	"webhook_secret",
+	# Bare names, which the suffix list cannot catch — "password" does not end
+	# in "_password". These are how a credential is spelled one level down, in
+	# an smtp block or a domains entry.
+	"password",
+	"passwd",
+	"secret",
+	"token",
+	"api_secret",
+	"private_key",
 }
 SECRET_SUFFIX = ("_password", "_secret", "_key", "_token", "_credentials")
 
@@ -178,6 +187,23 @@ def scrub(text: str) -> str:
 	return _SECRET_LINE.sub(replace, text)
 
 
+def redact_nested(value):
+	"""Redact secrets inside dicts and lists, not only at the top level.
+
+	The top-level check missed the shapes site_config actually grows: an smtp
+	block with a `password` in it, or a `domains` list whose entries carry
+	certificate keys. Those came back verbatim, which is the whole failure this
+	redaction exists to prevent — just one level down.
+	"""
+	if isinstance(value, dict):
+		return {
+			key: REDACTED if is_secret(key) else redact_nested(inner) for key, inner in value.items()
+		}
+	if isinstance(value, list):
+		return [redact_nested(item) for item in value]
+	return value
+
+
 def config_path(bench_path: str, site: str) -> str:
 	return os.path.join(bench_path, "sites", site, "site_config.json")
 
@@ -203,7 +229,7 @@ def read(bench_path: str, site: str) -> dict:
 		values.append(
 			{
 				"key": key,
-				"value": REDACTED if secret else raw[key],
+				"value": REDACTED if secret else redact_nested(raw[key]),
 				"secret": secret,
 				"editable": key in BY_KEY,
 				"description": BY_KEY[key].description if key in BY_KEY else "",
@@ -306,7 +332,10 @@ def write(bench_path: str, site: str, changes: dict) -> dict:
 	applied = {}
 	for key, value in changes.items():
 		setting = BY_KEY[key]
-		if value is None or (setting.kind == "string" and not str(value).strip()):
+		# An emptied field means "unset" whatever its type. It only did for
+		# strings, so clearing a number returned "must be a whole number" and
+		# there was no way to unset one from the interface at all.
+		if value is None or (setting.kind in ("string", "int") and not str(value).strip()):
 			raw.pop(key, None)
 			applied[key] = None
 			continue

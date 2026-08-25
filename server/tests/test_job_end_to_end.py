@@ -161,3 +161,58 @@ class TestEmitNeverRaises(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestCancellationOutsideASubprocess(unittest.TestCase):
+	"""The poller only runs while a subprocess does.
+
+	So a cancel arriving during the pre-flight, between the two commands of a
+	restore, or during the closing rescan was ignored until the next command
+	started — or never, if there was not one.
+	"""
+
+	def setUp(self):
+		self.bench = frappe.db.get_value("Server Bench", {"is_active": 1}, "name")
+		self.site = frappe.db.get_value("Server Bench Site", {"parent": self.bench}, "site_name")
+		if not (self.bench and self.site):
+			self.skipTest("no active bench with a site")
+		self.names = []
+
+	def tearDown(self):
+		from server.bench import installer as inst
+
+		for name in self.names:
+			frappe.db.sql("DELETE FROM `tabApp Install Request` WHERE name = %s", name)
+			frappe.cache.delete_value(inst.CANCEL_KEY.format(name=name))
+		frappe.db.commit()
+
+	def _queued(self):
+		doc = frappe.get_doc(
+			{
+				"doctype": "App Install Request",
+				"operation": "Command",
+				"bench": self.bench,
+				"bench_command": "site.list-apps",
+				"install_on_site": self.site,
+				"status": "Queued",
+			}
+		)
+		doc.insert()
+		frappe.db.commit()
+		self.names.append(doc.name)
+		return doc
+
+	def test_a_job_flagged_before_the_worker_starts_never_runs(self):
+		doc = self._queued()
+		frappe.cache.set_value(installer.CANCEL_KEY.format(name=doc.name), 1, expires_in_sec=60)
+
+		installer.run_install_request(doc.name)
+		frappe.db.rollback()
+		self.assertEqual(frappe.db.get_value("App Install Request", doc.name, "status"), "Cancelled")
+
+	def test_an_unflagged_job_still_runs(self):
+		doc = self._queued()
+		installer.run_install_request(doc.name)
+		frappe.db.rollback()
+		self.assertEqual(frappe.db.get_value("App Install Request", doc.name, "status"), "Success")
