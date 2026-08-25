@@ -1,0 +1,160 @@
+{
+ "autoname": "field:username",
+ "sort_field": "username",
+ "sort_order": "ASC",
+ "description": "One account that exists on this host. Current state; changes are in System Account Change. Password HASHES are never recorded — only whether a password is set, locked or absent, because an app that watches for compromise must not become the richest target on the estate.",
+ "fields": [
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "label": "Username",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "uid",
+   "fieldtype": "Int",
+   "label": "UID",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "gid",
+   "fieldtype": "Int",
+   "label": "GID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "shell",
+   "fieldtype": "Data",
+   "label": "Shell",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "home",
+   "fieldtype": "Small Text",
+   "label": "Home Directory",
+   "read_only": 1
+  },
+  {
+   "fieldname": "home_exists",
+   "fieldtype": "Check",
+   "label": "Home Exists",
+   "read_only": 1,
+   "description": "A login shell with no home is the shape of the rogue account in the incident — created to be a way in rather than to be used."
+  },
+  {
+   "fieldname": "can_log_in",
+   "fieldtype": "Check",
+   "label": "Can Log In",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "privileged",
+   "fieldtype": "Check",
+   "label": "Can Become Root",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "sec_detail",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
+   "fieldname": "groups",
+   "fieldtype": "Small Text",
+   "label": "Groups",
+   "read_only": 1
+  },
+  {
+   "fieldname": "password_status",
+   "fieldtype": "Select",
+   "label": "Password",
+   "options": "set\nlocked\nnone\nunknown",
+   "read_only": 1,
+   "description": "Status only. The hash is read from /etc/shadow to classify it and immediately discarded — never returned, never stored."
+  },
+  {
+   "fieldname": "cb_2",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "last_login",
+   "fieldtype": "Data",
+   "label": "Last Login",
+   "read_only": 1
+  },
+  {
+   "fieldname": "first_seen",
+   "fieldtype": "Datetime",
+   "label": "First Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Active\nGone",
+   "default": "Active",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "is_baseline",
+   "fieldtype": "Check",
+   "label": "Accepted As Baseline",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "System Account",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "username",
+  "uid",
+  "gid",
+  "shell",
+  "cb_1",
+  "home",
+  "home_exists",
+  "can_log_in",
+  "privileged",
+  "sec_detail",
+  "groups",
+  "password_status",
+  "cb_2",
+  "last_login",
+  "first_seen",
+  "last_seen",
+  "status",
+  "is_baseline"
+ ]
+}

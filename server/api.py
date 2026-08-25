@@ -764,7 +764,11 @@ def run_security_scan(record_only: int | bool = 0) -> dict:
 	_assert_server_admin()
 	from server.security import watch
 
-	return watch.scan(record_only=bool(frappe.parse_json(record_only)))
+	quiet = bool(frappe.parse_json(record_only))
+	return {
+		"persistence": watch.scan(record_only=quiet),
+		"accounts": watch.scan_accounts(record_only=quiet),
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -779,6 +783,34 @@ def accept_security_baseline() -> dict:
 	from server.security import watch
 
 	return watch.accept_baseline()
+
+
+@frappe.whitelist()
+def security_overview() -> dict:
+	"""What the detectors currently know, for the dashboard."""
+	_assert_server_admin()
+	open_counts = frappe.get_all(
+		"Security Event",
+		filters={"status": "New"},
+		fields=["severity", {"COUNT": "name", "as": "total"}],
+		group_by="severity",
+	)
+	return {
+		"open_by_severity": {row.severity: row.total for row in open_counts},
+		"persistence_items": frappe.db.count("Persistence Item", {"status": "Active"}),
+		"accounts": frappe.db.count("System Account", {"status": "Active"}),
+		"accounts_that_can_log_in": frappe.db.count(
+			"System Account", {"status": "Active", "can_log_in": 1}
+		),
+		"keys": frappe.db.count("Authorized Key", {"status": "Active"}),
+		"unreviewed": (
+			frappe.db.count("Persistence Item", {"status": "Active", "is_baseline": 0})
+			+ frappe.db.count("System Account", {"status": "Active", "is_baseline": 0})
+		),
+		"last_scan": frappe.db.get_value(
+			"Security Event", {}, "creation", order_by="creation desc"
+		),
+	}
 
 
 @frappe.whitelist(methods=["POST"])

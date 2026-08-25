@@ -196,6 +196,10 @@ scheduler_events = {
 		# places, and a clean host changes almost none of them — so the diff is
 		# nearly all signal. The scan itself takes about three seconds.
 		"*/15 * * * *": ["server.security.watch.run_persistence_scan"],
+		# Accounts and keys, offset so the two scans never compete for the same
+		# worker. Reading /etc/passwd is trivial; the cost is the dpkg lookups
+		# the persistence scan does, and there is no reason to pay both at once.
+		"5-59/15 * * * *": ["server.security.watch.run_account_scan"],
 	},
 	# "daily" is added together with the SSH Session doctype — a hook pointing at
 	# a module that does not exist yet would create a Scheduled Job Type row that
@@ -298,6 +302,7 @@ default_log_clearing_doctypes = {
 	# eight — and they are small enough that keeping them costs nothing.
 	"Security Event": 365,
 	"Persistence Change": 365,
+	"System Account Change": 365,
 }
 
 # Translation

@@ -1,0 +1,84 @@
+{
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "in_create": 1,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "description": "One change to an account. Kept for a year — these are the records that say when a way in was created.",
+ "fields": [
+  {
+   "fieldname": "event_time",
+   "fieldtype": "Datetime",
+   "label": "Time",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "label": "Username",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "change_type",
+   "fieldtype": "Select",
+   "label": "Change",
+   "options": "Appeared\nModified\nDisappeared",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "field_changed",
+   "fieldtype": "Data",
+   "label": "Field",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "old_value",
+   "fieldtype": "Small Text",
+   "label": "Was",
+   "read_only": 1
+  },
+  {
+   "fieldname": "new_value",
+   "fieldtype": "Small Text",
+   "label": "Now",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "System Account Change",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "event_time",
+  "username",
+  "change_type",
+  "cb_1",
+  "field_changed",
+  "old_value",
+  "new_value"
+ ]
+}

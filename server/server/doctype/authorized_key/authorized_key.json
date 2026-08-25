@@ -1,0 +1,135 @@
+{
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "description": "One key that grants SSH access, by FINGERPRINT. The key material is never stored. The fingerprint is enough to say it is the same key as yesterday, and to join against the SSH login records, which already capture the fingerprint used on each login.",
+ "fields": [
+  {
+   "fieldname": "fingerprint",
+   "fieldtype": "Data",
+   "label": "Fingerprint",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "length": 100,
+   "search_index": 1
+  },
+  {
+   "fieldname": "account",
+   "fieldtype": "Data",
+   "label": "Grants Access To",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "key_type",
+   "fieldtype": "Data",
+   "label": "Type",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "comment",
+   "fieldtype": "Small Text",
+   "label": "Comment",
+   "read_only": 1,
+   "description": "Chosen by whoever made the key, so it proves nothing about who owns it."
+  },
+  {
+   "fieldname": "options",
+   "fieldtype": "Small Text",
+   "label": "Options",
+   "read_only": 1,
+   "description": "Forced commands and source restrictions. A key with `command=` runs that and nothing else; one without runs anything."
+  },
+  {
+   "fieldname": "path",
+   "fieldtype": "Small Text",
+   "label": "File",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_state",
+   "fieldtype": "Section Break",
+   "label": "State"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Active\nRemoved",
+   "default": "Active",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "first_seen",
+   "fieldtype": "Datetime",
+   "label": "First Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_2",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "is_baseline",
+   "fieldtype": "Check",
+   "label": "Accepted As Baseline",
+   "read_only": 1
+  },
+  {
+   "fieldname": "used_from",
+   "fieldtype": "Small Text",
+   "label": "Seen Logging In From",
+   "read_only": 1,
+   "description": "Addresses this fingerprint has actually authenticated from, joined from the SSH login records."
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 0,
+   "delete": 0,
+   "create": 0,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "name": "Authorized Key",
+ "doctype": "DocType",
+ "module": "Server",
+ "field_order": [
+  "fingerprint",
+  "account",
+  "key_type",
+  "cb_1",
+  "comment",
+  "options",
+  "path",
+  "sec_state",
+  "status",
+  "first_seen",
+  "last_seen",
+  "cb_2",
+  "is_baseline",
+  "used_from"
+ ]
+}

@@ -212,13 +212,21 @@ def _raise_baseline_notice(count: int) -> str | None:
 	)
 
 
+#: Everything that is recorded before it is trusted.
+BASELINE_DOCTYPES = ("Persistence Item", "System Account", "Authorized Key")
+
+
 def accept_baseline() -> dict:
 	"""Mark everything currently recorded as reviewed and expected."""
-	names = frappe.get_all(
-		"Persistence Item", filters={"status": "Active", "is_baseline": 0}, pluck="name"
-	)
-	for name in names:
-		frappe.db.set_value("Persistence Item", name, "is_baseline", 1, update_modified=False)
+	accepted = {}
+	for doctype in BASELINE_DOCTYPES:
+		names = frappe.get_all(
+			doctype, filters={"status": ["!=", "Gone"], "is_baseline": 0}, pluck="name"
+		)
+		for name in names:
+			frappe.db.set_value(doctype, name, "is_baseline", 1, update_modified=False)
+		accepted[doctype] = len(names)
+	names = [n for count in accepted.values() for n in range(count)]
 
 	for event in frappe.get_all(
 		"Security Event", filters={"subject": BASELINE_SUBJECT, "status": "New"}, pluck="name"
@@ -235,8 +243,10 @@ def accept_baseline() -> dict:
 		)
 
 	frappe.db.commit()
-	frappe.logger("server").info(f"persistence baseline accepted: {len(names)} items by {frappe.session.user}")
-	return {"accepted": len(names)}
+	frappe.logger("server").info(
+		f"security baseline accepted: {accepted} by {frappe.session.user}"
+	)
+	return {"accepted": sum(accepted.values()), "by_doctype": accepted}
 
 
 def run_persistence_scan() -> dict:
@@ -246,4 +256,256 @@ def run_persistence_scan() -> dict:
 		return scan()
 	except Exception as exc:
 		frappe.logger("server").error(f"persistence scan failed: {exc}", exc_info=True)
+		return {"error": str(exc)}
+
+
+# ----------------------------------------------------------------------
+# Accounts and keys
+# ----------------------------------------------------------------------
+
+ACCOUNT_FIELDS = ("uid", "gid", "shell", "home", "home_exists", "groups", "password_status")
+
+
+def _account_row(account) -> dict:
+	return {
+		"uid": account.uid,
+		"gid": account.gid,
+		"shell": account.shell,
+		"home": account.home,
+		"home_exists": 1 if account.home_exists else 0,
+		"can_log_in": 1 if account.can_log_in else 0,
+		"privileged": 1 if account.privileged else 0,
+		"groups": ", ".join(account.groups),
+		"password_status": account.password_status,
+	}
+
+
+def _key_usage(fingerprints: set[str]) -> dict[str, list[str]]:
+	"""Which addresses each key fingerprint has actually logged in from.
+
+	The SSH login tracking already records the fingerprint on every publickey
+	authentication, so this join costs one query and turns "a new key exists"
+	into "a new key exists and it has already been used, from here".
+	"""
+	if not fingerprints:
+		return {}
+
+	rows = frappe.get_all(
+		"SSH Auth Event",
+		filters={"key_fingerprint": ["in", list(fingerprints)], "outcome": "Success"},
+		fields=["key_fingerprint", "source_ip"],
+		limit_page_length=0,
+	)
+	usage: dict[str, list[str]] = {}
+	for row in rows:
+		if row.source_ip and row.source_ip not in usage.setdefault(row.key_fingerprint, []):
+			usage[row.key_fingerprint].append(row.source_ip)
+	return usage
+
+
+def scan_accounts(record_only: bool = False) -> dict:
+	"""Compare the account and key list against what was recorded.
+
+	On a first scan everything is recorded without being reported as new — but
+	the SHAPE rules still run, because an account that already looks wrong is
+	worth saying so about immediately. That is the difference between "this
+	changed" and "this should not exist", and only the first needs a baseline.
+	"""
+	from server.security import account_rules, accounts as collector
+
+	snapshot = collector.collect()
+	now = frappe.utils.now_datetime()
+	findings: list = []
+
+	stored = {
+		row.username: row
+		for row in frappe.get_all(
+			"System Account",
+			filters={"status": "Active"},
+			fields=["name", "username", *ACCOUNT_FIELDS, "can_log_in", "privileged"],
+			limit_page_length=0,
+		)
+	}
+	first_run = not stored
+
+	seen = set()
+	for account in snapshot.accounts:
+		seen.add(account.username)
+		row = _account_row(account)
+		previous = stored.get(account.username)
+
+		if previous is None:
+			frappe.get_doc(
+				{
+					"doctype": "System Account",
+					"username": account.username,
+					**row,
+					"last_login": snapshot.last_login.get(account.username, ""),
+					"first_seen": now,
+					"last_seen": now,
+					"status": "Active",
+					"is_baseline": 0,
+				}
+			).insert(ignore_permissions=True)
+			if first_run:
+				# Nothing to diff against, but a wrong shape is wrong today.
+				findings.extend(account_rules.shape_findings(account))
+			else:
+				findings.extend(account_rules.judge_account(account_rules.APPEARED, account))
+				_record_account_change(account.username, "Appeared", "", "", "", now)
+			continue
+
+		changed = {
+			field: (previous.get(field), row[field])
+			for field in ACCOUNT_FIELDS
+			if str(previous.get(field) or "") != str(row[field] or "")
+		}
+		frappe.db.set_value(
+			"System Account",
+			previous.name,
+			{**row, "last_login": snapshot.last_login.get(account.username, ""), "last_seen": now},
+			update_modified=False,
+		)
+		if changed:
+			was = collector.Account(
+				username=account.username,
+				uid=int(previous.get("uid") or 0),
+				gid=int(previous.get("gid") or 0),
+				shell=previous.get("shell") or "",
+				home=previous.get("home") or "",
+				home_exists=bool(previous.get("home_exists")),
+				groups=tuple((previous.get("groups") or "").split(", ")) if previous.get("groups") else (),
+				password_status=previous.get("password_status") or collector.PASSWORD_UNKNOWN,
+			)
+			findings.extend(account_rules.judge_account(account_rules.MODIFIED, account, was))
+			for field, (old, new) in changed.items():
+				_record_account_change(account.username, "Modified", field, str(old or ""), str(new or ""), now)
+
+	for username, previous in stored.items():
+		if username in seen:
+			continue
+		frappe.db.set_value("System Account", previous.name, "status", "Gone", update_modified=False)
+		gone = collector.Account(
+			username=username,
+			uid=int(previous.get("uid") or 0),
+			gid=int(previous.get("gid") or 0),
+			shell=previous.get("shell") or "",
+			home=previous.get("home") or "",
+			groups=tuple((previous.get("groups") or "").split(", ")) if previous.get("groups") else (),
+		)
+		findings.extend(account_rules.judge_account(account_rules.DISAPPEARED, gone))
+		_record_account_change(username, "Disappeared", "", "", "", now)
+
+	findings.extend(_scan_keys(snapshot, first_run, now))
+	findings.extend(account_rules.judge_coverage(snapshot.surfaces))
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+				source_doctype="System Account",
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"accounts": len(snapshot.accounts),
+		"keys": len(snapshot.keys),
+		"findings": len(findings),
+		"raised": raised,
+		"first_run": first_run,
+		"unreadable": [s.as_dict() for s in snapshot.blind_spots],
+		"record_only": record_only,
+	}
+
+
+def _scan_keys(snapshot, first_run: bool, now) -> list:
+	from server.security import account_rules
+
+	stored = {
+		(row.fingerprint, row.account): row
+		for row in frappe.get_all(
+			"Authorized Key",
+			filters={"status": "Active"},
+			fields=["name", "fingerprint", "account"],
+			limit_page_length=0,
+		)
+	}
+	usage = _key_usage({key.fingerprint for key in snapshot.keys})
+	findings = []
+	seen = set()
+
+	for key in snapshot.keys:
+		identity = (key.fingerprint, key.account)
+		seen.add(identity)
+		used_from = usage.get(key.fingerprint, [])
+		if identity in stored:
+			frappe.db.set_value(
+				"Authorized Key",
+				stored[identity].name,
+				{"last_seen": now, "used_from": ", ".join(used_from)},
+				update_modified=False,
+			)
+			continue
+
+		frappe.get_doc(
+			{
+				"doctype": "Authorized Key",
+				"fingerprint": key.fingerprint,
+				"account": key.account,
+				"key_type": key.key_type,
+				"comment": key.comment,
+				"options": key.options,
+				"path": key.path,
+				"status": "Active",
+				"is_baseline": 0,
+				"first_seen": now,
+				"last_seen": now,
+				"used_from": ", ".join(used_from),
+			}
+		).insert(ignore_permissions=True)
+		if not first_run:
+			findings.extend(account_rules.judge_key(account_rules.APPEARED, key, used_from))
+
+	for identity, row in stored.items():
+		if identity in seen:
+			continue
+		frappe.db.set_value("Authorized Key", row.name, "status", "Removed", update_modified=False)
+		from server.security.accounts import Key
+
+		findings.extend(
+			account_rules.judge_key(
+				account_rules.DISAPPEARED, Key(row.account, "", row.fingerprint, "")
+			)
+		)
+	return findings
+
+
+def _record_account_change(username: str, change_type: str, field: str, old: str, new: str, now) -> None:
+	frappe.get_doc(
+		{
+			"doctype": "System Account Change",
+			"event_time": now,
+			"username": username,
+			"change_type": change_type,
+			"field_changed": field,
+			"old_value": old,
+			"new_value": new,
+		}
+	).insert(ignore_permissions=True)
+
+
+def run_account_scan() -> dict:
+	"""Scheduled entry point. Never raises."""
+	try:
+		return scan_accounts()
+	except Exception as exc:
+		frappe.logger("server").error(f"account scan failed: {exc}", exc_info=True)
 		return {"error": str(exc)}
