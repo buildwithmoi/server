@@ -105,27 +105,87 @@
 					</div>
 					<p v-else class="text-[12.5px] text-[var(--ink-faint)]">No extra apps — frappe only.</p>
 
-					<div class="grid gap-2 sm:grid-cols-[1fr_1.4fr_1fr_auto] sm:items-end">
+					<!--
+						`items-start`, not `items-end`. SearchSelect opens its
+						list INLINE and grows the row it is in — with the cells
+						bottom-aligned, opening the repository list dragged
+						Account and Branch down the dialog with it. Aligning to
+						the top means the growing cell grows downward and leaves
+						its neighbours where they were.
+					-->
+					<div class="grid gap-2 sm:grid-cols-[1fr_1.4fr_1fr_auto] sm:items-start">
 						<label class="flex flex-col gap-1.5">
 							<span class="u-label">Account</span>
-							<select v-model="picker.profile" @change="loadRepos"
-							        class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]">
+							<select v-model="picker.profile" @change="onProfileChange"
+							        class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-[7px] text-[13px] outline-none focus:border-[var(--ink)]">
 								<option value="" disabled>choose</option>
 								<option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}</option>
 							</select>
 						</label>
-						<label class="flex flex-col gap-1.5">
+
+						<!--
+							A `div`, not a `label`. A label forwards clicks
+							anywhere inside it to its control, and SearchSelect
+							renders its option list INLINE — so clicking an
+							option re-opened the panel it had just closed. The
+							other dialogs already use a div here; this one did
+							not, and that was the whole bug.
+						-->
+						<div class="flex flex-col gap-1.5">
 							<span class="u-label">Repository</span>
 							<SearchSelect v-model="picker.repo" :options="repoOptions" mono
 							              placeholder="Choose a repository" :loading="repos.loading" />
-						</label>
-						<label class="flex flex-col gap-1.5">
-							<span class="u-label">Branch</span>
-							<input v-model.trim="picker.branch" placeholder="default"
-							       class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]" />
-						</label>
-						<Button :disabled="!picker.repo" @click="addApp">Add</Button>
+						</div>
+
+						<div class="flex flex-col gap-1.5">
+							<div class="flex items-baseline justify-between gap-2">
+								<span class="u-label">Branch</span>
+								<button
+									v-if="branchOptions.length"
+									type="button"
+									class="text-[11px] text-[var(--ink-faint)] hover:text-[var(--ink)]"
+									@click="manualBranch = !manualBranch"
+								>{{ manualBranch ? "pick" : "type" }}</button>
+							</div>
+							<!--
+								A typed field whenever the list is unavailable,
+								not only when asked for. A repository whose
+								branches could not be fetched — a token without
+								the scope, a rate limit — must not become a dead
+								end you cannot type past.
+							-->
+							<input
+								v-if="manualBranch || (!branchOptions.length && !branches.loading)"
+								v-model.trim="picker.branch"
+								:placeholder="picker.repo ? repoDefaultBranch || 'default' : 'default'"
+								class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-[7px] text-[13px] outline-none focus:border-[var(--ink)]"
+							/>
+							<SearchSelect
+								v-else
+								v-model="branchChoice"
+								:options="branchOptions"
+								mono
+								:placeholder="branches.loading ? 'Loading branches…' : 'Default branch'"
+								search-placeholder="Search branches"
+								:loading="branches.loading"
+							/>
+						</div>
+
+						<!--
+							An invisible label so the button lines up with the
+							inputs rather than with their labels. Matching a
+							margin to the label's height by hand breaks the
+							moment the type scale changes.
+						-->
+						<div class="flex flex-col gap-1.5">
+							<span class="u-label invisible hidden sm:block" aria-hidden="true">Add</span>
+							<Button :disabled="!picker.repo" @click="addApp">Add</Button>
+						</div>
 					</div>
+
+					<p v-if="branchError" class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+						Could not list branches: {{ branchError }} — type one instead.
+					</p>
 				</template>
 
 				<!-- 3. Domain -->
@@ -252,6 +312,7 @@ import {
 	githubProfilesResource,
 	profileReposResource,
 	provisionPreflightResource,
+	repoBranchesResource,
 	runProvisionResource,
 } from "../api";
 
@@ -269,6 +330,7 @@ const preflight = provisionPreflightResource();
 const runResource = runProvisionResource();
 const profilesRes = githubProfilesResource();
 const repos = profileReposResource();
+const branches = repoBranchesResource();
 const providersRes = domainProvidersResource();
 
 const blank = () => ({
@@ -284,6 +346,10 @@ const blank = () => ({
 
 const form = ref(blank());
 const picker = ref({ profile: "", repo: null, branch: "" });
+/** The chosen entry from the branch list, when the list is being used. */
+const branchChoice = ref(null);
+/** Typed rather than picked — either by choice or because the list failed. */
+const manualBranch = ref(false);
 const stepIndex = ref(0);
 const furthest = ref(0);
 const confirm = ref("");
@@ -306,7 +372,35 @@ const benchRoot = computed(() => preflight.data?.bench_root || "the bench root")
 const profiles = computed(() => profilesRes.data || []);
 const providers = computed(() => providersRes.data?.providers || []);
 const repoOptions = computed(() =>
-	(repos.data || []).map((r) => ({ value: r.repo_name, label: r.repo_name, description: r.description })),
+	(repos.data || []).map((r) => ({
+		value: r.repo_name,
+		label: r.repo_name,
+		description: r.description,
+		// Carried so the default branch can be filled in the instant a
+		// repository is chosen, without waiting for the branch list.
+		defaultBranch: r.default_branch,
+	})),
+);
+
+const repoDefaultBranch = computed(
+	() => picker.value.repo?.defaultBranch || branches.data?.default_branch || "",
+);
+
+const branchOptions = computed(() =>
+	(branches.data?.branches || []).map((b) => ({
+		label: b.name,
+		value: b.name,
+		description: b.name === repoDefaultBranch.value ? "repository default" : "",
+	})),
+);
+
+const branchError = computed(() => branches.data?.error || "");
+
+/** What will actually be cloned: the typed name, or the picked one. */
+const effectiveBranch = computed(() =>
+	manualBranch.value || !branchOptions.value.length
+		? picker.value.branch
+		: branchChoice.value?.value || picker.value.branch,
 );
 
 // Blocking checks only. A memory warning is a reason this might not finish,
@@ -336,15 +430,57 @@ function addApp() {
 	form.value.apps.push({
 		profile: picker.value.profile,
 		repo: picker.value.repo.value,
-		branch: picker.value.branch,
+		branch: effectiveBranch.value,
 	});
 	picker.value.repo = null;
 	picker.value.branch = "";
+	branchChoice.value = null;
+	manualBranch.value = false;
+	branches.reset?.();
 }
 
-function loadRepos() {
+function onProfileChange() {
+	picker.value.repo = null;
+	branchChoice.value = null;
+	picker.value.branch = "";
 	if (picker.value.profile) repos.submit({ profile: picker.value.profile }).catch(() => {});
 }
+
+/**
+ * Choosing a repository fills its default branch in IMMEDIATELY from the
+ * cached repo record, then loads the full list behind that.
+ *
+ * The order is the point, and it is the same one InstallDialog settled on:
+ * fetching first and filling in afterwards puts a multi-second wait on the
+ * common path for nothing. erpnext has several hundred branches across seven
+ * API pages; the default was already sitting in the cache.
+ */
+watch(
+	() => picker.value.repo,
+	(repo) => {
+		branchChoice.value = null;
+		manualBranch.value = false;
+		if (!repo?.value || !picker.value.profile) {
+			picker.value.branch = "";
+			return;
+		}
+
+		picker.value.branch = repo.defaultBranch || "";
+		branches
+			.submit({ profile: picker.value.profile, repo: repo.value })
+			.then(() => {
+				// Reflect the prefilled branch in the list once it arrives, so
+				// the field is not blank on a control the user never touched.
+				const wanted = picker.value.branch || branches.data?.default_branch;
+				const match = branchOptions.value.find((b) => b.value === wanted);
+				if (match) branchChoice.value = match;
+			})
+			.catch(() => {
+				// The typed field takes over on its own — `branchOptions` is
+				// empty, so the template swaps to the input.
+			});
+	},
+);
 
 // Re-checked as the name or version changes, debounced so a typed name does
 // not fire a request per keystroke.
