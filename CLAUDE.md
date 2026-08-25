@@ -110,7 +110,29 @@ The rules that path exists to enforce, each learned from a real failure:
   encrypted backup *before* `bench restore` drops the database — finding out afterwards means an empty
   site and no way back.
 
-`bench/ssl.py`, `bench/restore.py`, `bench/backups.py`, `bench/steps.py`, `bench/logs.py`,
+### Restoring
+
+Three things happen before `bench restore` is allowed to run, each guarding a failure that is
+invisible until it is expensive:
+
+- **`bench/inspect.py` reads the dump's `tabInstalled Application`** and refuses while the bench is
+  missing an app the backup references. That restore *appears to succeed* — the site comes up and
+  every DocType belonging to the missing app is gone — and surfaces days later as import errors
+  nobody connects back to it. Column positions come from the dump's own `CREATE TABLE`; frappe has
+  added columns to that table before, and a fixed index would report the version as the branch.
+- **`restore.estimate_space()`** refuses when the disk cannot hold the dump expanded (~16×, press's
+  own multiplier).
+- **The site slug in the filename** is compared to the target site, because right-backup-wrong-site
+  looks completely normal until the data is already replaced.
+
+A backup can arrive three ways and they all converge on one `BackupSet`: written by frappe into the
+site's own directory, copied into `<bench>/backups/` by hand, or uploaded through
+`api.upload_backup` (streamed to disk — a production dump is gigabytes). Retention (`bench/backups.py`)
+ranks **only** over the site's own directory, because that is the only place it deletes from; ranking
+over the merged listing once let dropped-in files fill the protected window and deleted every backup
+a site had.
+
+`bench/ssl.py`, `bench/restore.py`, `bench/inspect.py`, `bench/backups.py`, `bench/steps.py`, `bench/logs.py`,
 `bench/siteconfig.py` and `system.py` are frappe-free, like `ssh/parser.py`, so they unit-test with no
 site and no database. That is most of the app's logic; keep it that way.
 
