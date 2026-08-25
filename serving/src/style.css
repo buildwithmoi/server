@@ -357,6 +357,28 @@ body {
  * dialog into a normal one: title at the top, buttons always in reach, the
  * middle scrolls.
  */
+/* The layering, written down in one place.
+ *
+ * frappe-ui's dialog overlay ships with NO z-index, so it stacked purely by DOM
+ * order and lost to anything in the shell that had one: the sidebar (z-40) cut
+ * off the left edge of a wide dialog, and the sticky page header (z-20) sat on
+ * top of a tall one. Both were the same bug wearing two faces.
+ *
+ *   20  page header (sticky)
+ *   30  mobile sidebar backdrop
+ *   40  sidebar, alerts panel
+ *   50  action menus, job dock
+ *   80  dialog overlay  <- above the whole shell
+ *  100  a dialog's own popovers, which must clear its content
+ *
+ * The dock deliberately stays BELOW the overlay: a modal is a question being
+ * asked, and a job card sliding over it would be the one thing you cannot
+ * dismiss to answer.
+ */
+.dialog-overlay {
+	z-index: 80;
+}
+
 .dialog-content {
 	display: flex;
 	flex-direction: column;

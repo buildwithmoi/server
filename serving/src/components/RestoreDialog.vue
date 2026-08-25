@@ -1,5 +1,9 @@
 <template>
-	<Dialog v-model="open" :options="{ title: `Restore · ${bench}`, size: 'xl' }">
+	<Dialog
+		v-model="open"
+		:options="{ title: `Restore · ${bench}`, size: 'xl' }"
+		:disable-outside-click-to-close="busy"
+	>
 		<template #body-content>
 			<div class="flex flex-col gap-3.5">
 				<div class="flex flex-col gap-1.5">
@@ -358,8 +362,16 @@
 		</template>
 
 		<template #actions>
-			<div class="flex justify-end gap-2">
-				<Button @click="open = false">Cancel</Button>
+			<div class="flex items-center justify-end gap-2">
+				<!-- Said out loud while it is happening. The work lives in this
+				     dialog, so closing it throws the work away — and there is no
+				     job card to come back to the way there is for a bench
+				     command. -->
+				<span v-if="busy" class="u-item-detail mr-auto flex items-center gap-2">
+					<Spinner class="h-3.5 w-3.5" />
+					{{ busyLabel }}
+				</span>
+				<Button :disabled="busy" @click="open = false">Cancel</Button>
 				<Button variant="solid" :loading="running" :disabled="!canRun" @click="run">
 					Restore
 				</Button>
@@ -374,6 +386,7 @@ import { Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
 import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
+import { useBusyGuard } from "../busy";
 import {
 	backupsResource,
 	inspectBackupResource,
@@ -444,6 +457,25 @@ const open = computed({
 	get: () => props.modelValue,
 	set: (v) => emit("update:modelValue", v),
 });
+
+/**
+ * Work that would be lost if the dialog closed now.
+ *
+ * The upload and the queueing are the expensive ones; reading a dump for the
+ * apps it needs can take a while on a large backup and is just as annoying to
+ * restart. Listing files is cheap and deliberately not included — blocking on
+ * every fetch would make the dialog feel stuck.
+ */
+const busy = computed(
+	() => uploading.value || running.value || contents.loading || spaceCheck.loading,
+);
+const busyLabel = computed(() => {
+	if (uploading.value) return `Uploading ${uploadName.value} — ${uploadPercent.value}%`;
+	if (running.value) return "Starting the restore…";
+	if (contents.loading) return "Reading which apps this backup needs…";
+	return "Checking disk space…";
+});
+useBusyGuard(busy);
 
 const siteName = computed(() => site.value?.value || "");
 const siteOptions = computed(() =>

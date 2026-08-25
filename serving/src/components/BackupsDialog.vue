@@ -1,5 +1,9 @@
 <template>
-	<Dialog v-model="open" :options="{ title: `Backups · ${bench}`, size: '2xl' }">
+	<Dialog
+		v-model="open"
+		:options="{ title: `Backups · ${bench}`, size: '2xl' }"
+		:disable-outside-click-to-close="busy"
+	>
 		<template #body-content>
 			<div class="flex flex-col gap-3.5">
 				<div class="flex flex-col gap-1.5">
@@ -137,6 +141,7 @@ import { Button, Dialog, Spinner, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
 import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
+import { useBusyGuard } from "../busy";
 import { backupPlanResource, pruneBackupsResource, runBenchCommandResource } from "../api";
 
 const props = defineProps({
@@ -156,6 +161,11 @@ const pruning = ref(false);
 const backingUp = ref(false);
 const error = ref("");
 const warning = ref("");
+
+// Closing mid-flight loses the work — the dialog owns it, and there is no
+// job card to come back to. See busy.ts.
+const busy = computed(() => pruning.value || backingUp.value);
+useBusyGuard(busy);
 
 const open = computed({
 	get: () => props.modelValue,

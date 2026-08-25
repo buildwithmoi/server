@@ -1,5 +1,9 @@
 <template>
-	<Dialog v-model="open" :options="{ title: `${verb} · ${bench}`, size: 'xl' }">
+	<Dialog
+		v-model="open"
+		:options="{ title: `${verb} · ${bench}`, size: 'xl' }"
+		:disable-outside-click-to-close="busy"
+	>
 		<template #body-content>
 			<!-- Clone and Pull are different enough that the choice comes first
 			     and is always visible, rather than being inferred from which
@@ -284,6 +288,7 @@ import { Button, Dialog, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
 import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
+import { useBusyGuard } from "../busy";
 import {
 	benchAppsResource, createInstallResource, githubProfilesResource,
 	profileReposResource, repoBranchesResource, syncGithubProfileResource,
@@ -332,6 +337,11 @@ const typedBranch = ref("");
 const submitting = ref(false);
 const syncing = ref(false);
 const error = ref("");
+
+// Closing mid-flight loses the work — the dialog owns it, and there is no
+// job card to come back to. See busy.ts.
+const busy = computed(() => submitting.value);
+useBusyGuard(busy);
 
 const open = computed({
 	get: () => props.modelValue,
