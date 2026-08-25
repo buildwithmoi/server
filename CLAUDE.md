@@ -246,6 +246,90 @@ shadows `frappe.model.meta.Meta.process()` and makes `migrate` die with a
 `TypeError` pointing at frappe's own code. `Listening Socket` and `Outbound
 Connection Summary` use `process_name`.
 
+## Security monitoring
+
+`server/security/` — eight detectors on the scheduler, built from a real
+eight-month intrusion that the hosting provider noticed before anyone here did.
+Every module splits the same way, and the split is load-bearing: a `*.py`
+collector that describes the machine and a `*_rules.py` that decides what it
+means. Collectors never import frappe, so the whole judgement layer unit-tests
+with no site and no database.
+
+| Detector | Watches | Schedule |
+|---|---|---|
+| `persistence` | systemd, cron, shell init, PAM, sudoers, modules | 15 min |
+| `accounts` | passwd/group/shadow status, SSH key fingerprints | 15 min |
+| `network` | listening sockets, outbound connections, firewall drift | 5 min |
+| `filesystem` | setuid, temp-dir ELF droppers, world-writable, dpkg | 15 min / daily |
+| `sshd` | effective `sshd -T` config, Match blocks, file drift | 15 min |
+| `site` | credentials on disk, dangerous settings, backup recency | hourly |
+| `web` | TLS, headers, certificate expiry, guest-callable endpoints | hourly |
+| `self` | this app's own code, and its own finding chain | hourly |
+
+### Rules that stop it becoming noise
+
+Every threshold came from measuring this box, and each is written down because
+the alternative was a detector nobody keeps enabled.
+
+- **Coverage is reported, never assumed.** A surface that could not be read
+  becomes a finding. "No findings" and "could not look" must never render the
+  same, which is why `sshd_rules.judge()` skips the settings rules entirely
+  when `sshd -T` failed — every one of them reaches for a default, and on this
+  box that produced three findings about a config nobody had seen.
+- **The baseline is recorded, not accepted.** A host rebuilt from a compromised
+  snapshot carries the intruder's setuid binary into its first baseline. Hence
+  `shape_findings()`, which judges an item on its own terms with no history.
+- **`dpkg --verify`'s conffile flag is the whole rule.** 341 lines here, 337
+  benign "missing"; the only checksum mismatches are conffiles an admin is
+  meant to edit. A modified *non*-conffile is a replaced binary.
+- **ELF, not "executable".** /tmp holds 734 executable files and 2 ELF ones.
+- **Judge pairs as pairs.** `AllowTcpForwarding` + `GatewayPorts` is not two
+  settings, it is an open proxy — which is what the breached host was used as.
+- **Calibrate against stock, not against ideal.** The hardened sshd fixture
+  must produce total silence; stock Ubuntu raises exactly one Critical.
+
+### Alerting
+
+Critical and High alert immediately, deduplicated by subject and day. Medium
+and Info are batched into `security.digest`, sent daily **even when quiet** so
+that its absence means something. Untouched Criticals escalate after 8 hours,
+Highs after 24 — dedupe otherwise turns "tell me once a day" into silence on
+the thing that mattered. Active suppressions are listed every day; a
+suppression nobody remembers is a blind spot with a friendly name.
+`test_alerting` reads every rules module and fails if any `Finding` can be
+built without a runbook.
+
+### Being checkable from outside
+
+Everything above runs on the host it watches, so an attacker with root can stop
+the scheduler or edit the detectors — two lines in `rules.py` turn a Critical
+into an Info and nothing else notices. Three mechanisms make that *visible*
+rather than impossible:
+
+- findings are POSTed to a collector as they are written (`security/forward.py`);
+- each `Security Event` chains to the previous by hash, so a careless edit or
+  delete breaks every link after it;
+- `security_heartbeat` publishes a monotonic sequence, the chain head and a
+  fingerprint of the app's own source, HMAC-signed with the watchdog token.
+
+**Be honest about the limit, in code and in conversation.** Someone with
+database access can delete a finding and recompute the chain; local
+verification then passes, and `test_selfcheck` asserts exactly that. The claim
+is not "you cannot tamper with this" but "you cannot tamper with this without
+the outside noticing". `security/watchdog_client.py` is the reference watcher —
+stdlib only, runs from cron on a *different* host, and checks the signature
+before anything else, because an unsigned check watches the network rather than
+the host.
+
+### Known coverage gaps on this box
+
+`/etc/shadow`, `/var/spool/cron/crontabs`, the firewall, and `sshd -T` are all
+unreadable as the bench user, and each reports itself as a gap rather than as a
+clean result. One NOPASSWD sudoers rule for a read-only helper closes all four.
+There is also no sshd on this WSL2 box at all, so `security/sshd.py` is
+fixture-built and still needs confirming on real hardware — the same position
+`ssh/parser.py` was written from.
+
 ## Conventions
 
 - **Python is tab-indented** (ruff `indent-style = "tab"`), double quotes, line length 110, target
