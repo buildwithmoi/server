@@ -248,6 +248,12 @@ scheduler_events = {
 		"server.security.watch.run_web_scan",
 	],
 	"daily": [
+		# One message a day saying what state this machine is in — including
+		# on a quiet day, so that its ABSENCE means something. Immediate
+		# alerting covers Critical and High and deliberately stops there; the
+		# middle severities are batched here rather than either flooding a
+		# mailbox or living only in a console nobody sits in front of.
+		"server.security.digest.send",
 		# `dpkg --verify` re-hashes every file every installed package owns:
 		# 40 seconds of solid I/O here, against 0.8 for the rest of the
 		# filesystem sweep. Daily is also the honest cadence for what it
