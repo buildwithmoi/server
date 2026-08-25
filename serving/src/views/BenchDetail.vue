@@ -28,6 +28,21 @@
 
 		<LogsDialog v-model="showLogs" :bench="name" />
 
+		<SiteConfigDialog
+			v-model="showConfig"
+			:bench="name"
+			:sites="bench.sites.map((s) => s.site_name)"
+			:default-site="bench.default_site || ''"
+		/>
+
+		<BackupsDialog
+			v-model="showBackups"
+			:bench="name"
+			:sites="bench.sites.map((s) => s.site_name)"
+			:default-site="bench.default_site || ''"
+			@started="onStarted"
+		/>
+
 		<RestoreDialog
 			v-model="showRestore"
 			:bench="name"
@@ -196,6 +211,8 @@ import ActionMenu from "../components/ActionMenu.vue";
 import BenchCommandDialog from "../components/BenchCommandDialog.vue";
 import SslDialog from "../components/SslDialog.vue";
 import LogsDialog from "../components/LogsDialog.vue";
+import BackupsDialog from "../components/BackupsDialog.vue";
+import SiteConfigDialog from "../components/SiteConfigDialog.vue";
 import RestoreDialog from "../components/RestoreDialog.vue";
 import InstallDialog from "../components/InstallDialog.vue";
 import Skeleton from "../components/Skeleton.vue";
@@ -209,6 +226,8 @@ const showInstall = ref(false);
 const showCommands = ref(false);
 const showSsl = ref(false);
 const showLogs = ref(false);
+const showBackups = ref(false);
+const showConfig = ref(false);
 const showRestore = ref(false);
 const installMode = ref("Clone");
 
@@ -259,6 +278,20 @@ const actions = computed(() => [
 		description: "migrate, backup, clear cache, and the rest",
 		onClick: () => (showCommands.value = true),
 		condition: () => bench.value.exists_on_disk !== false,
+	},
+	{
+		label: "Site configuration…",
+		icon: "sliders",
+		description: "Maintenance mode, developer mode, host name",
+		onClick: () => (showConfig.value = true),
+		condition: () => bench.value.exists_on_disk !== false && bench.value.sites.length > 0,
+	},
+	{
+		label: "Manage backups…",
+		icon: "database",
+		description: "Take one now, or clear out old ones",
+		onClick: () => (showBackups.value = true),
+		condition: () => bench.value.exists_on_disk !== false && bench.value.sites.length > 0,
 	},
 	{
 		label: "Restore a site…",

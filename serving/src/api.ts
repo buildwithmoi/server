@@ -247,6 +247,45 @@ export interface LogFile {
 	is_rotation: boolean;
 }
 
+export interface BackupCandidate {
+	key: string;
+	taken_at: string;
+	size: number;
+	size_text: string;
+	age_hours: number;
+	age_text: string;
+	files: string[];
+	deletable: boolean;
+	reason: string;
+}
+
+export interface ConfigSetting {
+	key: string;
+	label: string;
+	kind: "bool" | "int" | "string";
+	description: string;
+	disruptive: boolean;
+	value: unknown;
+	present: boolean;
+	effective: unknown;
+}
+
+export function siteConfigResource() {
+	return createResource({ url: `${M}.site_config` });
+}
+
+export function updateSiteConfigResource() {
+	return createResource({ url: `${M}.update_site_config` });
+}
+
+export function backupPlanResource() {
+	return createResource({ url: `${M}.backup_plan` });
+}
+
+export function pruneBackupsResource() {
+	return createResource({ url: `${M}.prune_backups` });
+}
+
 export function logsResource() {
 	return createResource({ url: `${M}.list_logs` });
 }

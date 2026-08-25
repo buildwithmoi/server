@@ -17,7 +17,9 @@ import frappe
 from server import dashboard, system
 from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer
+from server.bench import backups as bench_backups
 from server.bench import logs as bench_logs
+from server.bench import siteconfig as bench_siteconfig
 from server.bench import restore as bench_restore
 from server.bench import ssl as bench_ssl
 from server.geo import registry
@@ -506,6 +508,109 @@ def run_bench_command(
 	doc.insert()
 	frappe.db.commit()
 	return run_install_request(doc.name)
+
+
+@frappe.whitelist()
+def site_config(bench: str, site: str) -> dict:
+	"""A site's configuration, with every secret redacted.
+
+	The same file holds `db_password` and `encryption_key`. Their presence is
+	reported; their values never leave the server.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+	report = bench_siteconfig.read(doc.bench_path, site)
+	report["site"] = site
+	report["bench"] = doc.name
+	return report
+
+
+@frappe.whitelist(methods=["POST"])
+def update_site_config(bench: str, site: str, changes: dict | str) -> dict:
+	"""Change one or more of the settings this app is willing to change.
+
+	Only keys in the curated list are accepted, and each is coerced to the type
+	frappe will read it back as — `maintenance_mode: "false"` is a non-empty
+	string and therefore true, which is exactly the mistake worth designing out.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+
+	wanted = frappe.parse_json(changes) if isinstance(changes, str) else (changes or {})
+	if not wanted:
+		frappe.throw("Nothing to change.")
+
+	try:
+		result = bench_siteconfig.write(doc.bench_path, site, wanted)
+	except bench_siteconfig.ConfigRefused as exc:
+		frappe.throw(str(exc), title="Cannot Change This")
+
+	frappe.logger("server").info(
+		f"site config changed on {site}: {sorted(result['applied'])} by {frappe.session.user}"
+	)
+	report = bench_siteconfig.read(doc.bench_path, site)
+	report["applied"] = result["applied"]
+	report["backup"] = result["backup"]
+	report["site"] = site
+	return report
+
+
+@frappe.whitelist()
+def backup_plan(bench: str, site: str, keep: int = 5, older_than_days: float = 0) -> dict:
+	"""What a prune would delete, without deleting anything.
+
+	Always computed and shown before anything is removed. Deleting a backup
+	breaks nothing today — you find out months later, when the one you wanted is
+	the one that went.
+	"""
+	_assert_server_admin()
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+	return bench_backups.plan(doc.bench_path, site, int(keep), float(older_than_days))
+
+
+@frappe.whitelist(methods=["POST"])
+def prune_backups(
+	bench: str,
+	site: str,
+	keys: list | str,
+	keep: int = 5,
+	confirm: int | bool = 0,
+) -> dict:
+	"""Delete the named backup sets.
+
+	The plan is recomputed inside `prune` rather than trusted from here: the
+	browser chose these keys seconds ago, and a scheduled backup written in
+	between would shift what "the newest five" means.
+	"""
+	_assert_server_admin()
+	if not frappe.parse_json(confirm):
+		frappe.throw(
+			"Deleted backups cannot be recovered. Confirm before removing them.",
+			title="Confirmation Required",
+		)
+
+	doc = frappe.get_doc("Server Bench", bench)
+	if site not in doc.site_names():
+		frappe.throw(f"{site!r} is not a site on {bench}.")
+
+	wanted = frappe.parse_json(keys) if isinstance(keys, str) else (keys or [])
+	result = bench_backups.prune(doc.bench_path, site, list(wanted), int(keep))
+
+	# An audit trail for a destructive action, in the app whose whole point is
+	# knowing what happened on this server.
+	frappe.logger("server").info(
+		f"pruned {len(result['deleted_sets'])} backup sets on {site} "
+		f"({result['freed_text']}) by {frappe.session.user}"
+	)
+	return result
 
 
 @frappe.whitelist()
