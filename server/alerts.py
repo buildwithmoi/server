@@ -189,15 +189,7 @@ def _new_countries(recipients: list[str], since, settings) -> list[str]:
 	if not recent:
 		return []
 
-	known = {
-		(row.country or "").lower()
-		for row in frappe.get_all(
-			"SSH Auth Event",
-			filters={"event_time": ["<=", since], "outcome": "Success", "country": ["is", "set"]},
-			fields=["country"],
-			limit=5000,
-		)
-	}
+	known = _countries_seen_before(since)
 
 	raised = []
 	seen_this_run: set[str] = set()
@@ -224,6 +216,26 @@ def _new_countries(recipients: list[str], since, settings) -> list[str]:
 		)
 		raised.append(subject)
 	return raised
+
+
+def _countries_seen_before(since) -> set[str]:
+	"""Every country that has ever logged in successfully before `since`.
+
+	DISTINCT rather than reading rows. Taking the 5,000 most recent events was
+	wrong on exactly the servers this matters on: a busy host produces that many
+	failures in an afternoon, so a country seen last month fell out of the
+	window and re-alerted as new — and an alert that cries wolf is one people
+	stop reading. The distinct set is small and the query is an index scan.
+	"""
+	rows = frappe.db.sql(
+		"""
+		SELECT DISTINCT country FROM `tabSSH Auth Event`
+		WHERE event_time <= %(since)s AND outcome = 'Success'
+		  AND country IS NOT NULL AND country != ''
+		""",
+		{"since": since},
+	)
+	return {(row[0] or "").lower() for row in rows}
 
 
 def _failed_bursts(recipients: list[str], since, settings) -> list[str]:
@@ -288,7 +300,8 @@ def check_disk() -> dict:
 	if not recipients:
 		return {"alerts": [], "reason": "alerting is off, or no recipient could be resolved"}
 
-	paths = frappe.get_all("Server Bench", filters={"is_active": 1}, pluck="bench_path")
+	benches = frappe.get_all("Server Bench", filters={"is_active": 1}, fields=["name", "bench_path"])
+	paths = [b.bench_path for b in benches]
 	report = system.snapshot(paths)
 
 	raised = []
@@ -323,7 +336,10 @@ def check_disk() -> dict:
 				+ hints
 			),
 			"Server Bench",
-			paths[0] if paths else mount,
+			# A docname, not a filesystem path. It was `paths[0]`, so every disk
+			# alert linked to a Server Bench that does not exist and the
+			# notification led nowhere.
+			benches[0].name if benches else None,
 		)
 		raised.append(subject)
 

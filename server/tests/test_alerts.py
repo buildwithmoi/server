@@ -246,3 +246,71 @@ class TestTrustedCountries(unittest.TestCase):
 
 	def test_an_unknown_code_does_not_raise(self):
 		self.assertIn("zz", alerts._trusted_names(self._settings("ZZ")))
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestNewCountryBaseline(unittest.TestCase):
+	def test_the_baseline_is_a_distinct_set_not_a_recent_window(self):
+		"""It read the 5,000 most recent events.
+
+		Wrong on exactly the servers this matters on: a busy host produces that
+		many failures in an afternoon, so a country seen last month fell out of
+		the window and re-alerted as new. An alert that cries wolf is one people
+		stop reading, which is how the one that matters gets missed.
+		"""
+		since = frappe.utils.now_datetime()
+		countries = alerts._countries_seen_before(since)
+		self.assertIsInstance(countries, set)
+		self.assertTrue(all(c == c.lower() for c in countries), countries)
+
+	def test_it_does_not_depend_on_how_many_events_exist(self):
+		total = frappe.db.count("SSH Auth Event")
+		if total < 10:
+			self.skipTest("not enough events on this site to be meaningful")
+		since = frappe.utils.now_datetime()
+		distinct = frappe.db.sql(
+			"""SELECT COUNT(DISTINCT country) FROM `tabSSH Auth Event`
+			   WHERE event_time <= %s AND outcome = 'Success'
+			     AND country IS NOT NULL AND country != ''""",
+			since,
+		)[0][0]
+		self.assertEqual(len(alerts._countries_seen_before(since)), distinct)
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestAlertsLinkSomewhereReal(unittest.TestCase):
+	def test_the_disk_alert_names_a_docname_not_a_filesystem_path(self):
+		"""It passed bench_path, so every disk alert linked to a Server Bench
+		that does not exist and the notification led nowhere."""
+		from unittest import mock
+
+		bench = frappe.get_all(
+			"Server Bench", filters={"is_active": 1}, fields=["name", "bench_path"], limit=1
+		)
+		if not bench:
+			self.skipTest("no active bench")
+
+		captured = []
+		recipients = mock.Mock(get_alert_recipients=lambda: ["ops@example.com"])
+		with (
+			mock.patch.object(
+				alerts, "_notify", side_effect=lambda r, s, b, dt, dn: captured.append((dt, dn))
+			),
+			mock.patch.object(alerts, "get_settings", return_value=recipients),
+			mock.patch(
+				"server.system.snapshot",
+				return_value={
+					"disks": [{"label": "/", "percent": 95.0, "level": "critical", "detail": "full"}],
+					"worst_level": "critical",
+				},
+			),
+			mock.patch.object(alerts, "_disk_hints", return_value=""),
+		):
+			alerts.check_disk()
+
+		self.assertTrue(captured)
+		doctype, docname = captured[0]
+		self.assertEqual(doctype, "Server Bench")
+		self.assertTrue(
+			frappe.db.exists(doctype, docname), f"{docname!r} is not a real {doctype}"
+		)

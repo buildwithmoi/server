@@ -218,3 +218,42 @@ class TestWrite(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestOutputScrubbing(unittest.TestCase):
+	"""Command output is stored in the database and rendered in the interface.
+
+	`bench show-config` prints db_password and encryption_key in plain text, so
+	one catalogued READ-ONLY command was enough to write both into a log this
+	app displays — undoing every bit of redaction in the config editor. Applied
+	to output rather than to a list of known-bad commands, because the next
+	command that prints a credential will not be one anybody predicted.
+	"""
+
+	def test_the_table_format_bench_actually_prints(self):
+		line = "| db_password                  | verysecret123                                |"
+		scrubbed = sc.scrub(line)
+		self.assertNotIn("verysecret123", scrubbed)
+		self.assertIn("db_password", scrubbed)
+		self.assertIn(sc.REDACTED, scrubbed)
+
+	def test_encryption_keys_are_scrubbed(self):
+		line = "| encryption_key               | lVftSfJftuNfy-tE8CwIFOwdBQTpbZSL= |"
+		self.assertNotIn("lVftSfJftuNfy", sc.scrub(line))
+
+	def test_json_and_key_value_forms_too(self):
+		self.assertNotIn("abc123", sc.scrub('"encryption_key": "abc123",'))
+		self.assertNotIn("hunter2", sc.scrub("mariadb_root_password=hunter2"))
+
+	def test_ordinary_output_is_untouched(self):
+		for line in (
+			"| db_name                      | _c817a1c9040319df                            |",
+			"| gunicorn_workers             | 17                                           |",
+			"Receiving objects:  43% (1234/2870)",
+			"$ bench --site a.local migrate",
+		):
+			with self.subTest(line=line):
+				self.assertEqual(sc.scrub(line), line)
+
+	def test_an_unanticipated_secret_key_is_scrubbed_too(self):
+		self.assertNotIn("sk_live_abc", sc.scrub("| stripe_secret_key | sk_live_abc |"))

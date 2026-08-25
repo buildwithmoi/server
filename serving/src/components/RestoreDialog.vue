@@ -383,7 +383,10 @@ const chosenSizeText = computed(() => {
 /** The same right-backup-wrong-site check, applied to a hand-picked dump. */
 const chosenMismatch = computed(() => {
 	const name = picks.value.database?.value?.split("/").pop() || "";
-	const match = name.match(/^\d{8}_\d{6}-(.+?)-database\.sql\.gz$/);
+	// Mirrors restore.BACKUP_NAME, including the -enc and -partial markers.
+	// Without them this silently stopped firing for encrypted backups — the
+	// case where restoring the wrong site's data is least recoverable.
+	const match = name.match(/^\d{8}_\d{6}-(.+?)(?:-partial)?-database(?:-enc)?\.sql\.gz$/);
 	if (!match) return "";
 	const from = match[1].replace(/_/g, ".");
 	if (from === siteName.value) return "";

@@ -329,6 +329,9 @@ class AppInstallRequest(Document):
 			   WHERE name = %(name)s""",
 			{"chunk": chunk, "name": self.name},
 		)
-		# Keep the in-memory copy roughly in step for anything that reads it
-		# back on this document — the authoritative copy is the column.
-		self.output = (self.output or "") + chunk
+		# Deliberately NOT mirrored onto self.output. Accumulating it here put
+		# the entire log back in the worker's memory — which is exactly what
+		# capping the caller's buffer was meant to stop — and made each append
+		# an O(n) string copy on top. Anything that needs the full log reads the
+		# column.
+		self.output = None

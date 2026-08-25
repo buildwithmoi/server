@@ -35,7 +35,8 @@ import time
 import frappe
 from frappe.utils.synchronization import LockTimeoutError, filelock
 
-from server.bench import commands, doctor, restore, scanner, ssl, steps as step_plan
+from server.bench import commands, doctor, restore, scanner, siteconfig, ssl
+from server.bench import steps as step_plan
 from server.server.doctype.server_settings.server_settings import get_settings
 
 #: How often, at most, to push log lines to a watching browser.
@@ -840,6 +841,11 @@ def run_install_request(name: str) -> dict:
 		down and left it spinning in the dock indefinitely.
 		"""
 		try:
+			# Scrubbed before it is stored, streamed or shown. `bench show-config`
+			# prints db_password and encryption_key in plain text, so one
+			# catalogued read-only command was enough to write both into a log
+			# this app renders — undoing the redaction in the config editor.
+			line = siteconfig.scrub(line)
 			pending.append(line)
 			buffer.append(line)
 			# The tail is all that is needed after the fact — _tail for the

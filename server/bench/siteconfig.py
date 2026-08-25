@@ -150,6 +150,34 @@ def is_secret(key: str) -> bool:
 	return lowered in SECRET_EXACT or lowered.endswith(SECRET_SUFFIX)
 
 
+#: How a secret shows up in command output. `bench show-config` prints an
+#: ASCII table; other commands print JSON or key=value. All three are matched
+#: because any of them can carry a password into a log this app displays.
+_SECRET_LINE = re.compile(
+	r"""(?P<lead>[|\s"']*)(?P<key>[A-Za-z0-9_.-]+)(?P<sep>\s*["']?\s*[|:=]\s*["']?\s*)(?P<value>[^|"'\n]+)""",
+)
+
+
+def scrub(text: str) -> str:
+	"""Replace the value of any secret-looking key in command output.
+
+	`bench show-config` prints `db_password` and `encryption_key` in plain
+	text, and every command's output is stored in the database and rendered in
+	the interface — so a single catalogued read-only command undid the whole
+	point of redacting them in the config editor.
+
+	Applied to output rather than to a list of commands, because the next
+	command that prints a credential will not be one anybody predicted.
+	"""
+
+	def replace(match: re.Match) -> str:
+		if not is_secret(match["key"]):
+			return match.group(0)
+		return f"{match['lead']}{match['key']}{match['sep']}{REDACTED}"
+
+	return _SECRET_LINE.sub(replace, text)
+
+
 def config_path(bench_path: str, site: str) -> str:
 	return os.path.join(bench_path, "sites", site, "site_config.json")
 

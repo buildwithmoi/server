@@ -139,7 +139,10 @@ async function refresh(name: string) {
 	if (!job) return;
 	try {
 		const data = await installRequestResource().submit({ name });
-		jobs.value = { ...jobs.value, [name]: { ...job, ...data } };
+		// `lostContact: false` explicitly: the server response never carries the
+		// field, so spreading it over the old job left a recovered job labelled
+		// "Lost contact with" for the rest of its life.
+		jobs.value = { ...jobs.value, [name]: { ...job, ...data, lostContact: false } };
 		if (data.is_terminal) {
 			// Leave the result up briefly rather than vanishing the instant it
 			// finishes — a job that completes while you are on another page

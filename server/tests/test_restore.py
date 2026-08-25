@@ -436,3 +436,23 @@ class TestEncryptionDetection(unittest.TestCase):
 			argv = restore.build_argv(BENCH_EXE, SITE, backup, "pw")
 			self.assertIn("--db-root-password", argv)
 			self.assertNotIn("--encryption-key", argv)
+
+
+class TestRelativePathsAreRefused(unittest.TestCase):
+	"""realpath() resolves a relative path against the CURRENT WORKING
+	DIRECTORY, which for the web process is not the bench root — so a relative
+	path could be validated against one directory and then read from another
+	once bench ran with cwd set to the bench."""
+
+	def test_a_relative_path_never_passes_the_guard(self):
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			for relative in ("sites/x/private/backups/d.sql.gz", "./d.sql.gz", "../d.sql.gz"):
+				with self.subTest(path=relative):
+					self.assertFalse(restore.is_inside(root, relative))
+
+	def test_absolute_paths_inside_the_bench_still_pass(self):
+		with tempfile.TemporaryDirectory() as root:
+			directory = os.path.join(root, "sites", SITE)
+			os.makedirs(directory)
+			self.assertTrue(restore.is_inside(root, directory))

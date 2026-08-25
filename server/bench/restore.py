@@ -345,6 +345,12 @@ def is_inside(root: str, path: str) -> bool:
 	is what stops `../../..` and a symlink planted in the bench directory from
 	reaching outside it.
 	"""
+	# Absolute only. `realpath` resolves a relative path against the CURRENT
+	# WORKING DIRECTORY, which for the web process is not the bench root — so a
+	# relative path could be validated against one directory and then read from
+	# another once bench ran with cwd set to the bench.
+	if not os.path.isabs(path):
+		return False
 	try:
 		root_real = os.path.realpath(root)
 		path_real = os.path.realpath(path)
