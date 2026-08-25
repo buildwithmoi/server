@@ -305,12 +305,27 @@ _SSHD_RULES: list[tuple[re.Pattern[str], str, str]] = [
 		OUTCOME_FAILURE,
 	),
 	(
-		re.compile(r"^Connection closed by (?:authenticating|invalid) user (?P<user>\S+) (?P<ip>\S+)"),
+		re.compile(r"^Connection (?:closed|reset) by (?:authenticating|invalid) user (?P<user>\S+) (?P<ip>\S+)"),
 		EVENT_DISCONNECTED,
 		OUTCOME_FAILURE,
 	),
 	(
-		re.compile(r"^Disconnected from (?:(?P<invalid>invalid )?user (?P<user>\S+) )?(?P<ip>[\d.:a-fA-F]+)"),
+		# `authenticating user` as well as `user` and `invalid user`. Missing it
+		# meant the single most common brute-force line — sshd's disconnect for
+		# a failed pre-auth attempt — parsed as an event with NO source address,
+		# so the attacking IP was recorded nowhere.
+		re.compile(
+			r"^Disconnected from (?:(?P<invalid>invalid |authenticating )?user (?P<user>\S+) )?"
+			r"(?P<ip>[\d.:a-fA-F]+)"
+		),
+		EVENT_DISCONNECTED,
+		OUTCOME_INFO,
+	),
+	(
+		# No user at all: `Connection closed by 203.0.113.9 port 22 [preauth]`.
+		# Extremely common against an exposed port and previously unparsed
+		# entirely, so it counted as neither an event nor a known-noise line.
+		re.compile(r"^Connection (?:closed|reset) by (?P<ip>[\d.:a-fA-F]+)$"),
 		EVENT_DISCONNECTED,
 		OUTCOME_INFO,
 	),

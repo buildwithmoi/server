@@ -370,3 +370,45 @@ class TestUntrustedFieldsFromRemoteClients(unittest.TestCase):
 		):
 			with self.subTest(expected=expected):
 				self.assertEqual(parser.parse_log_line(line).source_ip, expected)
+
+
+class TestDisconnectCoverage(unittest.TestCase):
+	"""The lines an exposed port 22 actually produces all day.
+
+	These were the gap that mattered most in a tool built to identify
+	attackers: `Disconnected from authenticating user root <ip>` — sshd's
+	disconnect after a failed pre-auth attempt, and the single most common line
+	in a brute force — parsed as an event with NO source address, so the
+	attacking IP was recorded nowhere. `Connection closed by <ip>` and
+	`Connection reset by <ip>` were not parsed at all.
+	"""
+
+	CASES = (
+		("Disconnected from authenticating user root 203.0.113.9 port 55000 [preauth]", "root"),
+		("Disconnected from invalid user admin 203.0.113.9 port 55000 [preauth]", "admin"),
+		("Disconnected from user patoo 203.0.113.9 port 55000", "patoo"),
+		("Disconnected from 203.0.113.9 port 55000", None),
+		("Connection closed by 203.0.113.9 port 22 [preauth]", None),
+		("Connection reset by 203.0.113.9 port 22 [preauth]", None),
+		("Connection closed by authenticating user root 203.0.113.9 port 22 [preauth]", "root"),
+		("Connection reset by invalid user admin 203.0.113.9 port 22 [preauth]", "admin"),
+	)
+
+	def test_the_source_address_is_always_recorded(self):
+		for message, _ in self.CASES:
+			with self.subTest(message=message[:48]):
+				event = parser.parse_log_line(f"Aug 25 10:00:00 host sshd[1]: {message}")
+				self.assertIsNotNone(event, "line did not parse at all")
+				self.assertEqual(event.source_ip, "203.0.113.9")
+
+	def test_the_username_is_recorded_when_sshd_gives_one(self):
+		for message, expected in self.CASES:
+			with self.subTest(message=message[:48]):
+				event = parser.parse_log_line(f"Aug 25 10:00:00 host sshd[1]: {message}")
+				self.assertEqual(event.username, expected)
+
+	def test_ipv6_peers_parse_too(self):
+		event = parser.parse_log_line(
+			"Aug 25 10:00:00 host sshd[1]: Connection closed by 2a01:4f8:1c1c:abcd::1 port 22 [preauth]"
+		)
+		self.assertEqual(event.source_ip, "2a01:4f8:1c1c:abcd::1")
