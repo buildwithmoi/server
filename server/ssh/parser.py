@@ -30,6 +30,7 @@ drift apart. `tests/test_journal_bridge.py` asserts exactly that.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -375,6 +376,33 @@ _SSHD_RULES: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 
+def _clean_ip(value: str | None) -> str | None:
+	"""Return `value` only if it really is an IP address.
+
+	The address is taken from a log line whose contents a remote client
+	partially controls: sshd escapes control characters in a username but not
+	spaces or angle brackets, so connecting as `a from <script>` makes
+	`Invalid user a from <script> from 203.0.113.9 port 55000` — and the rule
+	matches `<script>` as the address.
+
+	That mattered well beyond a wrong value in a column. `source_ip` becomes the
+	name of an IP Address Info document, frappe refuses `<` and `>` in a
+	docname, and the resulting NameError aborted the whole ingest batch. The
+	checkpoint was never advanced, so the same journal record was re-read and
+	failed again every five minutes — SSH monitoring stopped permanently, and an
+	unauthenticated attacker could switch it off at will. The raw line is still
+	kept in `raw_message`, so nothing is lost by refusing to believe this field.
+	"""
+	text = (value or "").strip()
+	if not text:
+		return None
+	try:
+		ipaddress.ip_address(text)
+	except ValueError:
+		return None
+	return text
+
+
 def _session_key(line: SyslogLine) -> str | None:
 	"""Build the key that ties one sshd process's events into a single session.
 
@@ -424,7 +452,7 @@ def parse_sshd_message(line: SyslogLine) -> AuthEvent | None:
 			username=user,
 			invalid_user=invalid,
 			auth_method=groups.get("method") or None,
-			source_ip=groups.get("ip") or None,
+			source_ip=_clean_ip(groups.get("ip")),
 			source_port=port,
 			key_fingerprint=groups.get("fingerprint") or None,
 			session_key=_session_key(line),

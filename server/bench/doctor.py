@@ -27,6 +27,18 @@ import frappe
 
 from server.server.doctype.server_settings.server_settings import get_settings
 
+#: Remotes this app will contact, and branch names it will pass to git.
+#:
+#: Deliberately duplicated from App Install Request rather than imported: the
+#: doctype's copy is enforced in `validate`, which only runs when a document is
+#: saved, and the probe endpoint never saves one. A shared constant that is
+#: only checked on one of two paths is worse than two constants that are both
+#: checked, so these live next to the code that shells out.
+VALID_REMOTE = re.compile(r"^(?:git@[\w.-]+:|ssh://[\w.@-]+/|https://[\w.-]+/)[\w./~@-]{1,300}$")
+
+#: Must begin alphanumeric, so a branch can never be read as an option.
+VALID_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+
 SSH_DIR = os.path.expanduser("~/.ssh")
 SSH_CONFIG = os.path.join(SSH_DIR, "config")
 TIMEOUT = 25
@@ -162,16 +174,41 @@ def probe_host(host: str) -> dict:
 	}
 
 
+class RepoRefused(Exception):
+	"""Raised when a remote or branch will not be probed."""
+
+
 def check_repo(git_url: str, branch: str | None = None) -> dict:
 	"""Can we reach this repo, and does the branch exist?
 
 	`git ls-remote` is the single highest-value preflight in the app: it proves
 	the key is authorised and the branch is real in about a second, instead of
 	discovering either problem three minutes into a clone.
+
+	VALIDATED HERE, not only at the caller. `shell=False` is not the protection
+	it looks like, because git itself takes options that name a command to run:
+
+	    git ls-remote --heads "--upload-pack=touch /tmp/x; git-upload-pack" /some/repo
+
+	runs `touch` and exits 0. Anything a browser supplies that begins with `-`
+	is therefore an argument of git's choosing rather than ours, and the doctype
+	validation that used to be the only check runs on save — which this path
+	never does. `--` stops option parsing; the patterns stop everything else.
 	"""
-	argv = ["git", "ls-remote", "--heads", git_url]
+	url = (git_url or "").strip()
+	if not VALID_REMOTE.match(url):
+		raise RepoRefused(
+			f"{git_url!r} is not a git remote this app will contact. Use git@host:org/repo.git, "
+			"ssh://…, or https://…"
+		)
+	if branch and not VALID_BRANCH.match(branch.strip()):
+		raise RepoRefused(f"{branch!r} is not a valid branch name.")
+
+	# `--` first, so neither value can be read as an option even if a pattern
+	# is ever loosened.
+	argv = ["git", "ls-remote", "--heads", "--", url]
 	if branch:
-		argv.append(branch)
+		argv.append(branch.strip())
 
 	code, out, err = _run(argv, timeout=40)
 	if code != 0:

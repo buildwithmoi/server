@@ -80,6 +80,17 @@ def ensure_ip(ip: str, seen_at=None) -> str | None:
 	if not ip:
 		return None
 
+	# Second lock on the same door. The parser refuses to report anything that
+	# is not an address, but this value becomes a DOCNAME, and a bad one raises
+	# out of ingest and aborts the whole batch — which never advances the
+	# checkpoint, so the same record fails again forever. Anything unparseable
+	# is dropped rather than allowed to stop monitoring.
+	try:
+		ipaddress.ip_address(ip)
+	except ValueError:
+		frappe.logger("server").warning(f"refusing to record {ip!r} as an IP address")
+		return None
+
 	seen_at = seen_at or frappe.utils.now_datetime()
 
 	if frappe.db.exists("IP Address Info", ip):

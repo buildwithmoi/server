@@ -351,7 +351,12 @@ const chosen = computed(() => {
 		private_files: pick("private"),
 		has_files: Boolean(pick("public") || pick("private")),
 		size_text: chosenSizeText.value,
-		encrypted: false,
+		// The real flag, read from disk. It used to be hardcoded false, so the
+		// encryption-key field never appeared and an encrypted dump copied in
+		// from another server — the exact case this mode exists for — could be
+		// selected, previewed and submitted, only to be refused by the server
+		// with no way in the interface to satisfy it.
+		encrypted: Boolean(fileFor(database)?.encrypted),
 		mismatch: chosenMismatch.value,
 		source: "chosen",
 	};
@@ -395,10 +400,15 @@ function optionsFor(kind) {
 		...ordered.map((f) => ({
 			label: f.name,
 			value: f.path,
-			description: `${f.directory} · ${f.modified}`,
-			chip: f.size_text,
-			chipClass: f.kind === kind ? "u-chip" : "u-chip-warn",
-			keywords: `${f.kind} ${f.path}`,
+			description: [
+				`${f.directory} · ${f.modified}`,
+				f.encrypted ? "Encrypted — needs its key." : "",
+			]
+				.filter(Boolean)
+				.join(" · "),
+			chip: f.encrypted ? "encrypted" : f.size_text,
+			chipClass: f.encrypted ? "u-chip-warn" : f.kind === kind ? "u-chip" : "u-chip-warn",
+			keywords: `${f.kind} ${f.path} ${f.encrypted ? "encrypted" : ""}`,
 		})),
 	];
 }

@@ -1153,9 +1153,21 @@ def run_install_request(name: str) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def check_repo_access(git_url: str, branch: str | None = None) -> dict:
-	"""Probe a remote without cloning it. Used by the form before submitting."""
+	"""Probe a remote without cloning it. Used by the form before submitting.
+
+	Behind the install interlock like every other endpoint that spawns a
+	process. It was not, and that was the point: with Allow App Installs
+	switched off — the app's stated kill switch for all subprocess activity —
+	this path still ran `git`, and git takes options that name a command to
+	run. `doctor.check_repo` now validates its own arguments, and this is the
+	second lock on the same door.
+	"""
 	_assert_server_admin()
-	return doctor.check_repo(git_url, branch)
+	get_settings().assert_installs_allowed()
+	try:
+		return doctor.check_repo(git_url, branch)
+	except doctor.RepoRefused as exc:
+		frappe.throw(str(exc), title="Cannot Probe This")
 
 
 # ---------------------------------------------------------------------------

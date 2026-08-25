@@ -368,6 +368,7 @@ export interface RestoreFile {
 	size_text: string;
 	modified: string;
 	in_set: boolean;
+	encrypted: boolean;
 }
 
 export interface BackupListing {

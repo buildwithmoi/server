@@ -298,3 +298,58 @@ class TestNoSSHDLineIsUnparsed(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestUntrustedFieldsFromRemoteClients(unittest.TestCase):
+	"""A remote client partially controls what sshd writes to the log.
+
+	sshd escapes control characters in a username but not spaces or angle
+	brackets, so connecting as `a from <script>` produces a line whose rule
+	matches `<script>` as the source address. That is not merely a wrong value
+	in a column: `source_ip` becomes the NAME of an IP Address Info document,
+	frappe refuses `<` and `>` in a docname, and the NameError aborted the whole
+	ingest batch. The checkpoint was never advanced, so the same record failed
+	again every five minutes — an unauthenticated attacker could switch SSH
+	monitoring off permanently, in the app written because a server was
+	compromised.
+	"""
+
+	def test_a_forged_address_is_dropped_not_recorded(self):
+		event = parser.parse_log_line(
+			"Aug 25 10:00:00 host sshd[1]: Invalid user a from <script> from 203.0.113.9 port 55000"
+		)
+		self.assertIsNotNone(event)
+		self.assertIsNone(event.source_ip)
+
+	def test_the_raw_line_is_still_kept(self):
+		"""Nothing is lost by refusing to believe the field — the whole message
+		is stored, so a rule written later can still recover it."""
+		line = "Aug 25 10:00:00 host sshd[1]: Invalid user a from <script> from 203.0.113.9 port 55000"
+		event = parser.parse_log_line(line)
+		self.assertIn("<script>", event.raw_message)
+
+	def test_other_forgeries_are_dropped_too(self):
+		for username in ("a from evil", "x from ../../etc", "y from %n%n"):
+			with self.subTest(username=username):
+				event = parser.parse_log_line(
+					f"Aug 25 10:00:00 host sshd[1]: Invalid user {username} from 203.0.113.9 port 22"
+				)
+				if event and event.source_ip:
+					# Whatever survived must at least be a real address.
+					import ipaddress
+
+					ipaddress.ip_address(event.source_ip)
+
+	def test_real_addresses_still_parse(self):
+		for line, expected in (
+			(
+				"Aug 25 10:00:00 host sshd[1]: Failed password for invalid user admin from 45.61.187.3 port 22 ssh2",
+				"45.61.187.3",
+			),
+			(
+				"Aug 25 10:00:00 host sshd[1]: Accepted publickey for patoo from 2a01:4f8:1c1c:abcd::1 port 51000 ssh2",
+				"2a01:4f8:1c1c:abcd::1",
+			),
+		):
+			with self.subTest(expected=expected):
+				self.assertEqual(parser.parse_log_line(line).source_ip, expected)

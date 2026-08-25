@@ -35,14 +35,31 @@ from datetime import datetime
 #: frappe names every backup `<YYYYMMDD>_<HHMMSS>-<site>-<kind>`, with dots in
 #: the site name replaced by underscores. That shared prefix is what lets the
 #: four files be regrouped into the set they were written as.
+#: `-enc` is frappe's own marker for an encrypted backup, and `-partial` for a
+#: partial one. Without them in the pattern an encrypted backup set does not
+#: match at all, so it never appears in the picker — the operator is simply told
+#: there are no backups.
 BACKUP_NAME = re.compile(
-	r"^(?P<stamp>\d{8}_\d{6})-(?P<site>.+?)-(?P<kind>database\.sql\.gz|files\.tar|private-files\.tar|site_config_backup\.json)$"
+	r"^(?P<stamp>\d{8}_\d{6})-(?P<site>.+?)(?P<partial>-partial)?-"
+	r"(?P<kind>database|files|private-files|site_config_backup)"
+	r"(?P<enc>-enc)?"
+	r"(?P<ext>\.sql\.gz|\.tar\.gz|\.tgz|\.tar|\.json)$"
 )
 
-KIND_DATABASE = "database.sql.gz"
-KIND_PUBLIC = "files.tar"
-KIND_PRIVATE = "private-files.tar"
-KIND_CONFIG = "site_config_backup.json"
+KIND_DATABASE = "database"
+KIND_PUBLIC = "files"
+KIND_PRIVATE = "private-files"
+KIND_CONFIG = "site_config_backup"
+
+#: `gpg -c` output begins with an OpenPGP symmetric-key packet. Frappe encrypts
+#: backups with gpg, not with Fernet as its imports suggest — verified against
+#: real gpg output, which starts 8c 0d.
+GPG_MAGIC = (b"\x8c", b"\x85", b"\xc3")
+
+GZIP_MAGIC = b"\x1f\x8b"
+
+#: What the start of an uncompressed SQL dump looks like.
+SQL_PREFIXES = (b"--", b"/*", b"CREATE", b"SET ", b"DROP ", b"INSERT", b"USE ", b"\n--")
 
 #: Anything that looks like a secret is replaced before the command is stored.
 SECRET_FLAGS = ("--db-root-password", "--encryption-key", "--admin-password")
@@ -54,15 +71,19 @@ REDACTED = "********"
 #: picker; never used to decide what a file IS, because a backup copied in from
 #: another system can be called anything.
 KIND_GUESSES = (
-	("private", re.compile(r"private[-_]?files\.tar(\.gz)?$", re.I)),
-	("public", re.compile(r"(^|[-_])files\.tar(\.gz)?$", re.I)),
-	("database", re.compile(r"\.sql(\.gz)?$", re.I)),
-	("public", re.compile(r"\.tar(\.gz)?$", re.I)),
+	# `-enc` is optional throughout: frappe appends it to encrypted backups, and
+	# a guess that ignores it files every encrypted file under the wrong kind.
+	("private", re.compile(r"private[-_]?files(-enc)?\.(tar|tgz|tar\.gz)$", re.I)),
+	("public", re.compile(r"(^|[-_])files(-enc)?\.(tar|tgz|tar\.gz)$", re.I)),
+	("database", re.compile(r"(-enc)?\.sql(\.gz)?$", re.I)),
+	("public", re.compile(r"\.(tar|tgz|tar\.gz)$", re.I)),
 )
 
 #: Extensions worth offering at all. Anything else in the bench directory is
 #: noise in a picker whose job is to be short.
 RESTORABLE = (".sql", ".sql.gz", ".tar", ".tar.gz", ".tgz")
+
+#: Included so an encrypted set is offered rather than silently absent.
 
 #: How deep to walk looking for candidates. The bench root holds apps/, env/ and
 #: sites/, which together are tens of thousands of files; a backup someone
@@ -92,6 +113,10 @@ class FileCandidate:
 	#: True when this file belongs to a backup set frappe wrote, which is the
 	#: signal that picking its siblings by hand is the wrong move.
 	in_set: bool = False
+	#: Whether restoring it needs a key. Read here so the dialog can ask for
+	#: one; without it the hand-picked path silently offered encrypted dumps
+	#: it could never restore.
+	encrypted: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,18 +149,38 @@ def _human_size(count: int) -> str:
 
 
 def _is_encrypted(path: str) -> bool:
-	"""True when the dump is not a plain gzip stream.
+	"""True when this dump needs a key to restore.
 
-	frappe encrypts backups when the site asks it to, and an encrypted dump
-	restores only with its key. Reading the two magic bytes is enough to tell,
-	and it means the dialog can ask for the key instead of letting the restore
-	fail after dropping the database.
+	Three cases, not two. "Anything that is not gzip is encrypted" was wrong in
+	the direction that matters: a plain uncompressed `mysqldump` output — which
+	is exactly what gets copied in from another server, the case the whole
+	hand-picked path exists for — was reported as encrypted and became
+	impossible to restore, because the only way past the check was to invent an
+	encryption key.
+
+	frappe's own marker is checked first: it names encrypted files `-enc`, which
+	is more reliable than any magic byte because it survives the file being
+	recompressed or renamed by whatever copied it over.
 	"""
+	if "-enc." in os.path.basename(path):
+		return True
+
 	try:
 		with open(path, "rb") as handle:
-			return handle.read(2) != b"\x1f\x8b"
+			head = handle.read(8)
 	except OSError:
 		return False
+
+	if head.startswith(GZIP_MAGIC):
+		return False
+	if head[:1] in GPG_MAGIC:
+		return True
+	# Readable SQL: a plain dump, not an encrypted one.
+	if any(head.upper().startswith(prefix.upper()) for prefix in SQL_PREFIXES):
+		return False
+	# Unrecognised. Say encrypted rather than let bench drop the database and
+	# then fail to load anything into it.
+	return True
 
 
 def _stamp_to_text(stamp: str) -> str:
@@ -345,6 +390,9 @@ def list_files(bench_path: str, site: str) -> list[FileCandidate]:
 						size_text=_human_size(stat.st_size),
 						modified=datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %Y, %H:%M"),
 						in_set=path in in_sets,
+						# Only meaningful for a dump; a tar is never encrypted
+						# separately by frappe.
+						encrypted=classify(name) == "database" and _is_encrypted(path),
 					)
 				)
 

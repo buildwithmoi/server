@@ -355,3 +355,117 @@ class TestNeverRanSentinel(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+try:
+	import frappe as _frappe
+
+	_HAS_SITE = bool(getattr(_frappe.local, "site", None))
+except Exception:  # pragma: no cover
+	_frappe = None
+	_HAS_SITE = False
+
+
+@unittest.skipUnless(_HAS_SITE, "requires a frappe site")
+class TestCancellationFromAThread(unittest.TestCase):
+	"""The cancel check has to work from the POLLER THREAD, not just at all.
+
+	It did not, and nothing noticed. `frappe.local` is backed by a ContextVar
+	and a new thread starts with an empty context rather than a copy of its
+	parent's, so `frappe.cache.get_value()` — which reads `frappe.local.conf`
+	to namespace the key — raised AttributeError on the first tick. The bare
+	`except` swallowed it, the thread returned, and every job was uncancellable
+	for its whole life while the interface said "Stopping…".
+
+	The fix is to namespace the key on the main thread and do a raw redis GET
+	from the poller, so these tests build the closure exactly as
+	`run_install_request` builds it.
+	"""
+
+	def setUp(self):
+		self.raw_key = installer.CANCEL_KEY.format(name="AIR-TESTONLY")
+		self.client = _frappe.cache
+		self.key = self.client.make_key(self.raw_key)
+		self.client.delete(self.key)
+
+	def tearDown(self):
+		self.client.delete(self.key)
+
+	def _should_cancel(self):
+		key, client = self.key, self.client
+		return lambda: client.get(key) is not None
+
+	def test_the_frappe_wrapper_still_cannot_be_used_from_a_thread(self):
+		"""Guards the assumption the fix rests on.
+
+		If a future frappe makes this work, the workaround is no longer needed
+		— and if this test starts failing, that is what happened.
+		"""
+		import threading
+
+		captured = {}
+
+		def probe():
+			try:
+				captured["value"] = _frappe.cache.get_value(self.raw_key)
+			except Exception as exc:  # noqa: BLE001
+				captured["error"] = type(exc).__name__
+
+		thread = threading.Thread(target=probe)
+		thread.start()
+		thread.join()
+		self.assertIn("error", captured, "frappe.cache now works from a thread; simplify should_cancel")
+
+	def test_a_precomputed_key_is_readable_from_a_thread(self):
+		import threading
+
+		self.client.set(self.key, b"1", ex=60)
+		captured = {}
+		check = self._should_cancel()
+
+		thread = threading.Thread(target=lambda: captured.update(value=check()))
+		thread.start()
+		thread.join()
+		self.assertTrue(captured.get("value"))
+
+	def test_a_silent_command_is_actually_killed(self):
+		"""The case the poller exists for: a job that produces no output cannot
+		be interrupted by a check inside the read loop, because the loop is
+		blocked on the pipe."""
+		import threading
+		import time as _time
+
+		check = self._should_cancel()
+		threading.Timer(1.0, lambda: self.client.set(self.key, b"1", ex=60)).start()
+
+		lines = []
+		started = _time.monotonic()
+		code, timed_out = installer._stream(
+			["sleep", "60"], "/tmp", ENV, 300, lines.append, check
+		)
+		elapsed = _time.monotonic() - started
+
+		self.assertLess(elapsed, 15, "cancellation did not interrupt a silent command")
+		self.assertNotEqual(code, 0)
+		self.assertFalse(timed_out, "reported as a timeout rather than a cancellation")
+		self.assertTrue(any("cancelled" in line for line in lines))
+
+	def test_an_unset_flag_leaves_the_job_alone(self):
+		check = self._should_cancel()
+		code, _ = installer._stream(["echo", "fine"], "/tmp", ENV, 30, lambda _l: None, check)
+		self.assertEqual(code, 0)
+
+	def test_a_failing_check_does_not_disable_cancellation_for_the_job(self):
+		"""Returning on the first failure is exactly how this went unnoticed."""
+		calls = []
+
+		def flaky():
+			calls.append(1)
+			if len(calls) < 3:
+				raise RuntimeError("redis blip")
+			return True
+
+		lines = []
+		code, _ = installer._stream(["sleep", "60"], "/tmp", ENV, 300, lines.append, flaky)
+		self.assertNotEqual(code, 0, "the job survived a blip but was then never cancellable")
+		self.assertGreaterEqual(len(calls), 3)

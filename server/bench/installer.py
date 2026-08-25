@@ -48,6 +48,11 @@ PERSIST_EVERY_LINES = 40
 #: How often a running job checks whether someone asked it to stop.
 CANCEL_POLL_SECONDS = 2.0
 
+#: Give up polling only after this many consecutive failures — about ten
+#: minutes. Long enough that a redis restart does not cost the feature, bounded
+#: so a permanently broken check does not spin for hours.
+CANCEL_FAILURE_LIMIT = 300
+
 #: Cancellation goes through Redis, not the database.
 #:
 #: The worker sits inside one long transaction, and MariaDB's REPEATABLE READ
@@ -273,7 +278,10 @@ def _preflight_clone(request, bench_doc, on_step=None) -> list[str]:
 	# seconds should not look like "checking options" hanging.
 	if on_step:
 		on_step("access")
-	probe = doctor.check_repo(request.resolved_git_url, request.branch or None)
+	try:
+		probe = doctor.check_repo(request.resolved_git_url, request.branch or None)
+	except doctor.RepoRefused as exc:
+		raise InstallAborted(str(exc)) from exc
 	if not probe["reachable"]:
 		raise InstallAborted(f"Cannot reach {request.resolved_git_url}. {probe['error']}")
 	if not probe["branch_exists"]:
@@ -357,6 +365,9 @@ def build_pull_argv(request, app) -> list[str]:
 	argv = ["git", "pull"]
 	if not request.allow_merge:
 		argv.append("--ff-only")
+	# Nothing after this can be read as an option, whatever validation upstream
+	# does or stops doing.
+	argv.append("--")
 	argv.append(app.remote_name)
 	if request.branch:
 		argv.append(request.branch)
@@ -434,14 +445,25 @@ def _stream(
 	# the read loop blocks on the pipe, so a job that has gone quiet — which is
 	# exactly the one you want to cancel — would never notice the request.
 	def _watch_for_cancel():
+		failures = 0
 		while not finished.wait(CANCEL_POLL_SECONDS):
 			try:
 				if should_cancel():
 					on_line("--- cancelled; stopping the process group ---")
 					_kill_group(proc)
 					return
-			except Exception:  # noqa: BLE001 - a broken check must not kill the job
-				return
+				failures = 0
+			except Exception as exc:  # noqa: BLE001 - a broken check must not kill the job
+				# Keep trying. Returning on the first failure is exactly how
+				# this went unnoticed: one AttributeError on tick one and the
+				# job became uncancellable in silence. A blip in redis should
+				# cost one tick, not the feature.
+				failures += 1
+				if failures == 1 or failures % 30 == 0:
+					on_line(f"--- cancel check failed ({type(exc).__name__}: {exc}) ---")
+				if failures >= CANCEL_FAILURE_LIMIT:
+					on_line("--- cancel checks keep failing; this job can no longer be stopped ---")
+					return
 
 	canceller = None
 	if should_cancel:
@@ -487,6 +509,57 @@ def _stream(
 	return (proc.returncode if proc.returncode is not None else -1), timed_out.is_set()
 
 
+def _sudo_kill(pgid: int, sig: int) -> bool:
+	"""Signal a process group we do not own, via sudo. True if sudo accepted it.
+
+	`sudo -n` so a host without the NOPASSWD rule fails instantly rather than
+	waiting on a password prompt no one is there to answer.
+	"""
+	name = "TERM" if sig == signal.SIGTERM else "KILL"
+	try:
+		result = subprocess.run(  # noqa: S603
+			["sudo", "-n", "kill", f"-{name}", f"-{pgid}"],
+			stdin=subprocess.DEVNULL,
+			capture_output=True,
+			timeout=10,
+			check=False,
+		)
+	except (OSError, subprocess.SubprocessError):
+		return False
+	return result.returncode == 0
+
+
+def _revive_nginx(emit) -> None:
+	"""Put nginx back after an SSL step ended badly.
+
+	Issuance stops nginx to free port 443 and starts it again at the end. Any
+	path that skips the end — a non-zero exit, the watchdog, someone pressing
+	Stop — leaves every site on the machine offline. This is cheap, safe to run
+	when nginx is already up, and the alternative is an outage nobody is told
+	about.
+	"""
+	try:
+		result = subprocess.run(  # noqa: S603
+			["sudo", "-n", "systemctl", "start", "nginx"],
+			stdin=subprocess.DEVNULL,
+			capture_output=True,
+			text=True,
+			timeout=30,
+			check=False,
+		)
+	except (OSError, subprocess.SubprocessError) as exc:
+		emit(f"!! could not restart nginx: {exc}. Sites may be OFFLINE — check the server.")
+		return
+
+	if result.returncode == 0:
+		emit("nginx restarted (the SSL step stops it and did not finish cleanly).")
+	else:
+		emit(
+			"!! nginx may still be STOPPED and every site offline. "
+			f"Run `sudo systemctl start nginx` now. ({(result.stderr or '').strip()[:160]})"
+		)
+
+
 def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
 	"""Kill the whole process group, not just the child we spawned.
 
@@ -509,6 +582,15 @@ def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
 	for sig in (signal.SIGTERM, signal.SIGKILL):
 		try:
 			os.killpg(pgid, sig)
+		except PermissionError:
+			# The group is running as root — `sudo -n certbot` and its children.
+			# The worker is not root and may not signal them, and treating that
+			# EPERM as "already gone" is how a stalled certbot kept running with
+			# nginx stopped while the log said the process had been terminated.
+			# The same NOPASSWD rule that permits certbot permits this.
+			if _sudo_kill(pgid, sig):
+				continue
+			return
 		except OSError:
 			return  # group is gone
 
@@ -627,8 +709,24 @@ def run_install_request(name: str) -> dict:
 			STEP_EVENT, {"name": name, "steps": payload}, doctype="App Install Request", docname=name
 		)
 
+	# The namespaced key is computed HERE, on the main thread, and the poller
+	# below then does a raw redis GET with it.
+	#
+	# `frappe.cache.get_value()` cannot be called from the poller thread at all.
+	# `frappe.local` is backed by a ContextVar, and a new thread starts with an
+	# empty context rather than a copy of its parent's — so `make_key()`, which
+	# reads `frappe.local.conf` for the site prefix, raises AttributeError on
+	# the very first tick. The bare `except` in the poller swallowed it and the
+	# thread returned, so cancellation silently did nothing for the whole life
+	# of the job while the interface said "Stopping…".
+	#
+	# redis-py clients are thread-safe (the connection pool is), so the raw GET
+	# is fine; it is only the frappe wrapper around it that is not.
+	cancel_key = frappe.cache.make_key(CANCEL_KEY.format(name=name))
+	cancel_client = frappe.cache
+
 	def should_cancel() -> bool:
-		return bool(frappe.cache.get_value(CANCEL_KEY.format(name=name)))
+		return cancel_client.get(cancel_key) is not None
 
 	def step(key: str) -> None:
 		plan.start(key)
@@ -697,6 +795,27 @@ def run_install_request(name: str) -> dict:
 		return {"name": name, "status": status, "exit_code": exit_code, "error": error}
 
 	try:
+		# Cancelled while it sat in the queue, or already finished. The worker
+		# used to write status=Running unconditionally and run it anyway, so a
+		# job someone explicitly stopped ran up to two hours later when the
+		# single `long` worker got to it.
+		if request.is_terminal() or should_cancel():
+			frappe.cache.delete_value(CANCEL_KEY.format(name=name))
+			if not request.is_terminal():
+				request.db_set(
+					{
+						"status": "Cancelled",
+						"exit_code": NEVER_RAN,
+						"finished_at": frappe.utils.now_datetime(),
+						"error_summary": "Cancelled before the worker picked it up.",
+					},
+					update_modified=False,
+				)
+				if request.is_restore():
+					request.clear_restore_secrets()
+				frappe.db.commit()
+			return {"name": name, "status": request.status, "exit_code": NEVER_RAN}
+
 		bench_doc = frappe.get_doc("Server Bench", request.bench)
 		request.db_set(
 			{
@@ -768,6 +887,13 @@ def run_install_request(name: str) -> dict:
 
 					code, timed_out = _stream(argv, bench_doc.bench_path, env, ssl.SSL_TIMEOUT, emit, should_cancel)
 					if code != 0:
+						# bench stops nginx, gets the certificate, and starts it
+						# again. Killed in between — by the watchdog, or by
+						# someone pressing Stop — it never reaches the restart,
+						# and EVERY site on the machine stays offline with
+						# nothing in this app noticing. bench's own error path
+						# restarts nginx; being killed skips it.
+						_revive_nginx(emit)
 						return finish(
 							"Failed",
 							exit_code=code,
@@ -779,7 +905,14 @@ def run_install_request(name: str) -> dict:
 					# bench reports several SSL failures by printing and then
 					# exiting 0. Trusting the exit code alone would record
 					# "Success" for a site still on plain HTTP.
-					quiet = ssl.quiet_failure(request.output or "")
+					#
+					# Against the LIVE buffer, not `request.output`. That field is
+					# only refreshed every PERSIST_EVERY_LINES lines, and every one
+					# of these failures prints a handful of lines and stops — so
+					# the field was still the empty string this job set at the
+					# start, quiet_failure("") returned None, and the check that
+					# exists precisely to catch this caught nothing.
+					quiet = ssl.quiet_failure("\n".join(buffer))
 					if quiet:
 						return finish("Failed", exit_code=code, error=quiet)
 				elif request.is_restore():
@@ -1010,15 +1143,47 @@ def _tail(lines: list[str], count: int = 12) -> str:
 	return "\n".join(lines[-count:])
 
 
+def _worst_case_seconds(request, settings) -> int:
+	"""The most time this particular request is allowed to spend.
+
+	The RQ death penalty has to be larger than the in-process watchdog, or RQ
+	kills the job first and the operator gets `JobTimeoutException` instead of
+	the actionable "raise Install Timeout and try again" message this file goes
+	to some trouble to produce. Three shapes legitimately exceed one budget:
+
+	  * a catalogue command carries its own timeout (`bench update` is 7200s,
+	    against a 3600s default);
+	  * a restore with the safety backup runs two commands, each budgeted in
+	    full;
+	  * a clone followed by install-app, likewise.
+	"""
+	budget = settings.get_install_timeout()
+
+	if request.is_command():
+		command = commands.get(request.bench_command or "")
+		return command.timeout if command else budget
+	if request.is_ssl():
+		return ssl.SSL_TIMEOUT
+	if request.is_restore():
+		return budget * 2 if request.restore_backup_first else budget
+	if request.is_pull():
+		return budget
+	# Clone, plus install-app when a site was named.
+	return budget * 2 if request.install_on_site else budget
+
+
 def enqueue_install_request(name: str) -> str:
 	"""Queue a request. Returns the job id."""
 	job_id = f"server::app_install::{name}"
+	request = frappe.get_doc("App Install Request", name)
+
 	frappe.enqueue(
 		"server.bench.installer.run_install_request",
 		queue="long",
-		# The queue's own 1500s default is not enough for a cold clone plus a
-		# pip install of a large app.
-		timeout=get_settings().get_install_timeout() + 180,
+		# Derived from what this job may actually spend, not from one fixed
+		# budget. The queue's own 1500s default is not enough for a cold clone
+		# plus a pip install of a large app either.
+		timeout=_worst_case_seconds(request, get_settings()) + 180,
 		job_id=job_id,
 		deduplicate=True,
 		enqueue_after_commit=True,

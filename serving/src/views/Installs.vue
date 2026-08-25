@@ -24,84 +24,59 @@
 			<a :href="deskSettings" class="shrink-0 text-[12.5px] underline underline-offset-2">Open settings</a>
 		</div>
 
+		<!--
+			One install form, not two.
+
+			This page used to carry its own, with a hardcoded Organisation
+			dropdown that sent `github_org` — a field no endpoint accepts. Frappe
+			stripped it, `github_profile` was never sent, and every submit failed
+			with a message naming a control this form did not have. The bench
+			page's dialog builds a correct payload from the GitHub Profile
+			records, so this opens that instead of maintaining a second one.
+		-->
 		<Transition
 			enter-active-class="transition-all duration-250 ease-[var(--ease)]"
 			enter-from-class="opacity-0 -translate-y-2"
 			leave-active-class="transition-all duration-150 ease-[var(--ease)]"
 			leave-to-class="opacity-0 -translate-y-2"
 		>
-			<form v-if="showForm" class="u-card mb-3 p-4" @submit.prevent="submit">
-				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-					<label class="flex flex-col gap-1.5">
-						<span class="u-label">Bench</span>
-						<select v-model="form.bench" required class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]">
-							<option v-for="b in benchOptions" :key="b.name" :value="b.name">{{ b.name }}</option>
-						</select>
-					</label>
+			<div v-if="showForm" class="u-card mb-3 flex flex-wrap items-end gap-3 p-4">
+				<label class="flex min-w-[220px] flex-1 flex-col gap-1.5">
+					<span class="u-label">Bench</span>
+					<select
+						v-model="chosenBench"
+						class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+					>
+						<option value="" disabled>choose a bench</option>
+						<option v-for="b in benchOptions" :key="b.name" :value="b.name">{{ b.name }}</option>
+					</select>
+				</label>
 
-					<label class="flex flex-col gap-1.5">
-						<span class="u-label">Organisation</span>
-						<select v-model="form.github_org" class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]">
-							<option>Carbonite-Solutions-Ltd</option>
-							<option>buildwithmoi</option>
-						</select>
-					</label>
+				<Button variant="solid" :disabled="!chosenBench || !allowed" @click="showInstall = true">
+					<template #prefix><Icon name="download" :size="14" /></template>
+					Install an app…
+				</Button>
+				<Button :disabled="!chosenBench || !allowed" @click="openPull">
+					<template #prefix><Icon name="refresh" :size="14" /></template>
+					Update an app…
+				</Button>
 
-					<label class="flex flex-col gap-1.5">
-						<span class="u-label">Repository</span>
-						<input v-model.trim="form.repo" required placeholder="gh_erp"
-						       class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]" />
-					</label>
-
-					<label class="flex flex-col gap-1.5">
-						<span class="u-label">Branch</span>
-						<input v-model.trim="form.branch" placeholder="leave blank for default"
-						       class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]" />
-					</label>
-
-					<label class="flex flex-col gap-1.5">
-						<span class="u-label">Install on site</span>
-						<select v-model="form.install_on_site" class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]">
-							<option value="">clone only, do not install</option>
-							<option v-for="s in siteOptions" :key="s" :value="s">{{ s }}</option>
-						</select>
-					</label>
-
-					<div class="flex flex-col justify-end gap-2 pb-1">
-						<label class="flex items-center gap-2 text-[12.5px]">
-							<input v-model="form.skip_assets" type="checkbox" class="accent-[var(--ink)]" />
-							Skip asset build
-						</label>
-						<label class="flex items-center gap-2 text-[12.5px]">
-							<input v-model="form.overwrite_existing" type="checkbox" class="accent-[var(--ink)]" />
-							Overwrite if present
-						</label>
-					</div>
-				</div>
-
-				<p class="mt-3 text-[12px] leading-relaxed text-[var(--ink-faint)]">
-					Leave <em>Skip asset build</em> on — building assets is the largest memory consumer in a
-					bench operation and the step most likely to take a small server down. Run
-					<code class="u-mono">bench build --app &lt;name&gt;</code> by hand when the box is idle.
+				<p class="u-item-detail min-w-[200px] flex-1">
+					Opens the same dialog as the bench page: pick a GitHub account, then search its
+					repositories and branches.
 				</p>
-
-				<div class="mt-3 flex flex-wrap items-center gap-2">
-					<Button :loading="checking" @click="checkAccess">
-						<template #prefix><Icon name="key" :size="14" /></template>
-						Check access
-					</Button>
-					<Button variant="solid" type="submit" :loading="submitting" :disabled="!canSubmit">
-						<template #prefix><Icon name="play" :size="14" /></template>
-						Clone &amp; install
-					</Button>
-					<p v-if="probe" class="flex items-center gap-1.5 text-[12.5px]">
-						<OutcomeMark :outcome="probe.ok ? 'Success' : 'Failure'" :label="probe.text" />
-					</p>
-				</div>
-			</form>
+			</div>
 		</Transition>
 
-		<!-- live log for whatever is running or was last opened -->
+		<InstallDialog
+			v-if="chosenBench"
+			v-model="showInstall"
+			:bench="chosenBench"
+			:sites="sitesFor(chosenBench)"
+			:initial-operation="installMode"
+			@started="onStarted"
+		/>
+
 		<section v-if="active" class="u-card mb-3 overflow-hidden">
 			<header class="flex items-center justify-between gap-3 border-b border-[var(--rule)] px-4 py-3">
 				<div class="flex min-w-0 items-center gap-2.5">
@@ -173,10 +148,11 @@ import { useRoute } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import DataTable from "../components/DataTable.vue";
 import JobSteps from "../components/JobSteps.vue";
+import InstallDialog from "../components/InstallDialog.vue";
 import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import {
-	benchesResource, checkRepoResource, createInstallResource,
+	benchesResource,
 	installRequestResource, installRequestsResource, settingsResource,
 } from "../api";
 
@@ -197,65 +173,33 @@ const list = installRequestsResource();
 const detail = installRequestResource();
 
 const showForm = ref(false);
-const submitting = ref(false);
-const checking = ref(false);
-const probe = ref(null);
+const showInstall = ref(false);
+const chosenBench = ref("");
+const installMode = ref("Clone");
 const active = ref(null);
 const logEl = ref(null);
 let poller = null;
 
-const form = ref({
-	bench: "",
-	github_org: "Carbonite-Solutions-Ltd",
-	repo: "",
-	branch: "",
-	install_on_site: "",
-	skip_assets: true,
-	overwrite_existing: false,
-});
-
 const benchOptions = computed(() => (benches.data || []).filter((b) => b.is_active));
-const siteOptions = computed(
-	() => benchOptions.value.find((b) => b.name === form.value.bench)?.sites.map((s) => s.site_name) || [],
-);
+const allowed = computed(() => Boolean(settings.data?.allow_app_install));
+
+function sitesFor(name) {
+	return benchOptions.value.find((b) => b.name === name)?.sites.map((s) => s.site_name) || [];
+}
+
+function openPull() {
+	installMode.value = "Pull";
+	showInstall.value = true;
+}
 const rows = computed(() => list.data?.rows || []);
 const total = computed(() => list.data?.total || 0);
 const listLoading = computed(() => list.loading && !list.data);
 const subtitle = computed(() => (listLoading.value ? "loading…" : `${total.value} request${total.value === 1 ? "" : "s"}`));
-const canSubmit = computed(
-	() => Boolean(form.value.bench && form.value.repo) && Boolean(settings.data?.allow_app_install),
-);
-
-async function checkAccess() {
-	if (!form.value.repo) return;
-	checking.value = true;
-	probe.value = null;
-	try {
-		const url = `git@github.com:${form.value.github_org}/${form.value.repo.replace(/\.git$/, "")}.git`;
-		const result = await checkRepoResource().submit({ git_url: url, branch: form.value.branch || null });
-		probe.value = result.reachable && result.branch_exists
-			? { ok: true, text: form.value.branch ? `${form.value.branch} found` : `${result.branches?.length || 0} branches` }
-			: { ok: false, text: result.error || "not reachable" };
-	} catch (error) {
-		probe.value = { ok: false, text: error.messages?.[0] || "check failed" };
-	} finally {
-		checking.value = false;
-	}
-}
-
-async function submit() {
-	submitting.value = true;
-	try {
-		const result = await createInstallResource().submit({ ...form.value, run: true });
-		toast.success(`${result.name} queued`);
-		showForm.value = false;
-		open(result.name);
-		list.fetch();
-	} catch (error) {
-		toast.error(error.messages?.[0] || "Could not start the install");
-	} finally {
-		submitting.value = false;
-	}
+function onStarted(name) {
+	showForm.value = false;
+	showInstall.value = false;
+	open(name);
+	list.fetch();
 }
 
 async function open(name) {
@@ -303,14 +247,16 @@ async function scrollLog() {
 	if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight;
 }
 
-watch(() => form.value.repo, () => (probe.value = null));
-watch(() => form.value.bench, () => (form.value.install_on_site = ""));
+watch(showForm, (open) => {
+	// Reopening should not carry the last choice of operation.
+	if (open) installMode.value = "Clone";
+});
 
 onMounted(async () => {
 	settings.fetch();
 	list.fetch();
 	await benches.fetch();
-	form.value.bench = route.query.bench || benchOptions.value[0]?.name || "";
+	chosenBench.value = route.query.bench || benchOptions.value[0]?.name || "";
 	if (route.query.bench) showForm.value = true;
 });
 

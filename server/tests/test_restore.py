@@ -42,12 +42,39 @@ def make_set(root: str, site: str, stamp: str, slug: str, *, files=False, encryp
 
 class TestNaming(unittest.TestCase):
 	def test_every_backup_kind_is_recognised(self):
-		for kind in (restore.KIND_DATABASE, restore.KIND_PUBLIC, restore.KIND_PRIVATE, restore.KIND_CONFIG):
+		for kind, ext in (
+			(restore.KIND_DATABASE, ".sql.gz"),
+			(restore.KIND_PUBLIC, ".tar"),
+			(restore.KIND_PRIVATE, ".tar"),
+			(restore.KIND_CONFIG, ".json"),
+		):
 			with self.subTest(kind=kind):
-				match = restore.BACKUP_NAME.match(f"20260825_000007-{SLUG}-{kind}")
+				match = restore.BACKUP_NAME.match(f"20260825_000007-{SLUG}-{kind}{ext}")
 				self.assertIsNotNone(match)
 				self.assertEqual(match["stamp"], "20260825_000007")
 				self.assertEqual(match["site"], SLUG)
+				self.assertEqual(match["kind"], kind)
+
+	def test_encrypted_backups_are_recognised(self):
+		"""frappe appends `-enc` to an encrypted backup.
+
+		Without it in the pattern the set does not match at all, so an
+		encrypted backup is not "hard to restore" — it is invisible, and the
+		operator is told the site has no backups.
+		"""
+		match = restore.BACKUP_NAME.match(f"20260825_000007-{SLUG}-database-enc.sql.gz")
+		self.assertIsNotNone(match)
+		self.assertEqual(match["kind"], restore.KIND_DATABASE)
+		self.assertEqual(match["enc"], "-enc")
+
+	def test_partial_and_alternate_archive_extensions_are_recognised(self):
+		for name in (
+			f"20260825_000007-{SLUG}-partial-database.sql.gz",
+			f"20260825_000007-{SLUG}-files.tgz",
+			f"20260825_000007-{SLUG}-files.tar.gz",
+		):
+			with self.subTest(name=name):
+				self.assertIsNotNone(restore.BACKUP_NAME.match(name))
 
 	def test_unrelated_files_are_ignored(self):
 		for name in ("notes.txt", "database.sql.gz", "2026-site-database.sql.gz"):
@@ -344,3 +371,68 @@ class TestSpaceEstimate(unittest.TestCase):
 			# Small backup on a real disk: the message should be the reassuring
 			# one, and should still name the expansion factor.
 			self.assertIn(str(restore.DB_EXPANSION), estimate.detail)
+
+
+class TestEncryptionDetection(unittest.TestCase):
+	"""Three cases, not two.
+
+	"Anything that is not gzip is encrypted" was wrong in the direction that
+	matters: a plain uncompressed mysqldump — exactly what gets copied in from
+	another server, which is the case the hand-picked path exists for — was
+	reported as encrypted and could not be restored at all, because the only
+	way past the check was to invent a key.
+	"""
+
+	def _write(self, root: str, name: str, data: bytes) -> str:
+		path = os.path.join(root, name)
+		write(path, data)
+		return path
+
+	def test_a_plain_uncompressed_dump_is_not_encrypted(self):
+		with tempfile.TemporaryDirectory() as root:
+			for name, head in (
+				("dump.sql", b"-- MySQL dump 10.13\nCREATE TABLE x;"),
+				("upper.sql", b"CREATE TABLE `tabUser`;"),
+				("set.sql", b"SET NAMES utf8mb4;"),
+				("comment.sql", b"/*!40101 SET */;"),
+			):
+				with self.subTest(name=name):
+					self.assertFalse(restore._is_encrypted(self._write(root, name, head)))
+
+	def test_a_gzipped_dump_is_not_encrypted(self):
+		with tempfile.TemporaryDirectory() as root:
+			self.assertFalse(
+				restore._is_encrypted(self._write(root, "d.sql.gz", gzip.compress(b"-- dump")))
+			)
+
+	def test_gpg_output_is_encrypted(self):
+		"""frappe encrypts with `gpg -c`, whose output opens with an OpenPGP
+		symmetric-key packet — verified against real gpg output (8c 0d …)."""
+		with tempfile.TemporaryDirectory() as root:
+			self.assertTrue(
+				restore._is_encrypted(self._write(root, "d.sql.gz", b"\x8c\x0d\x04\x09\x03\x02\xff"))
+			)
+
+	def test_frappes_own_name_marker_wins(self):
+		"""More reliable than any magic byte: it survives the file being
+		recompressed or renamed by whatever copied it across."""
+		with tempfile.TemporaryDirectory() as root:
+			path = self._write(root, "x-database-enc.sql.gz", gzip.compress(b"-- looks plain"))
+			self.assertTrue(restore._is_encrypted(path))
+
+	def test_something_unrecognisable_is_treated_as_encrypted(self):
+		"""Safer than the alternative: bench would drop the database and then
+		fail to load anything into it."""
+		with tempfile.TemporaryDirectory() as root:
+			self.assertTrue(restore._is_encrypted(self._write(root, "d.bin", b"\x00\x01\x02\x03")))
+
+	def test_a_plain_sql_dump_can_actually_be_restored(self):
+		"""The end-to-end symptom: it was refused at argv construction."""
+		with tempfile.TemporaryDirectory() as root:
+			os.makedirs(os.path.join(root, "sites", SITE))
+			dump = self._write(root, "from_prod.sql", b"-- MySQL dump\nCREATE TABLE x;")
+			backup = restore.resolve_chosen(root, SITE, dump)
+			self.assertFalse(backup.encrypted)
+			argv = restore.build_argv(BENCH_EXE, SITE, backup, "pw")
+			self.assertIn("--db-root-password", argv)
+			self.assertNotIn("--encryption-key", argv)
