@@ -84,7 +84,7 @@
 					<OutcomeMark v-else :outcome="['Success', 'Completed With Warnings'].includes(active.status) ? 'Success' : 'Failure'" :label="active.status" />
 					<span class="u-mono truncate text-[13px]">{{ active.name }} · {{ active.app_name }}</span>
 				</div>
-				<button class="text-[12px] text-[var(--ink-faint)] hover:text-[var(--ink)]" @click="active = null">
+				<button class="text-[12px] text-[var(--ink-faint)] hover:text-[var(--ink)]" @click="close">
 					Close
 				</button>
 			</header>
@@ -119,8 +119,9 @@
 		</section>
 
 		<DataTable
-			:columns="COLUMNS" :rows="rows" :loading="listLoading" :total="total" :start="0"
-			:page-length="20"
+			:columns="COLUMNS" :rows="rows" :loading="listLoading" :total="total" :start="start"
+			:page-length="PAGE_LENGTH"
+			@page="load"
 			empty-title="No installs yet"
 			empty-hint="Requests you run appear here with their full command output."
 		>
@@ -172,7 +173,10 @@ const settings = settingsResource();
 const list = installRequestsResource();
 const detail = installRequestResource();
 
+const PAGE_LENGTH = 20;
+
 const showForm = ref(false);
+const start = ref(0);
 const showInstall = ref(false);
 const chosenBench = ref("");
 const installMode = ref("Clone");
@@ -199,7 +203,20 @@ function onStarted(name) {
 	showForm.value = false;
 	showInstall.value = false;
 	open(name);
-	list.fetch();
+	load(start.value);
+}
+
+function load(nextStart = 0) {
+	start.value = nextStart;
+	list.fetch({ start: nextStart, page_length: PAGE_LENGTH });
+}
+
+function close() {
+	// Stop the poller too. Clearing `active` alone left the 1.5s interval
+	// running, and its next tick reassigned `active` — so the panel popped
+	// straight back and could not be dismissed until the job finished.
+	stopPolling();
+	active.value = null;
 }
 
 async function open(name) {
@@ -254,7 +271,7 @@ watch(showForm, (open) => {
 
 onMounted(async () => {
 	settings.fetch();
-	list.fetch();
+	load(0);
 	await benches.fetch();
 	chosenBench.value = route.query.bench || benchOptions.value[0]?.name || "";
 	if (route.query.bench) showForm.value = true;

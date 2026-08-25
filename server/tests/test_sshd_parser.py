@@ -314,12 +314,29 @@ class TestUntrustedFieldsFromRemoteClients(unittest.TestCase):
 	compromised.
 	"""
 
-	def test_a_forged_address_is_dropped_not_recorded(self):
+	def test_a_forged_address_does_not_displace_the_real_one(self):
+		"""The peer clause wins, so the real address is still recorded."""
 		event = parser.parse_log_line(
 			"Aug 25 10:00:00 host sshd[1]: Invalid user a from <script> from 203.0.113.9 port 55000"
 		)
 		self.assertIsNotNone(event)
-		self.assertIsNone(event.source_ip)
+		self.assertEqual(event.source_ip, "203.0.113.9")
+
+	def test_a_well_formed_forged_address_is_not_believed(self):
+		"""The dangerous version: the injected value is a REAL address.
+
+		Nothing rejects it on shape, so it would land in the events, the
+		"attacking IPs" chart and the geolocation cache while the actual source
+		appeared nowhere — letting an attacker frame an arbitrary address and
+		stay invisible. sshd writes ` port <n>` itself, which is what makes the
+		trailing clause the trustworthy one.
+		"""
+		event = parser.parse_log_line(
+			"Aug 25 10:00:00 host sshd[1]: Failed password for invalid user b "
+			"from 10.0.0.1 from 203.0.113.9 port 55001 ssh2"
+		)
+		self.assertEqual(event.source_ip, "203.0.113.9")
+		self.assertNotEqual(event.source_ip, "10.0.0.1")
 
 	def test_the_raw_line_is_still_kept(self):
 		"""Nothing is lost by refusing to believe the field — the whole message

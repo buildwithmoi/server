@@ -42,6 +42,9 @@ DONE = (SUCCESS, FAILURE, SKIPPED)
 #: progress lines that nobody will scroll through.
 MAX_STEP_LINES = 400
 
+#: Identifies the marker line so it is never counted as output.
+_TRUNCATION_PREFIX = "… "
+
 
 @dataclass
 class Step:
@@ -53,6 +56,10 @@ class Step:
 	status: str = PENDING
 	detail: str = ""
 	output: list[str] = field(default_factory=list)
+	#: Cumulative lines discarded from this step's output. Tracked on the step
+	#: rather than recomputed from the list, which could only ever report the
+	#: size of the last trim.
+	dropped: int = 0
 	started_at: str | None = None
 	finished_at: str | None = None
 	duration: float | None = None
@@ -65,6 +72,7 @@ class Step:
 			"status": self.status,
 			"detail": self.detail,
 			"output": "\n".join(self.output),
+			"dropped": self.dropped,
 			"started_at": self.started_at,
 			"finished_at": self.finished_at,
 			"duration": self.duration,
@@ -122,11 +130,19 @@ class Plan:
 		if step is None or step.status in DONE:
 			return
 		step.output.append(text)
-		if len(step.output) > MAX_STEP_LINES:
-			# Keep the tail: the end of a failing command is the part that says
-			# why. A marker rather than a silent truncation.
-			dropped = len(step.output) - MAX_STEP_LINES
-			step.output = [f"… {dropped} earlier lines, full output below …"] + step.output[-MAX_STEP_LINES:]
+		if len(step.output) <= MAX_STEP_LINES:
+			return
+
+		# Keep the tail: the end of a failing command is the part that says why.
+		# A marker rather than a silent truncation — and the marker counts every
+		# line ever dropped, not just this trim. Recomputing it from the list
+		# length pinned it at "2 earlier lines" forever, because the marker is
+		# itself in the list it was measuring.
+		tail = [line for line in step.output if not line.startswith(_TRUNCATION_PREFIX)]
+		step.dropped += len(tail) - (MAX_STEP_LINES - 1)
+		step.output = [
+			f"{_TRUNCATION_PREFIX}{step.dropped} earlier lines — the full output is below."
+		] + tail[-(MAX_STEP_LINES - 1) :]
 
 	def succeed(self, key: str | None = None, detail: str = "") -> None:
 		self._close(key or self._current, SUCCESS, detail)

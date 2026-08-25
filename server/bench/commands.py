@@ -237,10 +237,20 @@ SITE_COMMANDS = [
 		"Drop site",
 		("drop-site",),
 		SCOPE_SITE,
-		"Delete the site: its database and its files. There is no undo here, and this app takes "
-		"no backup for you first.",
-		RISK_DESTRUCTIVE,
+		"Delete the site: its database and its files. There is no undo, and nothing here takes a "
+		"backup first.",
+		RISK_UNSUPPORTED,
 		timeout=1800,
+		unsupported_reason=(
+			"Not run from here. Two reasons, and both are structural rather than squeamish. "
+			"frappe's drop-site takes the site as a positional argument, not the global --site "
+			"option this catalogue builds — so the command this app would assemble is one click "
+			"refuses to parse, and the entry could never have worked. And it needs the database "
+			"root password on the command line, which this catalogue has no way to redact out of "
+			"the stored command the way the restore path does. Run it in an SSH session, where "
+			"the password stays in your shell history rather than in a log this app displays: "
+			"bench drop-site <site> --db-root-password <password>"
+		),
 	),
 	BenchCommand(
 		"site.console",

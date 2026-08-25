@@ -43,7 +43,18 @@ STREAM_INTERVAL = 0.25
 
 #: How often to flush the accumulated log to the database, so a crash still
 #: leaves a usable trail rather than an empty Output field.
-PERSIST_EVERY_LINES = 40
+PERSIST_EVERY_LINES = 200
+
+#: …or this many seconds, whichever comes first. A chatty job (git progress is
+#: split on bare carriage returns, so each redraw is its own line) would
+#: otherwise spend more time on database round-trips than on the command, and a
+#: quiet one would leave nothing persisted for minutes at a time.
+PERSIST_EVERY_SECONDS = 3.0
+
+#: How much of the log is kept in memory. Only the tail is ever needed after
+#: the fact — for the error summary, and for the markers bench prints at the end
+#: of a quiet SSL failure. The whole log lives in the `output` column.
+TAIL_LINES = 400
 
 #: How often a running job checks whether someone asked it to stop.
 CANCEL_POLL_SECONDS = 2.0
@@ -65,6 +76,10 @@ CANCEL_KEY = "server:cancel-request:{name}"
 #: restore that also leaves the database root password sitting in the record.
 #: Anything past its own timeout by this much is presumed dead.
 STALE_GRACE_SECONDS = 300
+
+#: A queued job waits behind whatever is running, and the default bench has one
+#: `long` worker — so hours of waiting is normal. A full day is not.
+QUEUED_ABANDONED_SECONDS = 86400
 
 #: git redraws progress with \r; both count as end-of-line for the log.
 _LINE_BREAK = re.compile(r"[\r\n]")
@@ -607,61 +622,122 @@ def _kill_group(proc: subprocess.Popen, grace: float = 10.0) -> None:
 
 
 def reap_stale_requests() -> dict:
-	"""Close out jobs whose worker is gone.
+	"""Close out jobs whose worker is gone, and scrub credentials it left behind.
 
 	A worker can die between picking a job up and finishing it — OOM killer, a
 	restarted supervisor, a `bench restart` during a deploy. Nothing else
 	notices: the row says Running, the dock spins forever, and the lock file
 	stays behind so the next attempt on that bench is refused too.
 
-	For a restore it is worse than cosmetic. The database root password is
-	cleared in finish(), and a worker that was killed never reaches it — so the
-	credential sits in the record until something clears it. That something is
-	this.
+	Age is measured from `started_at`, not `modified`. Every write in the job
+	body uses `update_modified=False` on purpose, so `modified` never moves off
+	the row's creation time — measuring from it meant measuring age since
+	creation, which would have killed a perfectly healthy `bench update` an hour
+	into its legitimate two-hour budget.
 
-	Deliberately generous. A job is only presumed dead once it is past its own
-	timeout by a wide margin, because killing a live job that was merely slow
-	would be far worse than leaving a dead one for another five minutes.
+	Each row is judged against ITS OWN budget too. A restore with a safety
+	backup is allowed twice the install timeout, and `bench update` carries
+	7200s of its own; one global cutoff would reap the slow ones while they
+	were still working.
 	"""
 	settings = get_settings()
-	limit = settings.get_install_timeout() + STALE_GRACE_SECONDS
-	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-limit)
-
-	stale = frappe.get_all(
-		"App Install Request",
-		filters={"status": ["in", ("Running", "Queued")], "modified": ["<", cutoff]},
-		fields=["name", "status", "operation", "started_at"],
-	)
-
+	now = frappe.utils.now_datetime()
 	closed = []
-	for row in stale:
-		try:
-			request = frappe.get_doc("App Install Request", row.name)
-			request.db_set(
-				{
-					"status": "Failed",
-					"exit_code": NEVER_RAN,
-					"finished_at": frappe.utils.now_datetime(),
-					"error_summary": (
-						f"Stopped reporting. This was still marked {row.status} more than "
-						f"{limit // 60} minutes after it should have finished, so its worker is "
-						"presumed dead. Whether the command itself completed is unknown — check "
-						"the bench before re-running."
-					),
-				},
-				update_modified=False,
-			)
-			if request.is_restore():
-				request.clear_restore_secrets()
-			frappe.cache.delete_value(CANCEL_KEY.format(name=row.name))
-			closed.append(row.name)
-		except Exception:
-			frappe.logger("server").warning(f"could not reap {row.name}", exc_info=True)
+	checked = 0
 
-	if closed:
+	running = frappe.get_all(
+		"App Install Request",
+		filters={"status": "Running"},
+		fields=["name", "started_at"],
+	)
+	for row in running:
+		checked += 1
+		if not row.started_at:
+			continue
+		request = frappe.get_doc("App Install Request", row.name)
+		limit = _worst_case_seconds(request, settings) + STALE_GRACE_SECONDS
+		if frappe.utils.time_diff_in_seconds(now, row.started_at) < limit:
+			continue
+		if _close_stale(request, "Running", limit):
+			closed.append(row.name)
+
+	# A queued job legitimately waits behind whatever is running, and the
+	# default bench has one `long` worker — so the wait can be hours. Only a row
+	# that has sat for a full day is presumed abandoned.
+	queued = frappe.get_all(
+		"App Install Request",
+		filters={
+			"status": "Queued",
+			"creation": ["<", frappe.utils.add_to_date(now, seconds=-QUEUED_ABANDONED_SECONDS)],
+		},
+		pluck="name",
+	)
+	for name in queued:
+		checked += 1
+		if _close_stale(frappe.get_doc("App Install Request", name), "Queued", QUEUED_ABANDONED_SECONDS):
+			closed.append(name)
+
+	scrubbed = _scrub_orphan_secrets()
+
+	if closed or scrubbed:
 		frappe.db.commit()
-		frappe.logger("server").info(f"reaped stale install requests: {', '.join(closed)}")
-	return {"checked": len(stale), "closed": closed}
+		frappe.logger("server").info(
+			f"reaped {len(closed)} stale install requests; scrubbed {scrubbed} orphaned credentials"
+		)
+	return {"checked": checked, "closed": closed, "scrubbed": scrubbed}
+
+
+def _close_stale(request, was: str, limit: int) -> bool:
+	try:
+		request.db_set(
+			{
+				"status": "Failed",
+				"exit_code": NEVER_RAN,
+				"finished_at": frappe.utils.now_datetime(),
+				"error_summary": (
+					f"Stopped reporting. This was still marked {was} more than "
+					f"{limit // 60} minutes after it should have finished, so its worker is "
+					"presumed dead. Whether the command itself completed is unknown — check "
+					"the bench before re-running."
+				),
+			},
+			update_modified=False,
+		)
+		if request.is_restore():
+			request.clear_restore_secrets()
+		frappe.cache.delete_value(CANCEL_KEY.format(name=request.name))
+		return True
+	except Exception:
+		frappe.logger("server").warning(f"could not reap {request.name}", exc_info=True)
+		return False
+
+
+def _scrub_orphan_secrets() -> int:
+	"""Clear restore credentials from requests that have finished.
+
+	`finish()` is meant to be the one place these are cleared, but it is not
+	reachable when the process dies inside it — and the last-resort handler that
+	runs then could not clear them either. A finished row has no use for a
+	database root password under any circumstances, so anything terminal with
+	one still attached is scrubbed here.
+	"""
+	from frappe.utils.password import remove_encrypted_password
+
+	rows = frappe.db.sql(
+		"""
+		SELECT DISTINCT a.name
+		FROM `__Auth` a
+		JOIN `tabApp Install Request` r ON r.name = a.name
+		WHERE a.doctype = 'App Install Request'
+		  AND a.fieldname IN ('restore_db_password', 'restore_encryption_key')
+		  AND r.status IN ('Success', 'Completed With Warnings', 'Failed', 'Cancelled')
+		""",
+		as_dict=True,
+	)
+	for row in rows:
+		for field in ("restore_db_password", "restore_encryption_key"):
+			remove_encrypted_password("App Install Request", row.name, field)
+	return len(rows)
 
 
 def _plan_for(request) -> list:
@@ -732,8 +808,31 @@ def run_install_request(name: str) -> dict:
 		plan.start(key)
 		push_steps(force=True)
 
+	#: Lines not yet written to the column. The full log is NOT held in memory
+	#: for the life of the job: a cold `bench get-app` with assets emits tens of
+	#: thousands of lines and the buffer grew without bound, so a long job
+	#: carried its entire log in the worker's RSS as well as rewriting it into
+	#: the database over and over.
+	pending: list[str] = []
+	last_flush = [time.monotonic()]
+
+	def flush() -> None:
+		if not pending:
+			return
+		request.append_output("\n".join(pending) + "\n")
+		pending.clear()
+		last_flush[0] = time.monotonic()
+		frappe.db.commit()
+
 	def emit(line: str) -> None:
+		pending.append(line)
+		produced[0] += 1
 		buffer.append(line)
+		# The tail is all that is needed after the fact — `_tail` for the error
+		# summary, and the SSL quiet-failure markers, which bench prints at the
+		# end. Everything is still in the `output` column.
+		if len(buffer) > TAIL_LINES:
+			del buffer[: len(buffer) - TAIL_LINES]
 		plan.line(line)
 		now = time.monotonic()
 		if now - last_emit[0] >= STREAM_INTERVAL:
@@ -742,9 +841,10 @@ def run_install_request(name: str) -> dict:
 				LOG_EVENT, {"name": name, "line": line}, doctype="App Install Request", docname=name
 			)
 			push_steps()
-		if len(buffer) % PERSIST_EVERY_LINES == 0:
-			request.append_output("\n".join(buffer))
-			frappe.db.commit()
+		if len(pending) >= PERSIST_EVERY_LINES or (
+			pending and time.monotonic() - last_flush[0] >= PERSIST_EVERY_SECONDS
+		):
+			flush()
 
 	def finish(status: str, exit_code: int | None = None, error: str | None = None) -> dict:
 		started = request.started_at
@@ -761,6 +861,7 @@ def run_install_request(name: str) -> dict:
 			)
 		frappe.cache.delete_value(CANCEL_KEY.format(name=name))
 
+		flush()
 		if status in ("Success", "Completed With Warnings"):
 			plan.succeed()
 			plan.abandon("Not needed.")
@@ -775,7 +876,6 @@ def run_install_request(name: str) -> dict:
 				"duration": frappe.utils.time_diff_in_seconds(frappe.utils.now_datetime(), started)
 				if started
 				else 0,
-				"output": "\n".join(buffer),
 				"steps": json.dumps(plan.as_list()),
 				"error_summary": (error or _tail(buffer))[:1000] or None,
 			},
@@ -843,6 +943,11 @@ def run_install_request(name: str) -> dict:
 
 		env = settings.get_bench_env()
 		timeout = settings.get_install_timeout()
+
+		#: Set when the clone succeeded but bench's own post-step did not. The
+		#: run still continues — install-app has to happen — and the outcome is
+		#: reported as a warning rather than a failure at the end.
+		clone_warning = None
 
 		# Scoped to this bench, so two different benches can install in
 		# parallel while one bench never sees concurrent get-app calls.
@@ -1012,21 +1117,25 @@ def run_install_request(name: str) -> dict:
 								"which needs a password on this host. Nothing about the install is "
 								"affected."
 							)
+							# Recorded, then fall through. Returning here skipped
+							# `install-app` entirely while telling the operator
+							# the app was installed and not to re-run — so the
+							# app was on disk and on no site, and the message
+							# talked them out of fixing it.
+							clone_warning = (
+								"Installed successfully. bench's own post-step failed: it runs "
+								"`sudo supervisorctl status` to decide whether to restart "
+								"processes, and this host has no passwordless sudo. The clone "
+								"itself is complete."
+							)
+						else:
 							return finish(
-								"Completed With Warnings",
+								"Failed",
 								exit_code=code,
-								error=(
-									"Installed successfully. bench's own post-step failed: it runs "
-									"`sudo supervisorctl status` to decide whether to restart "
-									"processes, and this host has no passwordless sudo. Do not re-run "
-									"this — the app is already in place."
+								error=_explain_failure(
+									code, timed_out, timeout, request, "bench get-app"
 								),
 							)
-						return finish(
-							"Failed",
-							exit_code=code,
-							error=_explain_failure(code, timed_out, timeout, request, "bench get-app"),
-						)
 
 					if request.install_on_site:
 						step("install")
@@ -1067,6 +1176,8 @@ def run_install_request(name: str) -> dict:
 			emit(f"Could not re-read the bench: {exc}")
 			plan.fail("rescan", "The operation succeeded; only the refresh failed.")
 
+		if clone_warning:
+			return finish("Completed With Warnings", exit_code=0, error=clone_warning)
 		return finish("Success", exit_code=0)
 
 	except Exception as exc:
@@ -1083,9 +1194,27 @@ def run_install_request(name: str) -> dict:
 			frappe.db.set_value(
 				"App Install Request",
 				name,
-				{"status": "Failed", "error_summary": f"{type(exc).__name__}: {exc}"[:1000]},
+				{
+					"status": "Failed",
+					"exit_code": NEVER_RAN,
+					"finished_at": frappe.utils.now_datetime(),
+					"error_summary": f"{type(exc).__name__}: {exc}"[:1000],
+				},
 				update_modified=False,
 			)
+			# finish() is documented as the one place credentials cannot escape,
+			# and this path runs exactly when finish() failed. Deleting straight
+			# from __Auth rather than going through the document, because the
+			# document is what just proved unreliable.
+			try:
+				from frappe.utils.password import remove_encrypted_password
+
+				for field in ("restore_db_password", "restore_encryption_key"):
+					remove_encrypted_password("App Install Request", name, field)
+			except Exception:
+				frappe.logger("server").error(
+					f"could not clear restore credentials for {name}", exc_info=True
+				)
 			frappe.db.commit()
 			return {"name": name, "status": "Failed", "error": str(exc)}
 

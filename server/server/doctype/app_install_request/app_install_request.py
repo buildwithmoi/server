@@ -308,10 +308,27 @@ class AppInstallRequest(Document):
 		return self.status in OK_STATUSES
 
 	def append_output(self, chunk: str) -> None:
-		"""Persist log output without touching `modified`.
+		"""Append to the stored log without touching `modified`.
 
-		The log is appended many times during a run; bumping the timestamp on
-		every flush would make the document look hand-edited and fight any
-		concurrent read.
+		A genuine append, via SQL CONCAT. It used to take the whole accumulated
+		log and rewrite the column with it, which made persistence quadratic:
+		a `bench get-app` with assets emits tens of thousands of lines — git
+		progress is split on bare carriage returns, so every redraw of
+		"Receiving objects: N%" is its own line — and at 50k lines the job spent
+		more time rewriting a 4 MB longtext than running the command.
+
+		`modified` is deliberately left alone: bumping it on every flush would
+		make the document look hand-edited, and the reaper measures staleness
+		from `started_at` precisely because this field never moves.
 		"""
-		self.db_set("output", chunk, update_modified=False)
+		if not chunk:
+			return
+		frappe.db.sql(
+			"""UPDATE `tabApp Install Request`
+			   SET output = CONCAT(COALESCE(output, ''), %(chunk)s)
+			   WHERE name = %(name)s""",
+			{"chunk": chunk, "name": self.name},
+		)
+		# Keep the in-memory copy roughly in step for anything that reads it
+		# back on this document — the authoritative copy is the column.
+		self.output = (self.output or "") + chunk

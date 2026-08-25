@@ -143,11 +143,18 @@ async function ingestNow() {
 	ingesting.value = true;
 	try {
 		const result = await runIngestResource().submit({});
-		toast.success(
-			result.error
-				? `Ingest reported: ${result.error}`
-				: `Read ${result.read ?? 0}, inserted ${result.inserted ?? 0}`,
-		);
+		// A run that did not happen is not a success.
+		//
+		// With monitoring off, run_ingest returns {source: "disabled", reason:
+		// "..."} and no `error` key — so this showed a green "Read 0, inserted
+		// 0". On a security console that reads as "collection works and the
+		// server is quiet", which is the most dangerous thing it could say.
+		const didNotRun = result.error || result.reason || ["disabled", "none"].includes(result.source);
+		if (didNotRun) {
+			toast.error(result.error || result.reason || `No log source available (${result.source}).`);
+		} else {
+			toast.success(`Read ${result.read ?? 0}, inserted ${result.inserted ?? 0}`);
+		}
 		healthRes.fetch();
 	} catch (error) {
 		toast.error(error.messages?.[0] || "Ingest failed");

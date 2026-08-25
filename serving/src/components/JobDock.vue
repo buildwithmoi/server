@@ -140,19 +140,39 @@ function tick(job) {
 	return formatElapsed(elapsed(job));
 }
 
-const activeVerb = (job) => (job.operation === "Pull" ? "Updating" : "Cloning");
+/**
+ * All five operations, named for what they actually do.
+ *
+ * Anything unmapped fell through to "Cloning", so the dock — the only thing on
+ * screen while a job runs — announced a restore that was about to drop a
+ * database as "Cloning", and an SSL job that stops nginx the same way. Naming a
+ * harmless operation while a destructive one runs is worse than saying nothing.
+ */
+const VERBS = {
+	Clone: { active: "Cloning", done: "Cloned", noun: "Clone" },
+	Pull: { active: "Updating", done: "Updated", noun: "Update" },
+	Command: { active: "Running", done: "Ran", noun: "Command" },
+	SSL: { active: "Setting up SSL for", done: "SSL set up for", noun: "SSL" },
+	Restore: { active: "Restoring", done: "Restored", noun: "Restore" },
+};
+const verbsFor = (job) => VERBS[job.operation] || VERBS.Clone;
+
+const activeVerb = (job) => {
+	if (job.lostContact) return "Lost contact with";
+	if (job.status === "Cancelling") return "Stopping";
+	return verbsFor(job).active;
+};
+
 // A warning is not a failure. Showing it as one recreates exactly the
 // confusion this status exists to remove.
 const okStatuses = ["Success", "Completed With Warnings"];
 
 const terminalVerb = (job) => {
-	const noun =
-		job.operation === "Pull" ? "Update" : job.operation === "Command" ? "Command" : "Clone";
-	if (job.status === "Completed With Warnings") return noun + " done, with a warning —";
-	if (okStatuses.includes(job.status)) {
-		return { Update: "Updated", Command: "Ran", Clone: "Cloned" }[noun];
-	}
-	return noun + " failed —";
+	const { done, noun } = verbsFor(job);
+	if (job.status === "Completed With Warnings") return `${noun} done, with a warning —`;
+	if (job.status === "Cancelled") return `${noun} stopped —`;
+	if (okStatuses.includes(job.status)) return done;
+	return `${noun} failed —`;
 };
 
 function toggle(job) {

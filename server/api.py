@@ -743,7 +743,7 @@ def ssl_readiness(bench: str) -> dict:
 	return report
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def run_ssl(
 	bench: str,
 	mode: str,
@@ -852,7 +852,7 @@ def estimate_restore_space(
 	return bench_restore.estimate_space(doc.bench_path, backup).__dict__
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def run_restore(
 	bench: str,
 	site: str,

@@ -376,6 +376,37 @@ _SSHD_RULES: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 
+#: sshd always appends the peer address as `from <ip> port <n>`, and the port
+#: clause is what makes it unambiguous — a username cannot produce it, because
+#: sshd writes the port itself.
+_PEER_CLAUSE = re.compile(r"from\s+(?P<ip>[0-9A-Fa-f:.]+)\s+port\s+\d+")
+
+
+def _authoritative_ip(message: str, matched: str | None) -> str | None:
+	"""The address sshd actually saw, not the first one on the line.
+
+	A username is echoed into the message before the peer address, so
+	connecting as `b from 10.0.0.1` produces
+
+	    Failed password for invalid user b from 10.0.0.1 from 203.0.113.9 port 55001
+
+	and a rule that takes the first ` from ` records 10.0.0.1 — a real,
+	well-formed, completely attacker-chosen address. That is worse than the
+	`<script>` case: nothing rejects it, so it lands in the events, the
+	"attacking IPs" chart and the geolocation cache, and the real source appears
+	nowhere. An attacker can frame an arbitrary address while staying invisible.
+
+	The peer clause is the trustworthy one because sshd writes the port itself,
+	and the LAST such clause wins — anything a username injected comes earlier.
+	"""
+	peers = _PEER_CLAUSE.findall(message or "")
+	for candidate in reversed(peers):
+		cleaned = _clean_ip(candidate)
+		if cleaned:
+			return cleaned
+	return _clean_ip(matched)
+
+
 def _clean_ip(value: str | None) -> str | None:
 	"""Return `value` only if it really is an IP address.
 
@@ -452,7 +483,7 @@ def parse_sshd_message(line: SyslogLine) -> AuthEvent | None:
 			username=user,
 			invalid_user=invalid,
 			auth_method=groups.get("method") or None,
-			source_ip=_clean_ip(groups.get("ip")),
+			source_ip=_authoritative_ip(line.message, groups.get("ip")),
 			source_port=port,
 			key_fingerprint=groups.get("fingerprint") or None,
 			session_key=_session_key(line),

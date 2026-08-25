@@ -55,8 +55,25 @@ class TestCatalogue(unittest.TestCase):
 		self.assertFalse(commands.get("bench.start").runnable)
 
 	def test_destructive_ones_are_marked(self):
-		for cid in ("site.drop-site", "site.uninstall-app", "bench.update", "bench.remove-app"):
+		for cid in ("site.uninstall-app", "bench.update", "bench.remove-app"):
 			self.assertEqual(commands.get(cid).risk, commands.RISK_DESTRUCTIVE, cid)
+
+	def test_drop_site_is_not_offered_from_here(self):
+		"""It was catalogued as destructive-but-runnable and could never run.
+
+		frappe's drop-site takes the site as a POSITIONAL argument, not the
+		global --site option this catalogue builds, so click refused the command
+		with "Missing argument SITE" — the operator typed the full label into
+		the confirmation box and watched it fail. It also needs the database
+		root password on the command line, which this catalogue has no way to
+		redact out of the stored command the way the restore path does.
+		"""
+		command = commands.get("site.drop-site")
+		self.assertEqual(command.risk, commands.RISK_UNSUPPORTED)
+		self.assertFalse(command.runnable)
+		self.assertIn("positional", command.unsupported_reason)
+		with self.assertRaises(commands.CommandRefused):
+			commands.build_argv(command, "/usr/local/bin/bench", "a.site")
 
 
 class TestArgvConstruction(unittest.TestCase):

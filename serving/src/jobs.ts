@@ -45,6 +45,8 @@ export interface Job {
 	started_at: string | null;
 	/** Fallback only, for the moment before the server's started_at arrives. */
 	adoptedAt: number;
+	/** True when several polls in a row have failed. The job is still tracked. */
+	lostContact?: boolean;
 }
 
 const POLL_MS = 1500;
@@ -53,6 +55,12 @@ const POLL_MS = 1500;
 const LINGER_MS = 20000;
 
 const jobs = ref<Record<string, Job>>({});
+
+/** Consecutive failed polls per job, so a blip is not treated as a death. */
+const lostContact = ref(new Map<string, number>());
+
+/** Show "lost contact" only after this many consecutive failures. */
+const LOST_CONTACT_AFTER = 3;
 const expanded = ref<string | null>(null);
 let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -140,8 +148,27 @@ async function refresh(name: string) {
 				if (jobs.value[name]?.is_terminal && expanded.value !== name) dismiss(name);
 			}, LINGER_MS);
 		}
-	} catch {
-		dismiss(name);
+		lostContact.value.delete(name);
+	} catch (err: any) {
+		// A transient failure must not erase a running job.
+		//
+		// Dismissing on any error meant one 502 from a proxy, one worker
+		// restart, or one refreshed session cookie removed the job from the
+		// dock — which emptied activeJobs, which stopped the poller, so nothing
+		// ever re-polled. A fifteen-minute clone vanished mid-flight with no
+		// toast and no explanation, and the operator's only sign it was still
+		// running was gone.
+		const gone = err?.exc_type === "DoesNotExistError" || err?.httpStatus === 404;
+		if (gone) {
+			dismiss(name);
+			return;
+		}
+		const failures = (lostContact.value.get(name) || 0) + 1;
+		lostContact.value.set(name, failures);
+		jobs.value = {
+			...jobs.value,
+			[name]: { ...job, lostContact: failures >= LOST_CONTACT_AFTER },
+		};
 	}
 }
 

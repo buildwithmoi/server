@@ -211,15 +211,22 @@ def _search(path: str, term: str, limit: int, size: int) -> dict:
 	"""
 	needle = term.lower()
 	matches: list[str] = []
+	# Counted separately from the list. The list is a ring buffer trimmed back
+	# to `limit`, so its length is the size of the retained tail and never the
+	# number of matches — reporting it said "398 matching lines" for a file
+	# where every one of 1000 lines matched, and claimed nothing was truncated
+	# while silently dropping most of them.
+	found = 0
 	scanned = 0
 	try:
 		with open(path, encoding="utf-8", errors="replace") as handle:
 			for line in handle:
 				scanned += 1
 				if needle in line.lower():
+					found += 1
 					matches.append(line.rstrip("\n"))
-					# Keep only the tail of the matches, so a term that appears
-					# a million times cannot exhaust memory.
+					# Keep only the tail, so a term that appears a million times
+					# cannot exhaust memory.
 					if len(matches) > limit * 2:
 						del matches[: len(matches) - limit]
 	except OSError as exc:
@@ -230,7 +237,7 @@ def _search(path: str, term: str, limit: int, size: int) -> dict:
 		"lines": matches[-limit:],
 		"size": size,
 		"size_text": _human(size),
-		"truncated": len(matches) > limit,
-		"matched": len(matches),
+		"truncated": found > limit,
+		"matched": found,
 		"scanned": scanned,
 	}
