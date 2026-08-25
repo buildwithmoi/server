@@ -69,17 +69,47 @@ class TestDisk(unittest.TestCase):
 
 
 class TestMemory(unittest.TestCase):
+	#: A machine with plenty of memory available and almost none "free",
+	#: because the page cache is holding the rest. This is what a busy,
+	#: perfectly healthy server looks like, and the whole point of preferring
+	#: MemAvailable is that MemFree would call it 97% used.
+	BUSY_BUT_HEALTHY = {
+		"MemTotal": 8_000_000_000,
+		"MemFree": 200_000_000,
+		"MemAvailable": 6_000_000_000,
+	}
+
 	def test_uses_available_rather_than_free(self):
 		"""MemFree excludes the page cache, which Linux hands back on demand.
 
 		Reporting it as used makes a healthy machine look out of memory.
+
+		Against a FIXED reading rather than the live one. The first version of
+		this test called `_meminfo()` and then `memory()`, which reads
+		/proc/meminfo a second time — on a live box the number moves between the
+		two calls, and the test failed roughly one run in eight. A race in a
+		test is worse than no test: it teaches whoever sees it that a red suite
+		is normal.
 		"""
-		info = system._meminfo()
-		if "MemAvailable" not in info:
-			self.skipTest("this kernel does not report MemAvailable")
-		reading = system.memory()
-		self.assertEqual(reading.free, info["MemAvailable"])
-		self.assertEqual(reading.used, info["MemTotal"] - info["MemAvailable"])
+		from unittest.mock import patch
+
+		with patch.object(system, "_meminfo", return_value=dict(self.BUSY_BUT_HEALTHY)):
+			reading = system.memory()
+
+		self.assertEqual(reading.free, self.BUSY_BUT_HEALTHY["MemAvailable"])
+		self.assertEqual(reading.used, 2_000_000_000)
+		self.assertEqual(round(reading.percent), 25, "MemFree would have made this 97%")
+
+	def test_falls_back_to_free_on_a_kernel_without_memavailable(self):
+		"""Ancient kernels do not report it, and returning None would mean the
+		dashboard showing no memory reading at all rather than a rougher one."""
+		from unittest.mock import patch
+
+		info = {"MemTotal": 8_000_000_000, "MemFree": 200_000_000}
+		with patch.object(system, "_meminfo", return_value=info):
+			reading = system.memory()
+
+		self.assertEqual(reading.free, 200_000_000)
 
 	def test_percentage_is_within_range(self):
 		reading = system.memory()
