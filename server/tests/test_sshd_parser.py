@@ -412,3 +412,42 @@ class TestDisconnectCoverage(unittest.TestCase):
 			"Aug 25 10:00:00 host sshd[1]: Connection closed by 2a01:4f8:1c1c:abcd::1 port 22 [preauth]"
 		)
 		self.assertEqual(event.source_ip, "2a01:4f8:1c1c:abcd::1")
+
+
+class TestLeapDay(unittest.TestCase):
+	"""strptime defaults to 1900, which was not a leap year.
+
+	So every classic-syslog line logged on 29 February raised ValueError and
+	was dropped — one day every four years where SSH events simply vanish, and
+	not a day anyone would think to check.
+	"""
+
+	def test_the_29th_of_february_parses(self):
+		from datetime import datetime
+
+		line = parser.parse_syslog_line(
+			"Feb 29 03:14:15 host sshd[1]: Failed password for invalid user a from 203.0.113.9 port 22 ssh2",
+			now=datetime(2024, 3, 1),
+		)
+		self.assertIsNotNone(line)
+		self.assertEqual(line.timestamp.month, 2)
+		self.assertEqual(line.timestamp.day, 29)
+
+	def test_ordinary_dates_are_unaffected(self):
+		from datetime import datetime
+
+		line = parser.parse_syslog_line(
+			"Aug 25 10:00:00 host sshd[1]: Failed password for invalid user a from 203.0.113.9 port 22 ssh2",
+			now=datetime(2026, 8, 25),
+		)
+		self.assertEqual((line.timestamp.year, line.timestamp.month), (2026, 8))
+
+	def test_the_year_rollback_still_works(self):
+		"""A December line read on 1 January belongs to the previous year."""
+		from datetime import datetime
+
+		line = parser.parse_syslog_line(
+			"Dec 31 23:59:59 host sshd[1]: Failed password for invalid user a from 203.0.113.9 port 22 ssh2",
+			now=datetime(2026, 1, 1),
+		)
+		self.assertEqual(line.timestamp.year, 2025)

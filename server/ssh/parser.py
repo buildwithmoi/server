@@ -185,11 +185,18 @@ def parse_syslog_line(line: str, now: datetime | None = None) -> SyslogLine | No
 		match = _CLASSIC_PREFIX.match(line)
 		if not match:
 			return None
+		# Parsed against a LEAP year, not strptime's 1900 default.
+		#
+		# A classic syslog line carries no year, and 1900 was not a leap year —
+		# so every line logged on 29 February raised ValueError and was dropped
+		# silently. One day every four years where SSH events simply vanish is
+		# not a day anyone would think to check.
+		reference = now or datetime.now()
 		try:
-			naive = datetime.strptime(match.group("ts"), "%b %d %H:%M:%S")
+			naive = datetime.strptime(f"{match.group('ts')} 2024", "%b %d %H:%M:%S %Y")
 		except ValueError:
 			return None
-		stamp = _infer_year(naive, now or datetime.now())
+		stamp = _infer_year(naive, reference)
 
 	pid = match.group("pid")
 	return SyslogLine(

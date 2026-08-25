@@ -193,3 +193,62 @@ class TestMissingFile(AuthLogRotationTestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestRotationDrainsCompletely(unittest.TestCase):
+	"""A rotation is exactly when a busy log has the most left in it.
+
+	The rotated file's new offset used to be discarded and the checkpoint moved
+	to the fresh file at 0, so everything past the first `limit` lines of the
+	rotated file was abandoned permanently — silently, with no gap anyone could
+	see.
+	"""
+
+	def test_nothing_is_lost_when_the_rotation_exceeds_one_run(self):
+		with tempfile.TemporaryDirectory() as root:
+			live = os.path.join(root, "auth.log")
+			with open(live, "w") as handle:
+				handle.write("".join(f"line {i}\n" for i in range(100)))
+
+			_, inode, offset, signature = read_lines(live, limit=30)
+
+			os.rename(live, f"{live}.1")
+			with open(live, "w") as handle:
+				handle.write("".join(f"new {i}\n" for i in range(5)))
+
+			seen = []
+			for _ in range(10):
+				batch, inode, offset, signature = read_lines(
+					live, inode=inode, offset=offset, signature=signature, limit=30
+				)
+				if not batch:
+					break
+				seen.extend(batch)
+
+			self.assertEqual(
+				[l for l in seen if l.startswith("line ")],
+				[f"line {i}" for i in range(30, 100)],
+			)
+			self.assertEqual([l for l in seen if l.startswith("new ")], [f"new {i}" for i in range(5)])
+
+	def test_a_rotation_that_fits_in_one_run_still_moves_on(self):
+		with tempfile.TemporaryDirectory() as root:
+			live = os.path.join(root, "auth.log")
+			with open(live, "w") as handle:
+				handle.write("".join(f"line {i}\n" for i in range(10)))
+			_, inode, offset, signature = read_lines(live, limit=5)
+
+			os.rename(live, f"{live}.1")
+			with open(live, "w") as handle:
+				handle.write("new 0\n")
+
+			seen = []
+			for _ in range(5):
+				batch, inode, offset, signature = read_lines(
+					live, inode=inode, offset=offset, signature=signature, limit=100
+				)
+				if not batch:
+					break
+				seen.extend(batch)
+			self.assertIn("new 0", seen)
+			self.assertEqual(len([l for l in seen if l.startswith("line ")]), 5)

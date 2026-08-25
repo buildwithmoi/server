@@ -156,8 +156,24 @@ def read_lines(
 			except AuthLogUnavailableError:
 				is_ours = False
 			if is_ours:
-				tail, _, _ = _read_from(rotated, offset, limit)
+				tail, rotated_offset, _ = _read_from(rotated, offset, limit)
 				lines.extend(tail)
+
+				# If the rotated file still has more than this run's budget,
+				# STAY ON IT. The new offset used to be discarded and the
+				# checkpoint moved to the fresh file at 0, so everything past
+				# the first `limit` lines of the rotated file was abandoned
+				# permanently — and a rotation is exactly when a busy log has
+				# the most in it.
+				#
+				# Reporting the rotated file's own inode and offset makes the
+				# next run take this same branch and resume where this one
+				# stopped, because `is_ours` matches on that inode.
+				if len(lines) >= limit:
+					try:
+						return lines, str(_stat(rotated).st_ino), rotated_offset, file_signature(rotated)
+					except AuthLogUnavailableError:
+						pass
 		offset = 0
 	elif inode and st.st_size < offset:
 		offset = 0

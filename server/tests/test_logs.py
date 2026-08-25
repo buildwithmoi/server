@@ -195,3 +195,41 @@ class TestSearch(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestCompressedRotations(unittest.TestCase):
+	"""`.log.gz` rotations are offered by the picker, so they must be readable.
+
+	Opening one as text returned decompressed-looking garbage — a file the
+	interface invited you to read and then could not."""
+
+	def _make(self, root: str, count: int) -> str:
+		import gzip as gziplib
+
+		directory = os.path.join(root, "logs")
+		os.makedirs(directory, exist_ok=True)
+		path = os.path.join(directory, "worker.log.1.gz")
+		with gziplib.open(path, "wt") as handle:
+			handle.write("".join(f"old line {i}\n" for i in range(count)))
+		return path
+
+	def test_the_tail_of_a_gzipped_rotation_is_readable(self):
+		with tempfile.TemporaryDirectory() as root:
+			result = logs.tail(self._make(root, 1000), lines=5)
+			self.assertIsNone(result["error"])
+			self.assertEqual(result["lines"][-1], "old line 999")
+			self.assertTrue(result["truncated"])
+
+	def test_search_works_inside_a_gzipped_rotation(self):
+		with tempfile.TemporaryDirectory() as root:
+			result = logs.tail(self._make(root, 1000), lines=10, search="line 42")
+			self.assertEqual(result["matched"], 11)
+
+	def test_a_corrupt_archive_reports_rather_than_raises(self):
+		with tempfile.TemporaryDirectory() as root:
+			directory = os.path.join(root, "logs")
+			os.makedirs(directory)
+			path = os.path.join(directory, "worker.log.1.gz")
+			with open(path, "wb") as handle:
+				handle.write(b"not actually gzip")
+			self.assertIsNotNone(logs.tail(path)["error"])

@@ -17,6 +17,7 @@ Frappe-free, so it tests against a temp directory with no site.
 
 from __future__ import annotations
 
+import gzip
 import os
 import re
 from dataclasses import dataclass
@@ -178,6 +179,14 @@ def tail(path: str, lines: int = DEFAULT_LINES, search: str | None = None) -> di
 	if search:
 		return _search(path, search, lines, size)
 
+	if path.endswith(".gz"):
+		# Offered by the picker, so it has to be readable. Seeking backwards is
+		# meaningless in a compressed stream, so this decompresses forwards and
+		# keeps only the tail — bounded by the ring buffer rather than by the
+		# file, which is what matters for a rotation that can be hundreds of
+		# megabytes uncompressed.
+		return _tail_gzip(path, lines, size)
+
 	collected: list[str] = []
 	try:
 		with open(path, "rb") as handle:
@@ -203,12 +212,37 @@ def tail(path: str, lines: int = DEFAULT_LINES, search: str | None = None) -> di
 	}
 
 
+def _tail_gzip(path: str, limit: int, size: int) -> dict:
+	"""The last `limit` lines of a gzipped rotation."""
+	from collections import deque
+
+	kept: deque[str] = deque(maxlen=limit)
+	total = 0
+	try:
+		with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+			for line in handle:
+				total += 1
+				kept.append(line.rstrip("\n"))
+	except (OSError, EOFError, gzip.BadGzipFile) as exc:
+		return {"error": f"Could not read this rotation: {exc}", "lines": [], "size": size, "truncated": False}
+
+	return {
+		"error": None,
+		"lines": list(kept),
+		"size": size,
+		"size_text": _human(size),
+		"truncated": total > limit,
+		"matched": None,
+	}
+
+
 def _search(path: str, term: str, limit: int, size: int) -> dict:
 	"""Lines containing `term`, the last `limit` of them.
 
 	Case-insensitive, because nobody remembers whether the log said "Error" or
 	"ERROR", and getting nothing back reads as "it never happened".
 	"""
+	opener = gzip.open if path.endswith(".gz") else open
 	needle = term.lower()
 	matches: list[str] = []
 	# Counted separately from the list. The list is a ring buffer trimmed back
@@ -219,7 +253,7 @@ def _search(path: str, term: str, limit: int, size: int) -> dict:
 	found = 0
 	scanned = 0
 	try:
-		with open(path, encoding="utf-8", errors="replace") as handle:
+		with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
 			for line in handle:
 				scanned += 1
 				if needle in line.lower():

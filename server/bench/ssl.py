@@ -206,8 +206,16 @@ def installed_certificates() -> tuple[dict[str, dict], str]:
 		elif line.startswith("Expiry Date:"):
 			value = line.split(":", 1)[1].strip()
 			current["expiry"] = value.split(" (")[0].strip()
-			match = re.search(r"VALID:\s*(\d+)\s*day", value)
-			current["days"] = int(match.group(1)) if match else (0 if "INVALID" in value else None)
+			# certbot prints "VALID: N day(s)" and, under 24 hours, "VALID: N
+			# hour(s)". Matching only days meant a certificate with hours left
+			# reported as days=None — rendered as neutral, when it is the most
+			# urgent state there is.
+			match = re.search(r"VALID:\s*(\d+)\s*(day|hour|minute)", value)
+			if match:
+				# Anything under a day is 0 days: "expires today".
+				current["days"] = int(match.group(1)) if match.group(2) == "day" else 0
+			else:
+				current["days"] = 0 if "INVALID" in value else None
 			for domain in current["domains"]:
 				certs[domain] = current
 

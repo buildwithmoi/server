@@ -151,11 +151,27 @@
 					</p>
 				</div>
 
-				<div v-if="mode === 'issue'" class="u-note u-note-warn flex items-start gap-2.5">
+				<!--
+					Both modes stop nginx, including the rehearsal.
+
+					The renewal argv carries --pre-hook "systemctl stop nginx", and
+					--dry-run does not change that — certbot still runs the hooks.
+					Warning only on "issue" told the operator a rehearsal was free
+					when it takes every site on the machine offline for the length
+					of the check.
+				-->
+				<div class="u-note u-note-warn flex items-start gap-2.5">
 					<Icon name="alert" :size="15" class="u-warn mt-0.5 shrink-0" />
 					<p class="text-[12.5px] leading-relaxed">
-						nginx stops while certbot holds port 443, so every site on this bench is
-						briefly offline. The domain must already point at this server.
+						<template v-if="mode === 'issue'">
+							nginx stops while certbot holds port 443, so every site on this bench is
+							briefly offline. The domain must already point at this server.
+						</template>
+						<template v-else>
+							nginx stops for the check and starts again afterwards, so every site on
+							this machine is briefly offline — a rehearsal included, because certbot
+							runs the same hooks either way.
+						</template>
 					</p>
 				</div>
 

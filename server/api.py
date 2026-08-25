@@ -624,6 +624,11 @@ def prune_backups(
 
 	# An audit trail for a destructive action, in the app whose whole point is
 	# knowing what happened on this server.
+	# The health panel's breakdown is cached for five minutes, and the reason
+	# anyone is here is that it said the disk was filling. Leaving it stale
+	# means deleting gigabytes and being told nothing changed.
+	frappe.cache.delete_value(BACKUP_USAGE_KEY)
+
 	frappe.logger("server").info(
 		f"pruned {len(result['deleted_sets'])} backup sets on {site} "
 		f"({result['freed_text']}) by {frappe.session.user}"
@@ -1403,7 +1408,18 @@ def run_install_request(name: str) -> dict:
 	if doc.status in ("Queued", "Running"):
 		frappe.throw(f"{name} is already {doc.status.lower()}.", title="Already Running")
 
-	doc.db_set({"status": "Queued", "error_summary": None}, update_modified=False)
+	# Clear any cancel flag left from a previous attempt.
+	#
+	# It lives in redis for an hour, and the worker refuses to start a job that
+	# is flagged — so re-running a request that was cancelled a few minutes ago
+	# cancelled itself again, immediately, with a message about a worker that
+	# had never picked it up.
+	frappe.cache.delete_value(installer.CANCEL_KEY.format(name=name))
+
+	doc.db_set(
+		{"status": "Queued", "error_summary": None, "exit_code": installer.NEVER_RAN},
+		update_modified=False,
+	)
 	job_id = installer.enqueue_install_request(name)
 	doc.db_set("job_id", job_id, update_modified=False)
 	frappe.db.commit()
