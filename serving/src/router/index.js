@@ -68,6 +68,12 @@ const routes = [
 		meta: { title: "App Installs" },
 	},
 	{
+		path: "/domains",
+		name: "DomainProviders",
+		component: () => import("../views/DomainProviders.vue"),
+		meta: { title: "Domain Providers" },
+	},
+	{
 		path: "/github",
 		name: "GitHubProfiles",
 		component: () => import("../views/GitHubProfiles.vue"),

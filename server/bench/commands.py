@@ -34,6 +34,14 @@ SCOPE_SITE = "site"
 
 VALID_APP = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 VALID_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+#: A hostname. Deliberately its own pattern: VALID_APP rejects the dots, and a
+#: domain reaching the command line unchecked is how `--upload-pack=` style
+#: arguments get in.
+VALID_DOMAIN = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")
+#: on / off, and nothing else.
+VALID_TOGGLE = re.compile(r"^(on|off)$")
+#: A site name is a hostname too, but may be a single label on a dev bench.
+VALID_SITE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 
 
 @dataclass(frozen=True)
@@ -444,7 +452,71 @@ BENCH_COMMANDS = [
 	),
 ]
 
-ALL_COMMANDS = SITE_COMMANDS + BENCH_COMMANDS
+# ---------------------------------------------------------------------------
+# Serving a domain. Four commands, because a DNS record is only the first step
+# and the rest of them are what actually make a site answer to a name.
+# ---------------------------------------------------------------------------
+
+DOMAIN_COMMANDS = [
+	BenchCommand(
+		"bench.add-domain",
+		"Add a domain to a site",
+		# NOTE the `--site` inside the fixed argv, and that this is BENCH-scoped
+		# rather than site-scoped. `bench setup add-domain` takes its own
+		# `--site` option; the global one this app normally uses is rejected
+		# outright — `bench --site x setup ...` fails with "No such option".
+		# Ending the fixed argv with the flag lets the first parameter supply
+		# its value, and the second becomes the positional domain.
+		("setup", "add-domain", "--site"),
+		SCOPE_BENCH,
+		"Tell frappe this site answers to a domain. Without it the domain resolves here and "
+		"frappe serves the default site instead, which looks like a DNS problem and is not.",
+		RISK_ROUTINE,
+		params=(
+			_p("site", "Site", VALID_SITE_NAME, "local.16.server"),
+			_p("domain", "Domain", VALID_DOMAIN, "app.example.com"),
+		),
+		timeout=180,
+	),
+	BenchCommand(
+		"bench.dns-multitenant",
+		"DNS multitenancy",
+		("config", "dns_multitenant"),
+		SCOPE_BENCH,
+		"Serve sites by the hostname asked for rather than always the default site. Off on a "
+		"fresh bench, and bench refuses to set up SSL without it — while exiting 0, so it looks "
+		"like it worked.",
+		RISK_ROUTINE,
+		params=(_p("state", "On or off", VALID_TOGGLE, "on"),),
+		timeout=120,
+	),
+	BenchCommand(
+		"bench.setup-nginx",
+		"Regenerate nginx config",
+		("setup", "nginx", "--yes"),
+		SCOPE_BENCH,
+		"Rewrite this bench's nginx configuration from its current sites and domains. Writes the "
+		"file only; nginx keeps serving the old one until it is reloaded.",
+		RISK_ROUTINE,
+		timeout=180,
+	),
+	BenchCommand(
+		"bench.reload-nginx",
+		"Reload nginx",
+		("setup", "reload-nginx"),
+		SCOPE_BENCH,
+		"Check the generated config and reload the service.",
+		RISK_UNSUPPORTED,
+		unsupported_reason=(
+			"Needs root. This app deliberately runs as the bench user and has no way to escalate, "
+			"which is why it can be given a web interface at all. Run it yourself: "
+			"sudo bench setup reload-nginx"
+		),
+		timeout=120,
+	),
+]
+
+ALL_COMMANDS = SITE_COMMANDS + BENCH_COMMANDS + DOMAIN_COMMANDS
 BY_ID = {c.id: c for c in ALL_COMMANDS}
 
 

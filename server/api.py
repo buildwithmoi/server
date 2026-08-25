@@ -518,6 +518,288 @@ def run_bench_command(
 	return run_install_request(doc.name)
 
 
+@frappe.whitelist()
+def list_domain_providers() -> dict:
+	"""Every stored registrar credential, without the credentials.
+
+	`has_token` rather than the token, for the same reason GitHub Profile does
+	it: this response reaches a browser, and a secret that reaches a browser is
+	in its memory, its devtools and anything that can read either.
+	"""
+	_assert_server_admin()
+
+	from server.domains import registry
+
+	rows = frappe.get_all(
+		"Domain Provider",
+		fields=[
+			"name", "provider_name", "provider", "is_default",
+			"last_verified_at", "zone_count", "verify_error",
+		],
+		order_by="provider_name asc",
+	)
+	for row in rows:
+		row["has_token"] = bool(
+			frappe.utils.password.get_decrypted_password(
+				"Domain Provider", row["name"], "api_token", raise_exception=False
+			)
+		)
+		row["zones"] = frappe.get_all(
+			"Domain Provider Zone",
+			filters={"parent": row["name"], "parenttype": "Domain Provider"},
+			pluck="zone",
+			order_by="idx asc",
+		)
+
+	return {
+		"providers": rows,
+		"specs": [
+			{
+				"name": spec.name,
+				"label": spec.label,
+				"credential_label": spec.credential_label,
+				"docs_url": spec.docs_url,
+				"description": spec.description,
+			}
+			for spec in registry.get_provider_specs()
+		],
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def save_domain_provider(
+	provider_name: str,
+	provider: str,
+	api_token: str | None = None,
+	is_default: bool = False,
+	name: str | None = None,
+) -> dict:
+	"""Create or update a credential.
+
+	An omitted `api_token` LEAVES THE EXISTING ONE ALONE rather than clearing
+	it — the same rule as GitHub Profile, and for the same reason: the browser
+	never receives the token, so it cannot send it back on an edit, and reading
+	"absent" as "delete" would disconnect the provider every time somebody
+	renamed it or ticked the default box.
+	"""
+	_assert_server_admin()
+
+	doc = (
+		frappe.get_doc("Domain Provider", name)
+		if name and frappe.db.exists("Domain Provider", name)
+		else frappe.new_doc("Domain Provider")
+	)
+	doc.provider_name = provider_name
+	doc.provider = provider
+	doc.is_default = 1 if frappe.parse_json(is_default) else 0
+	if api_token:
+		doc.api_token = api_token
+	doc.save()
+	frappe.db.commit()
+	return {"name": doc.name}
+
+
+@frappe.whitelist(methods=["POST"])
+def delete_domain_provider(name: str) -> dict:
+	"""Remove a credential, and the secret with it.
+
+	`remove_encrypted_password` explicitly: deleting the document drops the
+	column, and the encrypted value would survive in `__Auth` — the trap this
+	app documents and has been caught by before.
+	"""
+	_assert_server_admin()
+
+	frappe.utils.password.remove_encrypted_password("Domain Provider", name, "api_token")
+	frappe.delete_doc("Domain Provider", name, ignore_permissions=True)
+	frappe.db.commit()
+	return {"deleted": name}
+
+
+@frappe.whitelist(methods=["POST"])
+def verify_domain_provider(name: str) -> dict:
+	"""Ask the provider what this credential can actually reach.
+
+	A token that authenticates but holds none of the domains you meant is a
+	common and specific mistake, so what comes back is the zone list rather
+	than a tick.
+	"""
+	_assert_server_admin()
+	return frappe.get_doc("Domain Provider", name).verify()
+
+
+@frappe.whitelist(methods=["POST"])
+def point_domain_at_this_host(
+	name: str, domain: str, address: str | None = None, confirm: str | None = None
+) -> dict:
+	"""Create or update the A record for `domain`, pointing here.
+
+	`confirm` must equal the domain. Writing DNS for a live name is not
+	reversible on anybody else's schedule — a wrong record propagates and is
+	cached by resolvers that never asked this app's permission.
+	"""
+	_assert_server_admin()
+
+	from server.bench import ssl as bench_ssl
+	from server.domains import base as domains_base
+	from server.domains import registry
+
+	target = (domain or "").strip().rstrip(".").lower()
+	if not bench_ssl.VALID_DOMAIN.match(target):
+		frappe.throw(f"{domain!r} is not a valid domain name.", title="Not a Domain")
+
+	if (confirm or "").strip().lower() != target:
+		frappe.throw(
+			f"This writes a public DNS record. Type “{target}” to confirm.",
+			title="Confirmation Required",
+		)
+
+	doc = frappe.get_doc("Domain Provider", name)
+	token = doc.get_token() or ""
+
+	zones = doc.zone_names()
+	if not zones:
+		verified = doc.verify()
+		if not verified["ok"]:
+			return {"ok": False, "error": verified["error"]}
+		zones = verified["zones"]
+
+	zone, label = domains_base.split_domain(target, zones)
+	if not zone:
+		return {
+			"ok": False,
+			"error": (
+				f"{target} is not inside any domain this credential manages "
+				f"({', '.join(zones) or 'none'})."
+			),
+		}
+
+	# The address this host is actually reachable on, unless one was given.
+	# Guessing wrong here points a live name at the wrong machine, so the
+	# caller can override it and the answer is reported back either way.
+	chosen = (address or "").strip() or _public_address()
+	if not chosen:
+		return {
+			"ok": False,
+			"error": "Could not work out this host's public address. Supply one explicitly.",
+		}
+
+	record = domains_base.DnsRecord(name=label, content=chosen)
+	result = registry.dispatch(doc.provider, token, "upsert_record", zone=zone, record=record)
+
+	return {
+		"ok": result.ok,
+		"error": result.error,
+		"detail": result.detail,
+		"zone": zone,
+		"label": label,
+		"address": chosen,
+		"domain": target,
+	}
+
+
+def _public_address() -> str:
+	"""The address to point a domain at.
+
+	Prefers a routable address over a private one. A bench behind NAT will
+	report only private addresses, and pointing a public name at 10.x is a
+	mistake worth refusing rather than making — so this returns nothing rather
+	than a private address, and the caller says so.
+	"""
+	import ipaddress
+
+	from server.bench import ssl as bench_ssl
+
+	for candidate in sorted(bench_ssl.local_ips()):
+		try:
+			parsed = ipaddress.ip_address(candidate)
+		except ValueError:
+			continue
+		if parsed.is_global:
+			return candidate
+	return ""
+
+
+@frappe.whitelist()
+def domain_readiness(bench: str, site: str, domain: str) -> dict:
+	"""Everything between a DNS record and the site actually serving that name.
+
+	THE POINT OF THIS ENDPOINT. Creating an A record is the visible step and the
+	smallest one. Frappe also needs the domain added to the site, DNS
+	multitenancy switched on, nginx regenerated and nginx reloaded — and two of
+	those need root, which this app does not have. Reporting only "record
+	created" would leave somebody waiting for a site that is never going to
+	answer.
+
+	Shaped like `ssl.readiness`: every question answered before anything is run,
+	and each failure names the command that fixes it.
+	"""
+	_assert_server_admin()
+
+	from server.bench import ssl as bench_ssl
+
+	bench_doc = frappe.get_doc("Server Bench", bench)
+	target = (domain or "").strip().rstrip(".").lower()
+
+	dns = bench_ssl.dns_check(target) if target else {}
+	multitenant = bench_ssl.is_dns_multitenant(bench_doc.bench_path)
+	sudo_ok = bench_ssl.has_passwordless_sudo()
+	_, existing = bench_ssl.site_domains(bench_doc.bench_path, site)
+
+	checks = [
+		bench_ssl.Check(
+			key="dns",
+			label="Resolves to this host",
+			ok=bool(dns.get("points_here")),
+			detail=dns.get("detail") or "Not resolving here yet. DNS changes take a few minutes.",
+		),
+		bench_ssl.Check(
+			key="site_domain",
+			label="Domain added to the site",
+			ok=target in {d.lower() for d in existing},
+			detail=(
+				"Already added."
+				if target in {d.lower() for d in existing}
+				else f"Frappe will not serve a name it does not know about. Run: "
+				f"bench setup add-domain --site {site} {target}"
+			),
+		),
+		bench_ssl.Check(
+			key="multitenant",
+			label="DNS multitenancy",
+			ok=multitenant,
+			detail=(
+				"Enabled."
+				if multitenant
+				else "Without it every domain on this bench serves the default site. "
+				"Run: bench config dns_multitenant on"
+			),
+		),
+		bench_ssl.Check(
+			key="nginx",
+			label="nginx can be reloaded",
+			ok=sudo_ok,
+			detail=(
+				"Available."
+				if sudo_ok
+				else "Regenerating and reloading nginx needs root, and a background job has no "
+				"terminal to type a password into. Run by hand: bench setup nginx && "
+				"sudo bench setup reload-nginx"
+			),
+			# Advisory rather than blocking: the DNS record and the site
+			# configuration are still worth doing without it, and the operator
+			# finishing the last step by hand is a normal outcome here.
+			blocking=False,
+		),
+	]
+
+	return {
+		"domain": target,
+		"checks": [check.__dict__ for check in checks],
+		"ready": all(check.ok for check in checks if check.blocking),
+		"dns": dns,
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def run_console_command(bench: str, command: str, confirm: str | None = None) -> dict:
 	"""Run an arbitrary command in a bench directory, and record that it happened.

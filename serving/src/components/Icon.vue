@@ -40,6 +40,10 @@ const SHAPES = {
 	// A heartbeat trace: the detectors page is about whether anything is
 	// still running, and this is the shape everyone already reads as "alive".
 	activity: { paths: ["M3 12h4l3 8 4-16 3 8h4"] },
+	// A signpost, not a second globe: "Addresses" already owns the globe two
+	// rows above it in the sidebar, and two identical icons make a nav list
+	// harder to scan than no icons at all.
+	signpost: { paths: ["M12 3v18", "M12 6h7l2 2.5L19 11h-7", "M12 13H5l-2 2.5L5 18h7"] },
 	users: { paths: ["M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19", "M18 14a3.5 3.5 0 0 1 3 3.5V19"], circles: [[10, 8, 3.5], [17.5, 8, 3]] },
 	globe: { paths: ["M2.6 9h18.8", "M2.6 15h18.8", "M12 3a15 15 0 0 1 0 18", "M12 3a15 15 0 0 0 0 18"], circles: [[12, 12, 9]] },
 	sliders: { paths: ["M4 7h10", "M18 7h2", "M4 17h4", "M12 17h8"], circles: [[16, 7, 2], [10, 17, 2]] },

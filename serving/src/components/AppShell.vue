@@ -190,6 +190,7 @@ const nav = [
 	{ name: "Benches", label: "Benches", icon: "layers" },
 	{ name: "Installs", label: "App Installs", icon: "download" },
 	{ name: "GitHubProfiles", label: "GitHub Accounts", icon: "key" },
+	{ name: "DomainProviders", label: "Domain Providers", icon: "signpost" },
 	{ name: "Settings", label: "Settings", icon: "sliders" },
 ];
 

@@ -1,0 +1,112 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:provider_name",
+ "creation": "2026-08-25 21:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "provider_name",
+  "provider",
+  "is_default",
+  "column_break_head",
+  "last_verified_at",
+  "zone_count",
+  "verify_error",
+  "credential_section",
+  "api_token",
+  "zones_section",
+  "zones"
+ ],
+ "fields": [
+  {
+   "fieldname": "provider_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Name",
+   "description": "What to call this credential here — “Hostinger (main account)”. Only a label; the provider is chosen below.",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "provider",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Provider",
+   "options": "Hostinger\nGoDaddy",
+   "description": "Which API this token is for. Each expects a different kind of credential and calls it a different thing, which is why the form names it as that provider names it.",
+   "reqd": 1
+  },
+  {
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "label": "Use by default",
+   "description": "Pre-selected when a domain needs pointing. Setting it here clears it everywhere else — there is only one default."
+  },
+  {"fieldname": "column_break_head", "fieldtype": "Column Break"},
+  {
+   "fieldname": "last_verified_at",
+   "fieldtype": "Datetime",
+   "label": "Last Verified",
+   "description": "When the credential was last known to work. A token that has been revoked keeps working here until something asks the provider, so this is the age of the last real answer.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "zone_count",
+   "fieldtype": "Int",
+   "label": "Domains",
+   "read_only": 1
+  },
+  {
+   "fieldname": "verify_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "description": "Why the last check failed, in the provider's own words where they were useful.",
+   "read_only": 1
+  },
+  {"fieldname": "credential_section", "fieldtype": "Section Break", "label": "Credential"},
+  {
+   "fieldname": "api_token",
+   "fieldtype": "Password",
+   "label": "Token",
+   "description": "Hostinger: an API token from hPanel → API. GoDaddy: a v3 Personal Access Token from developer.godaddy.com with the domains.domain:read and domains.dns:update scopes — NOT the older key and secret, which is deprecated and does not work. Stored encrypted and never sent back to the browser."
+  },
+  {"fieldname": "zones_section", "fieldtype": "Section Break", "label": "Domains"},
+  {
+   "fieldname": "zones",
+   "fieldtype": "Table",
+   "label": "Domains",
+   "options": "Domain Provider Zone",
+   "description": "Filled in by verifying the credential. What this token can actually write to, which is not always what somebody expects it to be.",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-25 21:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "Domain Provider",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "provider_name",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

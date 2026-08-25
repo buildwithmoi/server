@@ -543,6 +543,32 @@ export function runInstallResource() {
 	return createResource({ url: `${M}.run_install_request` });
 }
 
+/* --------------------------------------------------------- domain providers */
+
+export function domainProvidersResource() {
+	return createResource({ url: `${M}.list_domain_providers` });
+}
+
+export function saveDomainProviderResource() {
+	return createResource({ url: `${M}.save_domain_provider` });
+}
+
+export function deleteDomainProviderResource() {
+	return createResource({ url: `${M}.delete_domain_provider` });
+}
+
+export function verifyDomainProviderResource() {
+	return createResource({ url: `${M}.verify_domain_provider` });
+}
+
+export function pointDomainResource() {
+	return createResource({ url: `${M}.point_domain_at_this_host` });
+}
+
+export function domainReadinessResource() {
+	return createResource({ url: `${M}.domain_readiness` });
+}
+
 export function runConsoleResource() {
 	return createResource({ url: `${M}.run_console_command` });
 }
