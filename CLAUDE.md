@@ -110,8 +110,60 @@ The rules that path exists to enforce, each learned from a real failure:
   encrypted backup *before* `bench restore` drops the database — finding out afterwards means an empty
   site and no way back.
 
-`bench/ssl.py` and `bench/restore.py` are frappe-free, like `ssh/parser.py`, so they unit-test with no
-site and no database.
+`bench/ssl.py`, `bench/restore.py`, `bench/backups.py`, `bench/steps.py`, `bench/logs.py`,
+`bench/siteconfig.py` and `system.py` are frappe-free, like `ssh/parser.py`, so they unit-test with no
+site and no database. That is most of the app's logic; keep it that way.
+
+### Steps
+
+Every job announces its plan before it starts and reports which part it is on (`bench/steps.py`,
+stored as JSON on the request's `steps` field, rendered by `JobSteps.vue`). Borrowed from press's
+`AgentJob` + `FoldStep.vue`. It is not decoration: "it failed" plus 900 lines of git output does not
+say *which* part failed, and a restore showing that it is about to take a backup first is only useful
+while there is still time to cancel.
+
+### Things that arrive from a browser
+
+Three separate features take a filesystem path from the client — restore (`restore.is_inside`), the
+log reader (`logs.is_inside`) and backup pruning. All three resolve the path before comparing, because
+`../..` and a planted symlink both defeat a prefix check, and one directory above the logs sits
+`common_site_config.json` with the database credentials in it. Any new path-taking endpoint needs the
+same treatment plus a test that tries to escape.
+
+### Secrets
+
+`Password` fields keep the encrypted value in `__Auth` and leave a `*****` placeholder in the doctype
+column. Clearing the column removes the mask and leaves the secret — `remove_encrypted_password` is
+what actually deletes it. `restore.redact()` produces the copy of an argv that is safe to store and
+display, because `bench restore` only accepts the database root password on the command line.
+`siteconfig.is_secret()` redacts by suffix as well as by name, so a key nobody anticipated is hidden
+by default rather than leaked by omission.
+
+## Alerting
+
+`server/alerts.py`, on the scheduler. Three intrusion patterns (root login, first login from a new
+country, failed-login burst) and disk pressure. Flood control is frappe's `dedupe_on` plus the date
+folded into the subject, which turns "skip duplicates" into "tell me once a day".
+
+Two things that silently broke delivery and will again if changed:
+
+- recipients must be **email addresses**, not User names. Frappe matches `User.email`, and for every
+  ordinary user those are the same string — but `Administrator` is named `Administrator` and has a
+  separate email, so a fresh single-admin server delivered nothing.
+- `notification_self_notify_types = ["Alert"]` in `hooks.py`. Frappe drops a notification whose
+  recipient is also its sender; on that same single-admin server that dropped the rest.
+
+Alerts surface in the SPA sidebar (`AlertsPanel.vue`), not only in the desk at `/app` — an alert
+nobody looks at is the same as no alert.
+
+## Server health
+
+`server/system.py` reads `/proc` and `shutil.disk_usage`; no psutil, no dependency. Load is reported
+per CPU because 8 is idle on 16 cores and on fire on 2, and memory uses `MemAvailable` rather than
+`MemFree` (which excludes the page cache and makes a healthy machine look full). Disk is the one that
+matters: it fills gradually, takes every site down at once, and the cause is nearly always backups —
+so `backup_usage()` names which site is responsible, and `bench/backups.py` prunes them under rules
+that cannot be argued below (`MIN_KEEP`, `MIN_AGE_HOURS`).
 
 ## Conventions
 
