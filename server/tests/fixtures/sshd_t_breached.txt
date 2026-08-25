@@ -1,0 +1,24 @@
+port 22
+addressfamily any
+listenaddress 0.0.0.0:22
+usepam yes
+logingracetime 120
+maxauthtries 6
+permitrootlogin yes
+pubkeyauthentication yes
+passwordauthentication yes
+kbdinteractiveauthentication yes
+permitemptypasswords yes
+permituserenvironment yes
+gatewayports yes
+allowagentforwarding yes
+allowtcpforwarding yes
+x11forwarding yes
+permittunnel yes
+loglevel QUIET
+syslogfacility AUTH
+authorizedkeysfile .ssh/authorized_keys /etc/ssh/authorized_keys_global
+ciphers chacha20-poly1305@openssh.com,aes128-cbc,3des-cbc
+macs hmac-md5,hmac-sha1
+kexalgorithms diffie-hellman-group1-sha1,curve25519-sha256
+subsystem sftp /usr/lib/openssh/sftp-server

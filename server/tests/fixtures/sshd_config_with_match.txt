@@ -1,0 +1,16 @@
+# Managed by hand. The top of this file looks hardened.
+Include /etc/ssh/sshd_config.d/*.conf
+Port 22
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+LogLevel VERBOSE
+
+# ... two hundred lines of comments and defaults ...
+
+Match Group deploy
+	PasswordAuthentication yes
+	AllowTcpForwarding yes
+
+Match Address 10.0.0.0/8
+	PermitRootLogin yes

@@ -30,6 +30,7 @@ from server.server.doctype.server_settings.server_settings import get_settings
 #: How often each detector is scheduled, so "late" is derived from its own
 #: cadence rather than one global guess. Must match hooks.py.
 SCHEDULE_SECONDS = {
+	"sshd": 15 * 60,
 	"filesystem": 15 * 60,
 	"filesystem-deep": 24 * 60 * 60,
 	"persistence": 15 * 60,
@@ -285,9 +286,16 @@ ACCOUNT_FIELDS = (
 # not evidence. Findings themselves are always written to the database.
 BEACON_KEY = "server:security:beacons"
 
-# The last firewall ruleset hash, for noticing that the rules changed. Same
-# reasoning as BEACON_KEY: the finding is durable, the comparison basis is not.
-FIREWALL_KEY = "server:security:firewall"
+# The last firewall ruleset hash, for noticing that the rules changed.
+#
+# Deliberately NOT in `frappe.cache`, unlike BEACON_KEY above. A beacon counter
+# is a sensitivity optimisation and losing it costs one scan of memory. This is
+# the comparison basis for detecting that the egress lock was removed — the
+# control that makes "this cannot happen again" true for the provider — so
+# keeping it in redis would mean anyone able to restart redis could erase the
+# app's memory of what the rules used to be, silently, without touching
+# anything this app reports on.
+FIREWALL_KEY = "firewall:ruleset"
 
 
 def accept_baseline() -> dict:
@@ -596,6 +604,7 @@ def scan_network(record_only: bool = False) -> dict:
 	"""Compare listening ports and outbound traffic against what is expected."""
 	from server.security import network, network_rules
 
+	settings = get_settings()
 	snapshot = network.collect()
 	now = frappe.utils.now_datetime()
 	findings: list = []
@@ -610,10 +619,16 @@ def scan_network(record_only: bool = False) -> dict:
 	for process in snapshot.processes:
 		findings.extend(network_rules.judge_process(process))
 
-	previous_firewall = frappe.cache.get_value(FIREWALL_KEY) or ""
-	findings.extend(network_rules.judge_firewall(previous_firewall, snapshot))
+	from server.server.doctype.security_baseline import security_baseline as baseline
+
+	previous_firewall = baseline.get(FIREWALL_KEY)
+	findings.extend(
+		network_rules.judge_firewall(
+			previous_firewall, snapshot, expect_output_drop=settings.expect_egress_filtering
+		)
+	)
 	if snapshot.firewall_hash:
-		frappe.cache.set_value(FIREWALL_KEY, snapshot.firewall_hash)
+		baseline.record(FIREWALL_KEY, snapshot.firewall_hash)
 
 	findings.extend(network_rules.judge_coverage(snapshot.surfaces))
 
@@ -1036,3 +1051,63 @@ def run_filesystem_scan() -> dict:
 def run_filesystem_deep_scan() -> dict:
 	"""The daily sweep, which adds package verification."""
 	return _scheduled("filesystem-deep", lambda record_only: scan_filesystem(record_only, deep=True))
+
+
+# ----------------------------------------------------------------------
+# SSH configuration
+# ----------------------------------------------------------------------
+
+SSHD_BASELINE_PREFIX = "sshd-config:"
+
+
+def scan_sshd(record_only: bool = False) -> dict:
+	"""Check what sshd is actually configured to do, and whether it moved.
+
+	This is the detector aimed at the cause of the incident rather than its
+	symptoms: the breached host accepted passwords, and every other detector in
+	this app watches for what somebody does after getting in.
+	"""
+	from server.security import sshd, sshd_rules
+	from server.server.doctype.security_baseline import security_baseline as baseline
+
+	snapshot = sshd.collect()
+	previous = baseline.get_many(SSHD_BASELINE_PREFIX)
+	findings = sshd_rules.judge(snapshot, previous)
+
+	# Record after judging, so a change is reported exactly once.
+	for path, digest in snapshot.file_hashes.items():
+		baseline.record(f"{SSHD_BASELINE_PREFIX}{path}", digest)
+	gone = set(previous) - set(snapshot.file_hashes)
+	# Only forget a file when the configuration was actually readable this
+	# time. If `sshd -T` and the files were ALL unreadable, everything looks
+	# removed — and forgetting the baselines would turn one permissions
+	# problem into a permanent inability to detect the next real removal.
+	if snapshot.file_hashes:
+		baseline.forget([f"{SSHD_BASELINE_PREFIX}{path}" for path in gone])
+
+	raised = []
+	if not record_only:
+		for finding in findings:
+			name = raise_event(
+				finding.severity,
+				finding.category,
+				finding.subject,
+				finding.detail,
+				finding.runbook,
+			)
+			if name:
+				raised.append(name)
+				_notify(name)
+
+	frappe.db.commit()
+	return {
+		"settings": len(snapshot.effective),
+		"match_blocks": len(snapshot.match_blocks),
+		"files": len(snapshot.file_hashes),
+		"findings": len(findings),
+		"raised": len(raised),
+	}
+
+
+def run_sshd_scan() -> dict:
+	return _scheduled("sshd", scan_sshd)

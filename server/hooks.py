@@ -221,7 +221,14 @@ scheduler_events = {
 		# Setuid binaries, temp-directory droppers and world-writable system
 		# files: 0.8 seconds measured, so it rides the ordinary schedule.
 		# `dpkg --verify` is the expensive half and runs daily instead.
-		"7-59/15 * * * *": ["server.security.watch.run_filesystem_scan"],
+		"7-59/15 * * * *": [
+			"server.security.watch.run_filesystem_scan",
+			# What sshd is actually configured to do. This is the detector
+			# aimed at the CAUSE of the incident rather than its symptoms —
+			# the breached host accepted passwords, and everything else here
+			# watches for what somebody does after getting in.
+			"server.security.watch.run_sshd_scan",
+		],
 	},
 	"daily": [
 		# `dpkg --verify` re-hashes every file every installed package owns:

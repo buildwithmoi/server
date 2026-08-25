@@ -1,0 +1,27 @@
+port 22
+addressfamily any
+listenaddress [::]:22
+usepam yes
+logingracetime 60
+maxauthtries 3
+maxsessions 10
+permitrootlogin no
+pubkeyauthentication yes
+passwordauthentication no
+kbdinteractiveauthentication no
+permitemptypasswords no
+permituserenvironment no
+gatewayports no
+allowagentforwarding no
+allowtcpforwarding no
+x11forwarding no
+disableforwarding yes
+permittunnel no
+loglevel VERBOSE
+syslogfacility AUTH
+authorizedkeysfile .ssh/authorized_keys
+allowusers patoo
+ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com
+macs hmac-sha2-512-etm@openssh.com
+kexalgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256
+subsystem sftp /usr/lib/openssh/sftp-server

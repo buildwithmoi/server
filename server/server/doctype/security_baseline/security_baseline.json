@@ -1,0 +1,81 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:baseline_key",
+ "creation": "2026-08-25 18:40:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "baseline_key",
+  "value_hash",
+  "cb_1",
+  "first_seen",
+  "last_seen",
+  "sec_detail",
+  "detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "baseline_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Key",
+   "description": "What this is the recorded state of — a config file path, or a named surface such as the firewall ruleset.",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "value_hash",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Value Hash",
+   "description": "SHA-256 of the thing being watched. Only ever a hash: an sshd_config names bastion hosts and account names, and a firewall ruleset names internal addresses. The hash answers “did this change”, and answers nothing else."
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "first_seen",
+   "fieldtype": "Datetime",
+   "label": "First Seen"
+  },
+  {
+   "fieldname": "last_seen",
+   "fieldtype": "Datetime",
+   "label": "Last Seen"
+  },
+  {
+   "fieldname": "sec_detail",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Long Text",
+   "label": "Detail",
+   "description": "Non-secret context, as JSON."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-25 18:40:00.000000",
+ "modified_by": "Administrator",
+ "module": "Server",
+ "name": "Security Baseline",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
