@@ -315,6 +315,21 @@ def _provision_domain(request, bench_path: str, site: str) -> list[str]:
 	return notes
 
 
+def _site_exists_on_disk(bench_doc, site: str) -> bool:
+	"""Whether the site directory is actually there.
+
+	NOT `bench_doc.site_names()`, which comes from the last scan and is stale
+	the moment anything creates a site — including a previous attempt of this
+	same job that died partway. `bench new-site` writes the site directory
+	before it finishes, so a run that failed at the last step leaves a site
+	that the scan does not know about and that `new-site` will then refuse to
+	create again. Asking the filesystem is the only answer that is true now.
+	"""
+	if not site:
+		return False
+	return os.path.isdir(os.path.join(bench_doc.bench_path, "sites", site))
+
+
 def _create_site_for_restore(request, bench_doc, settings, env, step, emit, finish, should_cancel):
 	"""Make an empty site for the dump to land in.
 
@@ -351,17 +366,35 @@ def _create_site_for_restore(request, bench_doc, settings, env, step, emit, fini
 
 	shown = " ".join(restore.redact(argv))
 	emit(f"$ {shown}")
+
+	# Kept so the failure can be explained specifically. `emit` writes to the
+	# job log and returns nothing, so the only way to know WHY new-site refused
+	# is to watch the lines going past.
+	said: list[str] = []
+
+	def watch(line: str) -> None:
+		said.append(line)
+		emit(line)
+
 	code, timed_out = _stream(
-		argv, bench_doc.bench_path, env, settings.get_install_timeout(), emit, should_cancel
+		argv, bench_doc.bench_path, env, settings.get_install_timeout(), watch, should_cancel
 	)
 	if code != 0:
-		return finish(
-			"Failed",
-			exit_code=code,
-			error=_explain_failure(
-				code, timed_out, settings.get_install_timeout(), request, "bench new-site"
-			),
+		explanation = _explain_failure(
+			code, timed_out, settings.get_install_timeout(), request, "bench new-site"
 		)
+		# The specific one worth naming. An earlier attempt that died partway
+		# leaves the site directory behind, and `new-site` then refuses — which
+		# reads as "it is already there, why did you try" rather than "clear up
+		# the wreckage of the last attempt".
+		if any("already exists" in line.lower() for line in said):
+			explanation = (
+				f"{site} already exists on this bench, so it was not created. If it is left over "
+				f"from an attempt that failed, remove it first: "
+				f"bench --site {site} drop-site --db-root-password ... — this app will not drop a "
+				f"database as a side effect of creating one."
+			)
+		return finish("Failed", exit_code=code, error=explanation)
 
 	emit(
 		f"Administrator password for the empty site is {admin_password} — the restore replaces it "
@@ -567,7 +600,7 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 			f"{server.server_name} answered as {check.data.get('hostname', 'itself')}.",
 			"A fresh backup will be taken there, pulled here, and only then restored.",
 		]
-		if site not in bench_doc.site_names():
+		if not _site_exists_on_disk(bench_doc, site):
 			notes.append(f"{site} does not exist on this bench yet and will be created first.")
 		return notes
 
@@ -1633,7 +1666,7 @@ def run_install_request(name: str) -> dict:
 						if failure:
 							return failure
 
-					if request.install_on_site not in bench_doc.site_names():
+					if not _site_exists_on_disk(bench_doc, request.install_on_site):
 						failure = _create_site_for_restore(
 							request, bench_doc, settings, env, step, emit, finish, should_cancel
 						)

@@ -469,3 +469,34 @@ class TestCancellationFromAThread(unittest.TestCase):
 		code, _ = installer._stream(["sleep", "60"], "/tmp", ENV, 300, lines.append, flaky)
 		self.assertNotEqual(code, 0, "the job survived a blip but was then never cancellable")
 		self.assertGreaterEqual(len(calls), 3)
+
+
+class TestASiteIsJudgedFromTheDiskNotTheScan(unittest.TestCase):
+	"""`bench new-site` writes the site directory before it finishes.
+
+	So an attempt that died at the last step leaves a site the scan does not
+	know about — and `new-site` then refuses to create it again, while the
+	scanned record still says it is not there. Asking the filesystem is the
+	only answer that is true now rather than true at the last scan.
+	"""
+
+	def test_a_directory_that_exists_counts_as_the_site_existing(self):
+		import os
+		import tempfile
+		from types import SimpleNamespace
+
+		from server.bench import installer
+
+		with tempfile.TemporaryDirectory() as tmp:
+			os.makedirs(os.path.join(tmp, "sites", "half.made"))
+			bench = SimpleNamespace(bench_path=tmp, site_names=lambda: [])
+			self.assertTrue(installer._site_exists_on_disk(bench, "half.made"))
+			self.assertFalse(installer._site_exists_on_disk(bench, "never.made"))
+
+	def test_an_empty_name_is_not_a_site(self):
+		from types import SimpleNamespace
+
+		from server.bench import installer
+
+		bench = SimpleNamespace(bench_path="/tmp", site_names=lambda: [])
+		self.assertFalse(installer._site_exists_on_disk(bench, ""))
