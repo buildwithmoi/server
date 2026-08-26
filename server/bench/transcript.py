@@ -66,47 +66,65 @@ def build(request: dict, steps: list[dict] | None = None) -> str:
 		_row("Bench", request.get("provision_bench_name") or request.get("bench")),
 	]
 
-	if request.get("provision_site_name"):
-		lines.append(_row("Site", request["provision_site_name"]))
-	if request.get("provision_frappe_version"):
-		lines.append(_row("Frappe", f"version-{request['provision_frappe_version']}"))
-	if request.get("provision_port_index"):
-		index = int(request["provision_port_index"])
-		lines.append(_row("Ports", f"web {8000 + index}, socketio {9000 + index}"))
-	if request.get("provision_apps"):
-		apps = [line for line in str(request["provision_apps"]).splitlines() if line.strip()]
-		lines.append(_row("Apps", ", ".join(a.replace("|", ":") for a in apps) or "frappe only"))
-	if request.get("provision_domain"):
-		lines.append(_row("Domain", request["provision_domain"]))
+	# EVERY BLOCK BELOW IS GATED ON THE OPERATION.
+	#
+	# It used to be gated on the field having a value, and a DocType default is
+	# a value. So a Clone transcript — the document somebody pastes into a chat
+	# window to ask what went wrong — carried "Frappe version-16" from the
+	# provisioning default and "Restored from Backup Set / Safety backup taken
+	# first" from the restore ones. Three statements about a job that cloned an
+	# app, all of them false, at the top of the page being read to find out
+	# what happened.
+	operation = request.get("operation") or ""
+
+	if operation == "Provision":
+		if request.get("provision_site_name"):
+			lines.append(_row("Site", request["provision_site_name"]))
+		if request.get("provision_frappe_version"):
+			lines.append(_row("Frappe", f"version-{request['provision_frappe_version']}"))
+		if request.get("provision_port_index"):
+			index = int(request["provision_port_index"])
+			lines.append(_row("Ports", f"web {8000 + index}, socketio {9000 + index}"))
+		if request.get("provision_apps"):
+			apps = [line for line in str(request["provision_apps"]).splitlines() if line.strip()]
+			lines.append(_row("Apps", ", ".join(a.replace("|", ":") for a in apps) or "frappe only"))
+		if request.get("provision_domain"):
+			lines.append(_row("Domain", request["provision_domain"]))
 
 	# Restores. Which backup, and — the question that matters most when one
 	# goes wrong on a migration — where it came from.
-	if request.get("restore_source"):
-		lines.append(_row("Restored from", request["restore_source"]))
-	if request.get("restore_remote_server"):
-		lines.append(
-			_row(
-				"Source",
-				f"{request['restore_remote_site']} on {request['restore_remote_bench']} "
-				f"({request['restore_remote_server']})",
+	if operation == "Restore":
+		if request.get("restore_from_site"):
+			lines.append(
+				_row("Restored into", f"{request.get('install_on_site')} (created for this)")
 			)
-		)
-	if request.get("restore_backup_key"):
-		lines.append(_row("Backup", request["restore_backup_key"]))
-	for label, field in (
-		("Database file", "restore_database_file"),
-		("Public files", "restore_public_file"),
-		("Private files", "restore_private_file"),
-	):
-		if request.get(field):
-			lines.append(_row(label, request[field]))
-	if request.get("restore_source"):
-		lines.append(
-			_row(
-				"Safety backup",
-				"taken first" if request.get("restore_backup_first") else "NOT taken — turned off",
+			lines.append(_row("Backups from", request["restore_from_site"]))
+		if request.get("restore_source"):
+			lines.append(_row("Restored from", request["restore_source"]))
+		if request.get("restore_remote_server"):
+			lines.append(
+				_row(
+					"Source",
+					f"{request['restore_remote_site']} on {request['restore_remote_bench']} "
+					f"({request['restore_remote_server']})",
+				)
 			)
-		)
+		if request.get("restore_backup_key"):
+			lines.append(_row("Backup", request["restore_backup_key"]))
+		for label, field in (
+			("Database file", "restore_database_file"),
+			("Public files", "restore_public_file"),
+			("Private files", "restore_private_file"),
+		):
+			if request.get(field):
+				lines.append(_row(label, request[field]))
+		if request.get("restore_source"):
+			lines.append(
+				_row(
+					"Safety backup",
+					"taken first" if request.get("restore_backup_first") else "NOT taken — turned off",
+				)
+			)
 
 	lines += [
 		"",

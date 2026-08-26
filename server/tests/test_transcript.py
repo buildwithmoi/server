@@ -127,3 +127,56 @@ class TestFormatting(unittest.TestCase):
 		name = transcript.filename({"provision_bench_name": "a/b c", "name": "AIR-1"})
 		self.assertNotIn("/", name)
 		self.assertNotIn(" ", name)
+
+
+class ADefaultIsNotAFact(unittest.TestCase):
+	"""The header stated three things about a job that did none of them.
+
+	Every block used to be gated on the field having a value — and a DocType
+	default IS a value. So a Clone transcript, which is the document somebody
+	pastes into a chat window to ask what went wrong, carried "Frappe
+	version-16" from the provisioning default and "Restored from Backup Set /
+	Safety backup taken first" from the restore ones. At the top of the page
+	being read to find out what happened.
+	"""
+
+	CLONE = {
+		"name": "AIR-00003",
+		"operation": "Clone",
+		"bench": "frappe-bench-senchi",
+		"app_name": "cs_hrms",
+		"status": "Failed",
+		"exit_code": 1,
+		# Present because the DocType declares them, not because anything
+		# restored or provisioned.
+		"provision_frappe_version": "16",
+		"restore_source": "Backup Set",
+		"restore_backup_first": 1,
+	}
+
+	def test_a_clone_says_nothing_about_restoring(self):
+		text = transcript.build(self.CLONE, [])
+		self.assertNotIn("Restored from", text)
+		self.assertNotIn("Safety backup", text)
+
+	def test_a_clone_says_nothing_about_provisioning(self):
+		self.assertNotIn("version-16", transcript.build(self.CLONE, []))
+
+	def test_a_restore_still_says_all_of_it(self):
+		restore = dict(self.CLONE, operation="Restore", install_on_site="senchi.example.com")
+		text = transcript.build(restore, [])
+		self.assertIn("Restored from", text)
+		self.assertIn("Safety backup", text)
+
+	def test_a_renamed_restore_names_both_sites(self):
+		# The question a log of a renamed restore has to answer first: whose
+		# backup went where.
+		renamed = dict(
+			self.CLONE,
+			operation="Restore",
+			install_on_site="test.senchi.example.com",
+			restore_from_site="senchi.example.com",
+		)
+		text = transcript.build(renamed, [])
+		self.assertIn("test.senchi.example.com (created for this)", text)
+		self.assertIn("Backups from", text)
