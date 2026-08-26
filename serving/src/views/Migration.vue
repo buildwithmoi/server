@@ -41,13 +41,29 @@
 					<span class="u-mono text-[11.5px] text-[var(--ink-faint)]">{{ action.kind }}</span>
 
 					<span class="ml-auto flex items-center gap-3">
+						<!--
+							Straight to the job, not to the list page that
+							happens to carry its operation. A clone made by a
+							migration is an App Install, a bench build is a
+							Deployment and a site move is a Restoration — three
+							different pages, and sending all of them to one of
+							the three is how "click the failing step" opened a
+							page with nothing on it.
+						-->
 						<RouterLink
 							v-if="jobFor(i)"
-							:to="{ name: jobRoute(action), params: {} }"
-							class="text-[11.5px] text-[var(--ink-faint)] underline-offset-2 hover:underline"
-						>{{ jobFor(i).status }}</RouterLink>
+							:to="{ name: jobRoute(action), query: { job: jobFor(i).name } }"
+							class="text-[11.5px] underline-offset-2 hover:underline"
+							:class="failed(i) ? 'u-danger' : 'text-[var(--ink-faint)]'"
+						>{{ jobFor(i).status }} — read the log</RouterLink>
 						<span v-else class="text-[11.5px] text-[var(--ink-faint)]">{{ markFor(i).label }}</span>
 					</span>
+
+					<!-- The reason, on the page that shows it stopping. -->
+					<p v-if="failed(i) && jobFor(i).error_summary"
+					   class="u-note u-note-danger w-full text-[12px] leading-relaxed">
+						{{ jobFor(i).error_summary }}
+					</p>
 				</li>
 			</ol>
 		</template>
@@ -96,8 +112,19 @@ function jobFor(index) {
 	return (data.value?.jobs || [])[index];
 }
 
+const ROUTE_FOR_KIND = {
+	restore: "RestoreLogs",
+	provision: "DeploymentLogs",
+	clone: "InstallLogs",
+};
+
 function jobRoute(action) {
-	return action.kind === "restore" ? "RestoreLogs" : "DeploymentLogs";
+	return ROUTE_FOR_KIND[action.kind] || "Installs";
+}
+
+function failed(index) {
+	const job = jobFor(index);
+	return Boolean(job) && !["Success", "Queued", "Running", "Completed With Warnings"].includes(job.status);
 }
 
 function markFor(index) {

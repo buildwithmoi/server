@@ -198,6 +198,11 @@ scheduler_events = {
 		# indexed range scan that almost always returns nothing.
 		"*/10 * * * *": [
 			"server.bench.installer.reap_stale_requests",
+			# A migration whose job finished without managing to tell it. The
+			# advance is wrapped so it cannot raise out of a failing job, which
+			# means a failure to advance leaves the chain saying Running for
+			# ever with no button to continue it.
+			"server.remote.runner.reconcile_migrations",
 			# Watching the watcher, and pushing anything the collector missed.
 			"server.security.watch.check_detectors_are_running",
 			"server.security.forward.retry_pending",

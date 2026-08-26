@@ -681,9 +681,43 @@ def bench_migration(name: str) -> dict:
 	jobs = frappe.get_all(
 		"App Install Request",
 		filters={"migration": name},
-		fields=["name", "operation", "app_name", "status", "started_at", "finished_at"],
+		fields=[
+			"name", "operation", "app_name", "status", "started_at", "finished_at",
+			# Why it stopped, on the page that shows it stopping. Without these
+			# the migration view could say "Failed" and nothing else, and the
+			# job holding the reason was three pages away — on whichever log
+			# page happens to carry that operation.
+			"error_summary", "exit_code", "bench", "install_on_site",
+		],
 		order_by="creation asc",
 	)
+	# A migration that says Running while its current job has already failed.
+	#
+	# The chain is advanced from `installer.finish`, which calls
+	# `on_job_finished` inside a try/except — Invariant 3 says nothing on the
+	# way out of a job may raise. When that call is the thing that fails, the
+	# job ends Failed, the migration is never told, and it sits at Running for
+	# ever. The only record was a line in a log file nobody reads, and the
+	# operator saw a failure notification over a page that said it was still
+	# going.
+	#
+	# Repaired here, on read, because this is the page where the contradiction
+	# is visible. Deliberately only the half that starts nothing: marking it
+	# Paused is what makes Continue appear.
+	if doc.status == "Running":
+		index = int(doc.current_action or 0)
+		current = jobs[index] if index < len(jobs) else None
+		if current and current["status"] in ("Failed", "Cancelled"):
+			doc.db_set("status", "Paused", update_modified=False)
+			doc.db_set(
+				"notes",
+				f"Stopped at “{doc.describe(index)}” ({current['status']}). "
+				f"Fix it and resume — everything before it is done.",
+				update_modified=False,
+			)
+			frappe.db.commit()
+			doc.reload()
+
 	return {
 		"name": doc.name,
 		"status": doc.status,

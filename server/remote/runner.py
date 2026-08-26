@@ -229,3 +229,53 @@ def on_job_finished(request_name: str, status: str) -> None:
 	migration.db_set("current_action", index + 1, update_modified=False)
 	frappe.db.commit()
 	start_next(migration_name)
+
+
+def reconcile_migrations() -> dict:
+	"""Unstick a migration whose job finished without telling it.
+
+	`on_job_finished` runs inside `installer.finish`, wrapped, because nothing
+	on the way out of a job may raise (Invariant 3). The cost of that wrapping
+	is that when the advance itself fails — a deadlock on the row, a worker
+	killed between the two commits — the job ends and the migration is never
+	told. It then says Running for ever, the Continue button never appears
+	because that only shows for Paused, and the only trace is a line in a log
+	file nobody reads.
+
+	So the state is derived rather than trusted, on a schedule. This is the
+	half that `bench_migration` deliberately does not do: it starts the next
+	job, which is a side effect that has no business happening on a page load.
+	"""
+	repaired = []
+	for row in frappe.get_all("Bench Migration", filters={"status": "Running"}, pluck="name"):
+		try:
+			migration = frappe.get_doc("Bench Migration", row)
+			index = int(migration.current_action or 0)
+			jobs = frappe.get_all(
+				"App Install Request",
+				filters={"migration": row},
+				fields=["name", "status"],
+				order_by="creation asc",
+			)
+			current = jobs[index] if index < len(jobs) else None
+			if not current:
+				# Nothing has been started for the current action. Either it is
+				# about to be, or the start was lost — starting it again is
+				# safe, because start_next refuses when a job already exists.
+				start_next(row)
+				repaired.append(f"{row}: restarted the chain")
+				continue
+
+			if current["status"] in ("Queued", "Running"):
+				continue
+
+			# Terminal. Whatever the outcome, the migration should have been
+			# told about it and was not.
+			on_job_finished(current["name"], current["status"])
+			repaired.append(f"{row}: {current['name']} was {current['status']}")
+		except Exception:  # noqa: BLE001
+			frappe.logger("server").error(f"could not reconcile migration {row}", exc_info=True)
+
+	if repaired:
+		frappe.db.commit()
+	return {"repaired": repaired}

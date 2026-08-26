@@ -14,6 +14,37 @@
 			it carries the commands, the timings and the full output, with nothing trimmed.
 		</p>
 
+		<!--
+			A run opened by name that is not in the list on screen — because it
+			is older than this page, or the status filter excludes it. Without
+			this the panel is attached to a row that is not there, and clicking
+			a failed step showed nothing at all.
+		-->
+		<div v-if="detachedLog" class="mb-4 rounded-lg border border-[var(--ink)] bg-[var(--paper)] p-3">
+			<div class="mb-3 flex flex-wrap items-center gap-2">
+				<OutcomeMark
+					:outcome="outcomeOf(detachedLog.request?.status)"
+					:label="detachedLog.request?.status || ''"
+				/>
+				<span class="u-mono text-[13px]">
+					{{ detachedLog.request?.app_name || detachedLog.request?.name }}
+				</span>
+				<span class="text-[11.5px] text-[var(--ink-faint)]">
+					{{ detachedLog.request?.operation }}
+				</span>
+				<Button variant="subtle" class="ml-auto" @click="copy">
+					<template #prefix><Icon name="copy" :size="13" /></template>
+					{{ copied ? "Copied" : "Copy the whole log" }}
+				</Button>
+				<Button variant="ghost" @click="download">
+					<template #prefix><Icon name="download" :size="13" /></template>
+					Download
+				</Button>
+			</div>
+			<JobSteps v-if="detachedLog.steps?.length" :steps="detachedLog.steps" class="mb-3" />
+			<pre class="u-term u-scroll max-h-[26rem] overflow-auto rounded-lg p-3 text-[12px] leading-[1.5]">{{ detachedLog.transcript }}</pre>
+		</div>
+
 		<div v-if="loading && !rows.length" class="space-y-2">
 			<Skeleton v-for="n in 5" :key="n" class="h-14" />
 		</div>
@@ -99,6 +130,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
 import { Button, toast } from "frappe-ui";
 
 import AppShell from "../components/AppShell.vue";
@@ -145,6 +177,7 @@ function headline(row) {
 
 const start = ref(0);
 const status = ref("");
+const route = useRoute();
 const opened = ref("");
 const copied = ref(false);
 
@@ -153,6 +186,12 @@ const total = computed(() => resource.data?.total || 0);
 const loading = computed(() => resource.loading);
 const log = computed(() => detail.data);
 const lineCount = computed(() => (log.value?.transcript || "").split("\n").length);
+
+/** The opened run, when it is not one of the rows currently listed. */
+const detachedLog = computed(() => {
+	if (!opened.value || !log.value) return null;
+	return rows.value.some((r) => r.name === opened.value) ? null : log.value;
+});
 
 const subtitle = computed(() => {
 	if (loading.value && !rows.value.length) return "loading…";
@@ -217,10 +256,37 @@ function download() {
 
 function reload(nextStart = 0) {
 	start.value = nextStart;
-	resource
+	return resource
 		.submit({ kind: props.kind, start: nextStart, page_length: PAGE, status: status.value || null })
 		.catch((error) => toast.error(error.messages?.[0] || "Could not load the deployments"));
 }
 
-onMounted(() => reload(0));
+/**
+ * Arriving with ?job=<name> opens that one straight away.
+ *
+ * Clicking a failed step used to land on a list and leave you to find the run
+ * yourself — and if it was not the newest, or the status filter excluded it,
+ * there was nothing on screen at all.
+ */
+async function openRequested() {
+	const wanted = route.query.job;
+	if (!wanted) return;
+	const row = rows.value.find((r) => r.name === wanted);
+	if (row) {
+		toggle(row);
+		return;
+	}
+	// Not on this page of results. Read it directly rather than paging
+	// backwards through a list looking for it.
+	opened.value = String(wanted);
+	detail.submit({ name: wanted }).catch(() => {
+		toast.error("That run is not in this log — it may belong to another kind of job.");
+		opened.value = "";
+	});
+}
+
+onMounted(async () => {
+	await reload(0);
+	openRequested();
+});
 </script>

@@ -175,12 +175,18 @@ async function refresh(name: string) {
 		// field, so spreading it over the old job left a recovered job labelled
 		// "Lost contact with" for the rest of its life.
 		jobs.value = { ...jobs.value, [name]: { ...job, ...data, lostContact: false } };
-		if (data.is_terminal) {
-			// Leave the result up briefly rather than vanishing the instant it
-			// finishes — a job that completes while you are on another page
-			// would otherwise never be seen at all.
+		// A job that SUCCEEDED clears itself after a moment: the result is
+		// "it worked", and leaving those on screen means the dock fills with
+		// things nobody needs to read.
+		//
+		// A job that FAILED stays until it is dismissed by hand. It vanished
+		// after twenty seconds, which is long enough to notice a red toast and
+		// not long enough to read it — so the one job whose outcome had to be
+		// read was the one that took itself away, and the operator was left
+		// knowing only that something had gone wrong.
+		if (data.is_terminal && data.status === "Success") {
 			setTimeout(() => {
-				if (jobs.value[name]?.is_terminal && expanded.value !== name) dismiss(name);
+				if (jobs.value[name]?.status === "Success" && expanded.value !== name) dismiss(name);
 			}, LINGER_MS);
 		}
 		lostContact.value.delete(name);
