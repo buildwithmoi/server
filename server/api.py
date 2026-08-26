@@ -568,8 +568,49 @@ FORWARDABLE = frozenset(
 		"server.api.prepare_backup_for_transfer",
 		"server.api.transferable_backups",
 		"server.api.remote_site_readiness",
+		"server.api.plan_bench_migration",
 	}
 )
+
+
+@frappe.whitelist()
+def plan_bench_migration(server: str, remote_bench: str, target_bench: str | None = None) -> dict:
+	"""What moving a whole bench here would involve, before any of it starts.
+
+	Reads the bench there and the bench here and reports the difference: which
+	apps have to be cloned first, which sites would be created and which
+	replaced, and what order to do them in. Runs nothing.
+
+	That separation is the point. Moving eight benches is a sequence of long
+	jobs, and the useful thing is not to start them — it is to see, before
+	starting any, what will be built and what is missing. A migration that
+	stops forty minutes in because one repository is unreachable is the
+	failure this exists to prevent.
+	"""
+	_assert_server_admin()
+
+	from server.remote import migrate
+
+	source = frappe.get_doc("Managed Server", server)
+	answer = source.client().call("server.api.get_bench", {"name": remote_bench})
+	if not answer.ok:
+		frappe.throw(answer.error, title=f"{source.server_name} did not answer")
+
+	target = (target_bench or remote_bench).strip()
+	local = None
+	if frappe.db.exists("Server Bench", target):
+		local = get_bench(target)
+
+	plan = migrate.build(
+		source_server=source.server_name,
+		remote_bench=answer.message or {},
+		local_bench=local,
+		target_bench_name=target,
+	)
+	return {
+		**plan.as_dict(),
+		"order": [s.site_name for s in migrate.order_sites(plan)],
+	}
 
 
 @frappe.whitelist()
