@@ -849,3 +849,11 @@ export function resumeMigrationResource() {
 export function cancelMigrationResource() {
 	return createResource({ url: `${M}.cancel_bench_migration` });
 }
+
+export function crashLogsResource() {
+	return switchable("crash_logs");
+}
+
+export function crashLogResource() {
+	return switchable("crash_log");
+}

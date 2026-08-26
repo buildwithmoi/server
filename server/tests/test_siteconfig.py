@@ -324,3 +324,52 @@ class TestUnsettingFields(unittest.TestCase):
 			make_site(root, {"db_name": "x"})
 			with self.assertRaises(sc.ConfigRefused):
 				sc.write(root, SITE, {"max_file_size": "big"})
+
+
+class TestASecretAfterAFlagIsRedacted(unittest.TestCase):
+	"""The leak the crash log found.
+
+	`scrub` matched `key = value` and nothing else, so
+	`argv = ['bench', 'restore', '--db-root-password', 'admin123']` went
+	through untouched — the key there is `argv`, which is not a secret name.
+
+	That is not a hypothetical shape. frappe records tracebacks WITH LOCAL
+	VARIABLES, and `argv` is a local in the function that runs every bench
+	command, so any crash inside `_stream` would have written the database
+	root password into the Error Log in plain text — where the new Crashes
+	page then offers a Copy button.
+	"""
+
+	def test_a_python_list_repr_is_redacted(self):
+		line = "    argv = ['bench', 'restore', '--db-root-password', 'admin123']"
+		self.assertNotIn("admin123", sc.scrub(line))
+
+	def test_a_double_quoted_list_is_redacted(self):
+		self.assertNotIn("k3y", sc.scrub('["--encryption-key", "k3ymaterial"]'))
+
+	def test_a_plain_command_line_is_redacted(self):
+		line = "bench new-site x --db-root-password admin123 --admin-password s3cret"
+		scrubbed = sc.scrub(line)
+		self.assertNotIn("admin123", scrubbed)
+		self.assertNotIn("s3cret", scrubbed)
+
+	def test_every_secret_flag_this_app_passes_is_covered(self):
+		"""Driven from the list `restore.redact` already uses, so the two
+		cannot drift — one redacts a stored command, the other redacts free
+		text, and a flag on one list but not the other is a hole."""
+		from server.bench import restore
+
+		for flag in restore.SECRET_FLAGS:
+			with self.subTest(flag=flag):
+				self.assertNotIn("s3cret", sc.scrub(f"['{flag}', 's3cret']"))
+
+	def test_a_non_secret_argv_is_left_alone(self):
+		"""Redacting everything after any flag would make logs unreadable."""
+		line = 'argv = ["bench", "--site", "a.test", "list-apps"]'
+		self.assertEqual(sc.scrub(line), line)
+
+	def test_a_flag_shaped_value_is_not_mistaken_for_a_flag(self):
+		"""`--upload-pack=` in a branch name is the RCE this app already
+		guards against elsewhere; it is not a secret and must stay visible."""
+		line = "    branch = '--upload-pack=touch /tmp/x'"
+		self.assertIn("upload-pack", sc.scrub(line))

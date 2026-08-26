@@ -288,6 +288,10 @@ const nav = [
 		children: [
 			{ name: "DeploymentLogs", label: "Bench Deployment", icon: "layers" },
 			{ name: "RestoreLogs", label: "Bench Restoration", icon: "database" },
+			{ name: "InstallLogs", label: "App Installs", icon: "download" },
+			{ name: "SslLogs", label: "SSL Certificates", icon: "lock" },
+			{ name: "CommandLogs", label: "Commands", icon: "terminal" },
+			{ name: "CrashLogs", label: "Crashes", icon: "alert" },
 		],
 	},
 	{

@@ -1192,7 +1192,135 @@ def call_remote(server: str, method: str, args: dict | str | None = None) -> dic
 LOG_KINDS = {
 	"deployment": {"operation": "Provision", "label": "Bench Deployment"},
 	"restore": {"operation": "Restore", "label": "Bench Restoration"},
+	# Every remaining operation gets a page too. They already produce the same
+	# transcript; without a page the only way to read one was the desk, which
+	# is exactly the friction these logs exist to remove.
+	"ssl": {"operation": "SSL", "label": "SSL Certificates"},
+	"install": {"operation": ("Clone", "Pull"), "label": "App Installs"},
+	"command": {"operation": ("Command", "Console"), "label": "Commands"},
 }
+
+
+#: How an Error Log row is recognised as this app's. frappe records every
+#: unhandled exception from every app in one table, and a page showing all of
+#: them would bury the ones that are ours under frappe's own — which are real
+#: but are not what you are here to fix.
+#:
+#: Matched on the TRACEBACK, not on `method`. frappe's `method` column holds a
+#: title rather than a code path — "Filelock: Failed to aquire …", "Page
+#: serving not found" — so filtering on it found five of the twenty-two that
+#: were actually ours. A stack that passes through `apps/server` is this app's,
+#: whatever the row is called.
+OURS = "%apps/server%"
+
+_FRAME = re.compile(r'File "(?P<file>[^"]*apps/server/[^"]*)", line (?P<line>\d+), in (?P<func>\S+)')
+
+
+@frappe.whitelist()
+def crash_logs(start: int = 0, page_length: int = 50, mine_only: int | bool = 1) -> dict:
+	"""Unhandled failures, with the traceback frappe already recorded.
+
+	WHY THIS PAGE EXISTS. Everything else in Logs is a job that ran and
+	reported itself. This is the other kind of failure — the one where
+	something threw where nobody was catching, and the only record is a row in
+	frappe's Error Log at /app/error-log. There were twenty-two of this app's
+	sitting there unreachable when this was written, including the filelock
+	collision and the interlock refusals from building the migration.
+
+	`mine_only` filters to this app by default. frappe logs its own failures in
+	the same table, and while those are real they are not what somebody
+	debugging a deployment is looking for.
+	"""
+	_assert_server_admin()
+
+	filters = {"error": ["like", OURS]} if frappe.parse_json(mine_only) else {}
+
+	rows = frappe.get_all(
+		"Error Log",
+		filters=filters,
+		fields=["name", "creation", "method", "seen"],
+		order_by="creation desc",
+		start=int(start or 0),
+		limit=min(int(page_length or 50), 200),
+	)
+	for row in rows:
+		# A one-line summary for the list. The full traceback is fetched only
+		# when a row is opened — they run to hundreds of lines each, and
+		# sending fifty of them to render a list would be absurd.
+		row["title"] = _crash_title(row["name"])
+
+	return {
+		"rows": rows,
+		"total": frappe.db.count("Error Log", filters),
+		"unseen": frappe.db.count("Error Log", {**filters, "seen": 0}),
+	}
+
+
+def _crash_title(name: str) -> str:
+	"""The exception line, which is what identifies a crash at a glance."""
+	error = frappe.db.get_value("Error Log", name, "error") or ""
+	lines = [line.strip() for line in error.splitlines() if line.strip()]
+	# The last line of a traceback is the exception and its message. Falling
+	# back to the first is for the rows that are not tracebacks at all.
+	for line in reversed(lines):
+		if line and not line.startswith(("File ", "Traceback", "  ")):
+			return line[:200]
+	return (lines[0] if lines else "(empty)")[:200]
+
+
+@frappe.whitelist()
+def crash_log(name: str) -> dict:
+	"""One crash, rendered the same way every other log here is.
+
+	The transcript wrapper is not decoration: it means a traceback is copied
+	out with the same button, in the same shape, as a deployment or a restore —
+	so whoever receives it does not have to be told which kind of log it is.
+	"""
+	_assert_server_admin()
+
+	doc = frappe.get_doc("Error Log", name)
+	body = doc.error or ""
+	# The deepest frame inside this app is what "where" actually means. The
+	# `method` column is a title frappe made up — often the error message
+	# itself — so printing it under a "Where" heading was answering the
+	# question wrongly rather than not answering it.
+	frames = _FRAME.findall(body)
+	where = "—"
+	if frames:
+		path, line_no, func = frames[-1]
+		where = f"{path.split('/apps/')[-1]}:{line_no} in {func}()"
+
+	header = [
+		"─" * 72,
+		f"  {_crash_title(name)}",
+		"─" * 72,
+		"",
+		f"{'Recorded':<18} {doc.creation}",
+		f"{'Where':<18} {where}",
+		f"{'Reported as':<18} {(doc.method or '—')[:90]}",
+		f"{'Host':<18} {os.uname().nodename}",
+		f"{'Reference':<18} {doc.name}",
+		"",
+		"─" * 72,
+		"  Traceback",
+		"─" * 72,
+		"",
+	]
+
+	# Scrubbed on the way out. A traceback prints local variables, and this app
+	# handles database root passwords and API secrets — `siteconfig.scrub` is
+	# the same filter the job logs use, applied here because a crash is the one
+	# place a secret reaches a log without anybody choosing to put it there.
+	safe = "\n".join(bench_siteconfig.scrub(line) for line in body.splitlines())
+
+	return {
+		"name": doc.name,
+		"title": _crash_title(name),
+		"method": doc.method,
+		"creation": str(doc.creation),
+		"transcript": "\n".join(header) + safe + "\n",
+		"filename": f"crash-{str(doc.creation)[:19].replace(' ', '_').replace(':', '')}-{doc.name}.txt",
+	}
 
 
 @frappe.whitelist()
@@ -1211,7 +1339,8 @@ def job_logs(
 	if not shape:
 		frappe.throw(f"There is no {kind!r} log.", title="Unknown Log")
 
-	filters = {"operation": shape["operation"]}
+	wanted = shape["operation"]
+	filters = {"operation": ["in", list(wanted)] if isinstance(wanted, tuple) else wanted}
 	if status:
 		filters["status"] = status
 
@@ -1232,7 +1361,7 @@ def job_logs(
 
 	counts = frappe.get_all(
 		"App Install Request",
-		filters={"operation": shape["operation"]},
+		filters={"operation": ["in", list(wanted)] if isinstance(wanted, tuple) else wanted},
 		fields=["status", {"COUNT": "name", "as": "total"}],
 		group_by="status",
 	)
@@ -1240,6 +1369,7 @@ def job_logs(
 	return {
 		"kind": kind,
 		"label": shape["label"],
+		"kinds": [{"kind": k, "label": v["label"]} for k, v in LOG_KINDS.items()],
 		"rows": rows,
 		"total": frappe.db.count("App Install Request", filters),
 		"by_status": {row.status: row.total for row in counts},

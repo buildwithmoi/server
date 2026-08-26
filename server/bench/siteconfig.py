@@ -176,6 +176,33 @@ _SECRET_LINE = re.compile(
 #: Put back after redaction, so a table row keeps its shape.
 _TRAILING = re.compile(r"(?P<trail>[\"',]?\s*\|?\s*)$")
 
+#: A secret sitting AFTER a command-line flag, rather than after a key name.
+#:
+#: `_SECRET_LINE` matches `password = 'x'` and misses
+#: `argv = ['bench', 'restore', '--db-root-password', 'admin123']` entirely —
+#: the key there is `argv`, which is not a secret name, so the whole line was
+#: passed through untouched. That matters because frappe records tracebacks
+#: WITH LOCAL VARIABLES, and `argv` is a local in the function that runs every
+#: bench command. A crash anywhere inside `_stream` would have written the
+#: database root password into the Error Log in plain text.
+#:
+#: Matched on the flag rather than on the surrounding syntax so it works the
+#: same in a Python list repr, a shell line and a JSON array.
+_SECRET_ARGUMENT = re.compile(
+	r"(?P<flag>--(?:db-root-password|mariadb-root-password|admin-password|encryption-key|password))"
+	# The gap has to allow the flag's OWN closing quote before the separator:
+	# in a Python list repr the text between flag and value is `', '`, and a
+	# pattern that started at the separator matched nothing and let the value
+	# through untouched.
+	r"(?P<gap>[\"']?[\s,=]+[\"']?)(?P<value>[^\"',\]\s]+)",
+	re.IGNORECASE,
+)
+
+
+def _scrub_arguments(line: str) -> str:
+	"""Redact a value that follows a secret command-line flag."""
+	return _SECRET_ARGUMENT.sub(lambda m: f"{m.group('flag')}{m.group('gap')}{REDACTED}", line)
+
 
 def scrub(text: str) -> str:
 	"""Replace the value of any secret-looking key in command output.
@@ -190,6 +217,12 @@ def scrub(text: str) -> str:
 	"""
 
 	def replace_line(line: str) -> str:
+		# Flags first, and unconditionally: a secret after `--db-root-password`
+		# has to go whether or not the line also looks like `key = value`, and
+		# on a line like `argv = [..., '--db-root-password', 'x']` the key is
+		# `argv`, which the check below would pass straight through.
+		line = _scrub_arguments(line)
+
 		match = _SECRET_LINE.match(line)
 		if not match or not is_secret(match["key"]):
 			return line

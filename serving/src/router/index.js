@@ -99,6 +99,33 @@ const routes = [
 		meta: { title: "Bench Deployment" },
 	},
 	{
+		path: "/logs/ssl",
+		name: "SslLogs",
+		component: () => import("../views/JobLogs.vue"),
+		props: { kind: "ssl" },
+		meta: { title: "SSL Certificates" },
+	},
+	{
+		path: "/logs/installs",
+		name: "InstallLogs",
+		component: () => import("../views/JobLogs.vue"),
+		props: { kind: "install" },
+		meta: { title: "App Installs" },
+	},
+	{
+		path: "/logs/commands",
+		name: "CommandLogs",
+		component: () => import("../views/JobLogs.vue"),
+		props: { kind: "command" },
+		meta: { title: "Commands" },
+	},
+	{
+		path: "/logs/crashes",
+		name: "CrashLogs",
+		component: () => import("../views/CrashLogs.vue"),
+		meta: { title: "Crashes" },
+	},
+	{
 		path: "/logs/restores",
 		name: "RestoreLogs",
 		component: () => import("../views/JobLogs.vue"),
