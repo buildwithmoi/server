@@ -160,6 +160,30 @@ found by running it, each after minutes of work had already been spent.
 - **`bench init` and `get-app` both exit non-zero from a trailing `sudo supervisorctl`** on any
   box without passwordless sudo, after the work is done. See the invariant below.
 
+### The node a bench builds with
+
+`bench get-app` runs yarn unless told to skip assets, and yarn runs against
+whatever `node` is first on PATH. The login shell's nvm default here is
+v18.20.8; Frappe v16 declares `"engines": {"node": ">=24"}`. The mismatch fails
+as a `SyntaxError` about `styleText` from inside a dependency, minutes into a
+clone that otherwise worked, with nothing in the message naming node.
+
+`bench/node.py` puts the right one in front, once per job, before any
+subprocess starts. It does **not** run `nvm use`: nvm is a shell function
+sourced from `nvm.sh`, there is nothing to exec, and every job here gets
+`stdin=DEVNULL` and no login shell. The one thing `nvm use` does that matters
+is prepend a version's `bin` to PATH, so that is done directly — no shell, and
+the decision is a plain function over plain data.
+
+The required major is read from the bench's own `apps/frappe/package.json`, not
+from a table: `16 → 24` is true today and was `16 → 20` a year ago. The table
+is the fallback for a bench that does not exist yet, which is provisioning.
+Selection prefers the **exact** major over the newest installed — `>=18` on a
+v15 bench is a floor, not an invitation to move it to 24. When nothing
+installed satisfies it and the node already on PATH does not either, the
+preflight refuses with `nvm install <major>` in the message rather than
+spending the clone first.
+
 ### Steps
 
 Every job announces its plan before it starts and reports which part it is on (`bench/steps.py`,

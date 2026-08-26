@@ -320,6 +320,9 @@ class AppInstallRequest(Document):
 		bench_path = frappe.db.get_value("Server Bench", self.bench, "bench_path") or ""
 		return os.path.join(bench_path, "apps", self.app_name or "")
 
+	def is_clone(self) -> bool:
+		return self.operation == OP_CLONE
+
 	def is_pull(self) -> bool:
 		return self.operation == OP_PULL
 

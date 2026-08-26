@@ -35,7 +35,7 @@ import time
 import frappe
 from frappe.utils.synchronization import LockTimeoutError, filelock
 
-from server.bench import commands, doctor, restore, scanner, siteconfig, ssl
+from server.bench import commands, doctor, node, restore, scanner, siteconfig, ssl
 from server.bench import steps as step_plan
 from server.server.doctype.server_settings.server_settings import get_settings
 
@@ -138,6 +138,15 @@ def _preflight(request, bench_doc, settings, on_step=None) -> list[str]:
 	if not os.path.isfile(bench_exe) or not os.access(bench_exe, os.X_OK):
 		raise InstallAborted(f"{bench_exe} is not an executable file.")
 
+	# Assets are built by node, and the node the shell defaults to is not
+	# necessarily the one this bench's frappe accepts. Refuse here rather than
+	# discovering it from a SyntaxError inside a dependency, minutes into a
+	# clone that had otherwise worked.
+	# Clone only: a pull is `git pull` in the app directory and never reaches
+	# node, and every other operation is further from it still.
+	if request.is_clone() and not request.skip_assets:
+		_assert_node_is_usable(bench_doc.bench_path, None)
+
 	if request.is_command():
 		return _preflight_command(request, bench_doc)
 	if request.is_console():
@@ -149,6 +158,19 @@ def _preflight(request, bench_doc, settings, on_step=None) -> list[str]:
 	if request.is_pull():
 		return _preflight_pull(request)
 	return _preflight_clone(request, bench_doc, on_step)
+
+
+def _assert_node_is_usable(bench_path: str | None, frappe_version: str | None) -> None:
+	"""Stop now if the assets step is going to fail for want of a node.
+
+	Only when we POSITIVELY established that what will run is too old. A node
+	we could not identify is not a refusal — this app runs on machines whose
+	toolchain it did not install, and refusing on an unknown would be this
+	check inventing a failure rather than reporting one.
+	"""
+	_, choice = node.activate(os.environ.copy(), node.required_major(bench_path, frappe_version))
+	if not choice.satisfied:
+		raise InstallAborted(choice.note)
 
 
 def _preflight_command(request, bench_doc) -> list[str]:
@@ -536,6 +558,12 @@ def _preflight_provision(request, settings) -> list[str]:
 	failed = [check for check in checks if check.blocking and not check.ok]
 	if failed:
 		raise InstallAborted("; ".join(f"{check.label}: {check.detail}" for check in failed))
+
+	# There is no bench to ask yet, so the requested frappe version is the only
+	# thing that can name a node major. Only checked when assets are actually
+	# going to be built — a bench init with --skip-assets never runs node.
+	if not request.provision_skip_assets:
+		_assert_node_is_usable(None, str(request.provision_frappe_version or "16"))
 
 	notes = [f"{check.label}: {check.detail}" for check in checks]
 	advisory = [check for check in checks if not check.blocking and not check.ok]
@@ -1411,6 +1439,22 @@ def run_install_request(name: str) -> dict:
 		plan.succeed("access")
 
 		env = settings.get_bench_env()
+
+		# Put the node this bench's frappe asks for in front of whatever the
+		# login shell defaults to. Done once here, so a job that fetches six
+		# apps in a row does it once rather than six times — and done again on
+		# the next job, because an environment does not outlive the process it
+		# was built for. See bench/node.py for why this is not `nvm use`.
+		env, node_choice = node.activate(
+			env,
+			node.required_major(
+				None if request.is_provision() else bench_doc.bench_path,
+				request.provision_frappe_version if request.is_provision() else None,
+			),
+		)
+		if node_choice.note:
+			emit(node_choice.note)
+
 		timeout = settings.get_install_timeout()
 
 		#: Set when the real work succeeded but bench's own post-step did not.
