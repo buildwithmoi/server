@@ -36,10 +36,39 @@
 					them unreachable.
 				-->
 				<template v-if="item.children">
-					<p v-if="!collapsed" class="u-label mt-3 px-2.5 pb-1">{{ item.label }}</p>
+					<!--
+						A disclosure, not a heading. With two groups the labels
+						alone stopped separating them — GitHub Accounts sat
+						directly under the word LOGS and read as a kind of log.
+						A group that opens and closes makes the boundary
+						unambiguous, and keeps a long list short.
+
+						It opens itself when one of its children is the current
+						page, so a reload or a direct link never lands you on a
+						page whose group is shut.
+					-->
+					<button
+						v-if="!collapsed"
+						type="button"
+						class="mt-2 flex items-center gap-2 rounded-md px-2.5 py-[7px] text-left text-[13px] text-[var(--ink-soft)] transition-colors duration-150 hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]"
+						:aria-expanded="isOpen(item)"
+						@click="toggleGroup(item)"
+					>
+						<Icon :name="item.icon" :size="16" class="shrink-0" />
+						<span class="truncate">{{ item.label }}</span>
+						<Icon
+							name="chevron"
+							:size="12"
+							class="ml-auto shrink-0 text-[var(--ink-ghost)] transition-transform duration-200"
+							:class="isOpen(item) ? 'rotate-90' : ''"
+						/>
+					</button>
+					<!-- Collapsed there is no room for a heading, so the
+					     children show as plain icons — hiding them behind a
+					     disclosure nobody can see would make them unreachable. -->
 					<div v-else class="my-1 border-t border-[var(--rule)]" />
 					<RouterLink
-						v-for="child in item.children"
+						v-for="child in (collapsed || isOpen(item) ? item.children : [])"
 						:key="child.name"
 						:to="{ name: child.name }"
 						class="group relative flex items-center gap-2.5 rounded-md py-[7px] text-[13px] transition-colors duration-150"
@@ -48,7 +77,9 @@
 							isActive(child.name)
 								? 'bg-[var(--ink)] font-medium text-[var(--paper)]'
 								: 'text-[var(--ink-soft)] hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]',
-							collapsed ? 'justify-center px-0' : 'px-2.5',
+							// Indented under its group heading, so the nesting is
+							// visible rather than implied by the label above it.
+							collapsed ? 'justify-center px-0' : 'ml-2.5 px-2.5',
 						]"
 						@click="open = false"
 					>
@@ -254,18 +285,52 @@ const nav = [
 	{
 		label: "Logs",
 		icon: "file",
-		// A group, not a destination. More log kinds are coming — SSL,
-		// restores, security scans — and each becomes another child here
-		// rather than another top-level entry in an already long list.
-		children: [{ name: "DeploymentLogs", label: "Bench Deployment", icon: "layers" }],
+		children: [
+			{ name: "DeploymentLogs", label: "Bench Deployment", icon: "layers" },
+			{ name: "RestoreLogs", label: "Bench Restoration", icon: "database" },
+		],
 	},
-	{ name: "GitHubProfiles", label: "GitHub Accounts", icon: "key" },
-	{ name: "DomainProviders", label: "Domain Providers", icon: "signpost" },
-	{ name: "Servers", label: "Servers", icon: "server" },
+	{
+		label: "Masters",
+		icon: "sliders",
+		// The things you configure once and then use everywhere else. They
+		// were top-level and sat directly under the Logs heading, which read
+		// as though a GitHub account were a kind of log.
+		children: [
+			{ name: "GitHubProfiles", label: "GitHub Accounts", icon: "key" },
+			{ name: "DomainProviders", label: "Domain Providers", icon: "signpost" },
+			{ name: "Servers", label: "Servers", icon: "server" },
+		],
+	},
 	{ name: "Settings", label: "Settings", icon: "sliders" },
 ];
 
 const isActive = (name) => route.name === name;
+
+/**
+ * Which nav groups are open. A group holding the current page is always open
+ * regardless of what was clicked — otherwise a reload, or following a link
+ * straight to a page, lands you somewhere whose group is shut and the sidebar
+ * appears not to contain the page you are looking at.
+ */
+const openGroups = ref(new Set());
+
+function hasActiveChild(item) {
+	return (item.children || []).some((child) => isActive(child.name));
+}
+
+function isOpen(item) {
+	return hasActiveChild(item) || openGroups.value.has(item.label);
+}
+
+function toggleGroup(item) {
+	// Closing a group you are inside would hide the page you are on, so that
+	// is left to the disclosure of a different group instead.
+	if (hasActiveChild(item)) return;
+	const next = new Set(openGroups.value);
+	next.has(item.label) ? next.delete(item.label) : next.add(item.label);
+	openGroups.value = next;
+}
 
 function backToLocal() {
 	switchToServer("");

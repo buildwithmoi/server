@@ -779,12 +779,12 @@ export function sshSessionDetailResource() {
 
 /* ------------------------------------------------------------------- logs */
 
-export function deploymentLogsResource() {
-	return switchable("deployment_logs");
+export function jobLogsResource() {
+	return switchable("job_logs");
 }
 
-export function deploymentLogResource() {
-	return switchable("deployment_log");
+export function jobLogResource() {
+	return switchable("job_log");
 }
 
 /* ---------------------------------------------------------------- servers */

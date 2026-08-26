@@ -1,5 +1,5 @@
 <template>
-	<AppShell title="Bench Deployment" :subtitle="subtitle">
+	<AppShell :title="label" :subtitle="subtitle">
 		<template #actions>
 			<select v-model="status" class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]" @change="reload(0)">
 				<option value="">All runs</option>
@@ -10,19 +10,15 @@
 		</template>
 
 		<p class="mb-4 text-[12.5px] leading-relaxed text-[var(--ink-faint)]">
-			Every bench build, with the commands it ran and what they said. Open one to read
-			the whole transcript, or copy it out to send on.
+			{{ blurb }} Open one to read the whole transcript, or copy it out to send on —
+			it carries the commands, the timings and the full output, with nothing trimmed.
 		</p>
 
 		<div v-if="loading && !rows.length" class="space-y-2">
 			<Skeleton v-for="n in 5" :key="n" class="h-14" />
 		</div>
 
-		<EmptyState
-			v-else-if="!rows.length"
-			title="No deployments yet"
-			hint="Building a bench from the Benches page records the whole run here."
-		/>
+		<EmptyState v-else-if="!rows.length" :title="emptyTitle" :hint="emptyHint" />
 
 		<ul v-else class="u-scroll max-h-[calc(100vh-17rem)] space-y-2 overflow-y-auto pr-1">
 			<li
@@ -34,9 +30,10 @@
 					<OutcomeMark :outcome="outcomeOf(row.status)" :label="row.status" class="mt-[2px]" />
 					<div class="min-w-0 flex-1">
 						<p class="text-[13.5px]">
-							<span class="u-mono">{{ row.provision_bench_name || "—" }}</span>
-							<span v-if="row.provision_site_name" class="text-[var(--ink-faint)]">
-								· <span class="u-mono">{{ row.provision_site_name }}</span>
+							<span class="u-mono">{{ headline(row) }}</span>
+							<span v-if="row.restore_remote_server" class="text-[var(--ink-faint)]">
+								← <span class="u-mono">{{ row.restore_remote_site }}</span>
+								on {{ row.restore_remote_server }}
 							</span>
 						</p>
 						<p class="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11.5px] text-[var(--ink-faint)]">
@@ -46,6 +43,7 @@
 							<span>{{ when(row.started_at || row.creation) }}</span>
 							<span v-if="row.duration">took {{ took(row.duration) }}</span>
 							<span v-if="row.provision_frappe_version" class="u-mono">v{{ row.provision_frappe_version }}</span>
+							<span v-if="row.restore_source" class="u-mono">{{ row.restore_source.toLowerCase() }}</span>
 						</p>
 						<p v-if="row.error_summary" class="mt-1 text-[12px] text-[var(--danger)]">
 							{{ row.error_summary }}
@@ -109,12 +107,41 @@ import Icon from "../components/Icon.vue";
 import JobSteps from "../components/JobSteps.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import Skeleton from "../components/Skeleton.vue";
-import { deploymentLogResource, deploymentLogsResource } from "../api";
+import { jobLogResource, jobLogsResource } from "../api";
 
 const PAGE = 50;
 
-const resource = deploymentLogsResource();
-const detail = deploymentLogResource();
+const props = defineProps({
+	// "deployment" or "restore". The two pages differ only in which operation
+	// they list and how a row is titled; everything else — the transcript, the
+	// copy, the download — is deliberately identical.
+	kind: { type: String, default: "deployment" },
+});
+
+const resource = jobLogsResource();
+const detail = jobLogResource();
+
+const label = computed(() => resource.data?.label || (props.kind === "restore" ? "Bench Restoration" : "Bench Deployment"));
+
+const blurb = computed(() =>
+	props.kind === "restore"
+		? "Every site restore, including sites pulled from another server."
+		: "Every bench build, with the commands it ran and what they said.",
+);
+
+const emptyTitle = computed(() =>
+	props.kind === "restore" ? "No restores yet" : "No deployments yet",
+);
+const emptyHint = computed(() =>
+	props.kind === "restore"
+		? "Restoring a site from a bench, from uploaded files, or from another server records the whole run here."
+		: "Building a bench from the Benches page records the whole run here.",
+);
+
+/** What to call a row: the bench being built, or the site being restored. */
+function headline(row) {
+	return row.provision_bench_name || row.install_on_site || row.bench || "—";
+}
 
 const start = ref(0);
 const status = ref("");
@@ -191,7 +218,7 @@ function download() {
 function reload(nextStart = 0) {
 	start.value = nextStart;
 	resource
-		.submit({ start: nextStart, page_length: PAGE, status: status.value || null })
+		.submit({ kind: props.kind, start: nextStart, page_length: PAGE, status: status.value || null })
 		.catch((error) => toast.error(error.messages?.[0] || "Could not load the deployments"));
 }
 

@@ -79,6 +79,35 @@ def build(request: dict, steps: list[dict] | None = None) -> str:
 	if request.get("provision_domain"):
 		lines.append(_row("Domain", request["provision_domain"]))
 
+	# Restores. Which backup, and — the question that matters most when one
+	# goes wrong on a migration — where it came from.
+	if request.get("restore_source"):
+		lines.append(_row("Restored from", request["restore_source"]))
+	if request.get("restore_remote_server"):
+		lines.append(
+			_row(
+				"Source",
+				f"{request['restore_remote_site']} on {request['restore_remote_bench']} "
+				f"({request['restore_remote_server']})",
+			)
+		)
+	if request.get("restore_backup_key"):
+		lines.append(_row("Backup", request["restore_backup_key"]))
+	for label, field in (
+		("Database file", "restore_database_file"),
+		("Public files", "restore_public_file"),
+		("Private files", "restore_private_file"),
+	):
+		if request.get(field):
+			lines.append(_row(label, request[field]))
+	if request.get("restore_source"):
+		lines.append(
+			_row(
+				"Safety backup",
+				"taken first" if request.get("restore_backup_first") else "NOT taken — turned off",
+			)
+		)
+
 	lines += [
 		"",
 		# Who and when are the two questions a log nobody was watching always

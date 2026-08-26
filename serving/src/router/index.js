@@ -88,8 +88,16 @@ const routes = [
 	{
 		path: "/logs/deployments",
 		name: "DeploymentLogs",
-		component: () => import("../views/DeploymentLogs.vue"),
+		component: () => import("../views/JobLogs.vue"),
+		props: { kind: "deployment" },
 		meta: { title: "Bench Deployment" },
+	},
+	{
+		path: "/logs/restores",
+		name: "RestoreLogs",
+		component: () => import("../views/JobLogs.vue"),
+		props: { kind: "restore" },
+		meta: { title: "Bench Restoration" },
 	},
 	{
 		path: "/settings",

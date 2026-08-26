@@ -563,6 +563,8 @@ FORWARDABLE = frozenset(
 		"server.api.get_install_request",
 		"server.api.deployment_logs",
 		"server.api.deployment_log",
+		"server.api.job_logs",
+		"server.api.job_log",
 		"server.api.ssl_readiness",
 		# The two the cross-server restore needs.
 		"server.api.prepare_backup_for_transfer",
@@ -1035,6 +1037,97 @@ def call_remote(server: str, method: str, args: dict | str | None = None) -> dic
 		frappe.throw(result.error, title=f"{doc.server_name} did not answer")
 
 	return {"ok": True, "message": result.message}
+
+
+#: Which operations get a log page of their own, and what to call them. Both
+#: read the same rows through the same renderer — a restore log that formatted
+#: differently from a deployment log would be one more thing to learn when
+#: something has already gone wrong.
+LOG_KINDS = {
+	"deployment": {"operation": "Provision", "label": "Bench Deployment"},
+	"restore": {"operation": "Restore", "label": "Bench Restoration"},
+}
+
+
+@frappe.whitelist()
+def job_logs(
+	kind: str = "deployment", start: int = 0, page_length: int = 50, status: str | None = None
+) -> dict:
+	"""One kind of job, newest first, with who ran it.
+
+	`owner` is why these have a page separate from the Installs list: a
+	deployment or a restore is the job somebody else usually has to read
+	afterwards, and "which of us ran this" is the first question asked.
+	"""
+	_assert_server_admin()
+
+	shape = LOG_KINDS.get(kind)
+	if not shape:
+		frappe.throw(f"There is no {kind!r} log.", title="Unknown Log")
+
+	filters = {"operation": shape["operation"]}
+	if status:
+		filters["status"] = status
+
+	rows = frappe.get_all(
+		"App Install Request",
+		filters=filters,
+		fields=[
+			"name", "owner", "creation", "status", "exit_code", "operation",
+			"bench", "install_on_site", "app_name",
+			"provision_bench_name", "provision_site_name", "provision_frappe_version",
+			"restore_source", "restore_remote_server", "restore_remote_site",
+			"started_at", "finished_at", "duration", "error_summary",
+		],
+		order_by="creation desc",
+		start=int(start or 0),
+		limit=min(int(page_length or 50), 200),
+	)
+
+	counts = frappe.get_all(
+		"App Install Request",
+		filters={"operation": shape["operation"]},
+		fields=["status", {"COUNT": "name", "as": "total"}],
+		group_by="status",
+	)
+
+	return {
+		"kind": kind,
+		"label": shape["label"],
+		"rows": rows,
+		"total": frappe.db.count("App Install Request", filters),
+		"by_status": {row.status: row.total for row in counts},
+	}
+
+
+@frappe.whitelist()
+def job_log(name: str) -> dict:
+	"""One run, as a document that explains itself.
+
+	Returns the transcript already rendered rather than the pieces, so the copy
+	button, the download and anything that later attaches one to an alert all
+	produce identical text.
+	"""
+	_assert_server_admin()
+
+	from server.bench import transcript
+
+	doc = frappe.get_doc("App Install Request", name)
+	data = doc.as_dict()
+	# `as_dict` includes the Password columns, which hold frappe's `*****`
+	# placeholder rather than anything real — but they have no business in a
+	# document built to be pasted into a chat window.
+	for field in doc.SECRET_FIELDS:
+		data.pop(field, None)
+	data["host"] = os.uname().nodename
+
+	steps = frappe.parse_json(doc.steps or "[]")
+	return {
+		"request": data,
+		"steps": steps,
+		"transcript": transcript.build(data, steps),
+		"filename": transcript.filename(data),
+	}
 
 
 @frappe.whitelist()
