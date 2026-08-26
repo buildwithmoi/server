@@ -648,6 +648,22 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 		if not check.ok:
 			raise InstallAborted(f"{server.server_name} is not answering: {check.error}")
 
+		# It answered — but will it DO anything? Taking the backup there runs
+		# `bench backup`, and every endpoint that spawns a process is gated on
+		# that server's own install interlock, which is off by default. Asked
+		# now, because the alternative is finding out from a 403 after the plan
+		# has been announced and the first step has already passed.
+		#
+		# `is False` on purpose: an older remote does not report the field at
+		# all, and absent must not read as off.
+		if check.data.get("installs_allowed") is False:
+			raise InstallAborted(
+				f"{server.server_name} has App Installs switched off, so it will refuse to take "
+				f"the backup. Turn on Allow App Installs in Server Settings on that server — it "
+				f"is the kill switch for everything that runs a command, and it is off until "
+				f"somebody turns it on."
+			)
+
 		notes = [
 			f"Restore {site} from {request.restore_remote_site} on {server.server_name}.",
 			f"{server.server_name} answered as {check.data.get('hostname', 'itself')}.",

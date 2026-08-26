@@ -172,6 +172,20 @@
 					<div v-if="readiness.loading" class="flex items-center gap-2 text-[13px] text-[var(--ink-faint)]">
 						<Spinner class="h-3.5 w-3.5" /> Checking which apps that site needs…
 					</div>
+					<!--
+						The other server's own kill switch. It is off until
+						somebody turns it on, so a server that verifies
+						perfectly still refuses the first request that runs a
+						command — reported by frappe as a 403, which reads as a
+						credentials problem and sends people to check API keys
+						that were working.
+					-->
+					<p v-if="sourceRefuses" class="u-note u-note-danger text-[12.5px] leading-relaxed">
+						<b>{{ remote.server?.label || "That server" }}</b> has App Installs switched off,
+						so it will refuse to take the backup. Turn on <b>Allow App Installs</b> in Server
+						Settings there — it is the kill switch for everything that runs a command.
+					</p>
+
 					<div
 						v-else-if="remoteApps.length"
 						class="rounded-lg border"
@@ -656,6 +670,9 @@ const siteName = computed(() => (renaming.value ? newSite.value : site.value?.va
 const isNewSite = computed(() => Boolean(siteName.value) && !props.sites.includes(siteName.value));
 
 const providers = computed(() => providersRes.data || []);
+
+/** The source server will not run anything for us: its interlock is off. */
+const sourceRefuses = computed(() => readiness.data?.source_installs_allowed === false);
 const siteOptions = computed(() =>
 	props.sites.map((s) => ({
 		label: s,
@@ -846,6 +863,10 @@ const preview = computed(() => {
 });
 
 const canRun = computed(() => {
+	// Not overridable. Unlike a missing app, this is not a judgement call the
+	// operator can take responsibility for — the other server will simply
+	// refuse, and the run would end at its first step.
+	if (sourceRefuses.value) return false;
 	if (!chosen.value || !siteName.value) return false;
 	if (!dbPassword.value) return false;
 	if (chosen.value.encrypted && !encryptionKey.value) return false;

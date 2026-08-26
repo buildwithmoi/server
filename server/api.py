@@ -972,6 +972,12 @@ def remote_site_readiness(server: str, remote_bench: str, remote_site: str, benc
 			}
 		)
 
+	# Whether that server will run anything for us. It is asked here, in the
+	# dialog, rather than being discovered from a 403 after the job has started
+	# and the plan has been shown — the interlock is off by default, so this is
+	# the ordinary case for a server nobody has configured yet, not an edge one.
+	identity = source.client().verify()
+
 	return {
 		"source_server": source.server_name,
 		"remote_bench": remote_bench,
@@ -980,6 +986,10 @@ def remote_site_readiness(server: str, remote_bench: str, remote_site: str, benc
 		"apps": rows,
 		"missing": [r["app_name"] for r in rows if not r["present"]],
 		"different_branch": [r["app_name"] for r in rows if r["present"] and not r["branch_matches"]],
+		# None when the remote is too old to say. Absent must not read as off.
+		"source_installs_allowed": (identity.data or {}).get("installs_allowed")
+		if identity.ok
+		else None,
 	}
 
 
@@ -1221,6 +1231,11 @@ def server_identity() -> dict:
 		"user": frappe.session.user,
 		"benches": frappe.db.count("Server Bench", {"is_active": 1}),
 		"time": str(frappe.utils.now_datetime()),
+		# Whether this machine will actually RUN anything for a caller. Every
+		# endpoint that spawns a process checks it, and it is off by default —
+		# so a server can verify perfectly and then refuse the first real
+		# request, which is a checkbox reported as a credentials problem.
+		"installs_allowed": bool(get_settings().allow_app_install),
 	}
 
 

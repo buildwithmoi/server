@@ -31,6 +31,7 @@ credentials are read from the doctype by the caller.
 from __future__ import annotations
 
 import json
+import re
 import os
 import urllib.error
 import urllib.parse
@@ -278,18 +279,65 @@ def _explain_remote(exc) -> str:
 	except Exception:  # noqa: BLE001
 		body = ""
 
-	if exc.code in (401, 403):
+	said = _remote_said(body)
+
+	# 401 and 403 are DIFFERENT ANSWERS and were reported as the same one.
+	#
+	# 401 is "I do not know you". 403 is "I know exactly who you are and the
+	# answer is no" — which is what frappe returns for every PermissionError,
+	# including the one raised when Allow App Installs is switched off. A
+	# migration was stopped by that checkbox and the message sent its operator
+	# to check API keys that were working perfectly.
+	if exc.code == 401:
 		return (
-			"The remote refused the credentials. Check the API key and secret, and that the "
-			"user they belong to is a System Manager there."
+			"The remote did not accept the API key and secret. Check both, and that the user "
+			"they belong to still exists there."
+			+ (f" It said: {said}" if said else "")
+		)
+	if exc.code == 403:
+		return (
+			# What the remote itself said comes FIRST. It is the only part of
+			# this that knows which of several refusals it was.
+			(f"The remote refused: {said}" if said else "The remote refused the request.")
+			+ " The credentials were accepted — this is a permission, not a login. Check that "
+			"the user they belong to is a System Manager there, and that Allow App Installs is "
+			"on in its Server Settings if this was going to run a command."
 		)
 	if exc.code == 404:
 		return "The remote does not have that endpoint — it may be running an older version of this app."
 
-	message = ""
+	return f"HTTP {exc.code}{': ' + said[:300] if said else ''}"
+
+
+def _remote_said(body: str) -> str:
+	"""frappe's own message for a failure, dug out of whichever field it used.
+
+	It puts the useful sentence in `_server_messages` — a JSON string holding a
+	list of JSON strings — and leaves `exception` as a traceback repr. Reading
+	only `exception` gave "frappe.exceptions.PermissionError" for a refusal
+	whose actual text named the setting to turn on.
+	"""
 	try:
 		payload = json.loads(body)
-		message = payload.get("exception") or payload.get("message") or ""
 	except Exception:  # noqa: BLE001
-		message = body.strip()
-	return f"HTTP {exc.code}{': ' + str(message)[:300] if message else ''}"
+		return body.strip()[:300]
+
+	messages = payload.get("_server_messages")
+	if messages:
+		try:
+			for entry in json.loads(messages):
+				parsed = json.loads(entry) if isinstance(entry, str) else entry
+				text = (parsed.get("message") if isinstance(parsed, dict) else str(parsed)) or ""
+				# Frappe writes these as HTML.
+				text = re.sub(r"<[^>]+>", " ", text)
+				text = " ".join(text.split())
+				if text:
+					return text[:300]
+		except Exception:  # noqa: BLE001
+			pass
+
+	for field in ("message", "exception", "exc_type"):
+		value = payload.get(field)
+		if value:
+			return " ".join(str(value).split())[:300]
+	return ""
