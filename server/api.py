@@ -19,6 +19,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import frappe
+import frappe.utils.password
 from frappe.rate_limiter import rate_limit
 
 from server import dashboard, system
@@ -516,6 +517,412 @@ def run_bench_command(
 	doc.insert()
 	frappe.db.commit()
 	return run_install_request(doc.name)
+
+
+#: Methods this server is willing to forward to another. An allow-list, not a
+#: blocklist: a proxy that forwards whatever it is handed is a remote shell
+#: with extra steps, and this app already has one of those with a confirmation
+#: box in front of it.
+#:
+#: Read methods are here so a switched console can render. Job-STARTING methods
+#: are deliberately absent — `run_provision`, `run_restore`, `run_ssl` and the
+#: terminal are not forwardable, because a destructive action taken against a
+#: machine you only think you are looking at is the exact accident this feature
+#: could otherwise cause. Switch to that server and run it there.
+FORWARDABLE = frozenset(
+	{
+		"server.api.server_identity",
+		"server.api.get_settings_summary",
+		"server.api.health",
+		"server.api.dashboard_summary",
+		"server.api.list_benches",
+		"server.api.get_bench",
+		"server.api.list_bench_apps",
+		"server.api.list_bench_commands",
+		"server.api.list_backups",
+		"server.api.list_restore_files",
+		"server.api.backup_usage",
+		"server.api.backup_plan",
+		"server.api.site_config",
+		"server.api.list_logs",
+		"server.api.read_log",
+		"server.api.security_events",
+		"server.api.security_overview",
+		"server.api.security_inventory",
+		"server.api.ssh_sessions",
+		"server.api.ssh_session_detail",
+		"server.api.auth_events",
+		"server.api.sudo_commands",
+		"server.api.ip_addresses",
+		"server.api.list_install_requests",
+		"server.api.get_install_request",
+		"server.api.deployment_logs",
+		"server.api.deployment_log",
+		"server.api.ssl_readiness",
+		# The two the cross-server restore needs.
+		"server.api.prepare_backup_for_transfer",
+		"server.api.transferable_backups",
+	}
+)
+
+
+@frappe.whitelist()
+def transferable_backups(bench: str, site: str) -> dict:
+	"""What this server could hand to another one. Called BY a remote.
+
+	Reuses the same discovery the local restore picker uses, so a backup that
+	can be restored here is exactly a backup that can be pulled from here —
+	there is no second notion of what counts as a usable set.
+	"""
+	_assert_server_admin()
+
+	bench_doc = frappe.get_doc("Server Bench", bench)
+	if site not in bench_doc.site_names():
+		frappe.throw(f"{site} is not a site on {bench}.", title="Unknown Site")
+
+	sets = bench_restore.list_backups(bench_doc.bench_path, site)
+	return {
+		"host": os.uname().nodename,
+		"bench": bench,
+		"site": site,
+		"backups": [_transferable(b, site) for b in sets],
+	}
+
+
+def _transferable(backup, site: str) -> dict:
+	"""A backup set, plus the size of EACH file in it.
+
+	The set's own `size` is the total across every file, which is the right
+	number for "will this fit on the disk" and the wrong one for "how many
+	bytes should this download be". Using it as the target for a single part
+	leaves the transfer short by exactly the other files — 343 bytes of site
+	config, in the first case that caught this — and the client then reports a
+	perfectly good backup as incomplete.
+	"""
+	parts = {}
+	for part, path in (
+		("database", backup.database),
+		("public", backup.public_files),
+		("private", backup.private_files),
+		("config", backup.site_config),
+	):
+		if path and os.path.isfile(path):
+			parts[part] = {"name": os.path.basename(path), "size": os.path.getsize(path)}
+
+	return {**bench_restore.as_dict(backup, site), "parts": parts}
+
+
+@frappe.whitelist(methods=["POST"])
+def prepare_backup_for_transfer(bench: str, site: str, with_files: int | bool = 1) -> dict:
+	"""Take a fresh backup here so another server can pull it. Called BY a remote.
+
+	A FRESH one rather than the newest existing, because the point of moving a
+	site is to move it as it is now — restoring last night's copy onto a new
+	machine and calling the migration done is how a day of orders disappears.
+
+	This runs synchronously and can take minutes on a large site. That is why
+	`RemoteServer.CALL_TIMEOUT` is three minutes rather than the usual thirty
+	seconds, and why the caller reports it as its own step.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	bench_doc = frappe.get_doc("Server Bench", bench)
+	bench_doc.assert_usable()
+	if site not in bench_doc.site_names():
+		frappe.throw(f"{site} is not a site on {bench}.", title="Unknown Site")
+
+	settings = get_settings()
+	argv = bench_restore.build_backup_argv(
+		settings.bench_executable, site, bool(frappe.parse_json(with_files))
+	)
+
+	import subprocess
+
+	try:
+		result = subprocess.run(  # noqa: S603
+			argv,
+			cwd=bench_doc.bench_path,
+			env=settings.get_bench_env(),
+			stdin=subprocess.DEVNULL,
+			capture_output=True,
+			text=True,
+			timeout=settings.get_install_timeout(),
+			check=False,
+		)
+	except subprocess.TimeoutExpired:
+		frappe.throw(f"The backup of {site} did not finish in time.", title="Backup Timed Out")
+
+	if result.returncode != 0:
+		tail = (result.stdout or result.stderr or "").strip().splitlines()[-6:]
+		frappe.throw(
+			"bench backup failed on the source server: " + " / ".join(tail),
+			title="Backup Failed",
+		)
+
+	sets = bench_restore.list_backups(bench_doc.bench_path, site)
+	if not sets:
+		frappe.throw(f"The backup finished but no set could be found for {site}.", title="Backup Missing")
+
+	newest = sets[0]
+	prepared = _transferable(newest, site)
+	raise_event(
+		"Medium",
+		"transfer",
+		f"A backup of {site} was prepared for another server",
+		f"{frappe.session.user} asked this server for a fresh backup of {site} on {bench}, to be "
+		f"pulled to another machine. Set {newest.key}.",
+		"If you are moving this site, no action. If you did not ask for this, the API credentials "
+		"for this server are in somebody else's hands — revoke that user's key and read the SSH "
+		"and console records around this time.",
+	)
+	frappe.db.commit()
+
+	return {"host": os.uname().nodename, "backup": prepared}
+
+
+@frappe.whitelist()
+def download_backup_file(bench: str, site: str, key: str, part: str = "database"):
+	"""Stream one file out of a backup set. Called BY a remote, supports Range.
+
+	WHY THIS IS SAFE TO EXPOSE, given it serves a database. It is whitelisted,
+	so it is behind the same System Manager check as everything else and needs
+	the API credentials to reach at all; the path is never taken from the
+	caller, only a set key and a named part, both resolved against what this
+	server itself discovered; and every download is recorded.
+
+	Range support is not a nicety. A site backup is gigabytes, moving one
+	between two machines will be interrupted, and without resume an
+	interruption costs the whole transfer rather than the last few seconds.
+	"""
+	_assert_server_admin()
+
+	bench_doc = frappe.get_doc("Server Bench", bench)
+	backup = bench_restore.find(bench_doc.bench_path, site, key)
+
+	path = {
+		"database": backup.database,
+		"public": backup.public_files,
+		"private": backup.private_files,
+		"config": backup.site_config,
+	}.get(part)
+
+	if not path or not os.path.isfile(path):
+		frappe.throw(f"This backup has no {part} file.", title="Nothing To Send")
+
+	# Belt and braces: the path came from our own discovery, but this is the
+	# one endpoint that reads a file off disk on request, so it re-checks that
+	# what it is about to send is inside the bench.
+	if not bench_restore.is_inside(bench_doc.bench_path, path):
+		frappe.throw("That file is not inside the bench.", title="Not Allowed")
+
+	return _send_file_with_range(path)
+
+
+#: The most this endpoint will put in one response. The transfer is driven by
+#: the CLIENT asking for bounded ranges rather than the server streaming an
+#: open-ended one, and that is not a stylistic choice: frappe builds a binary
+#: response by holding `filecontent` in memory, so answering `bytes=0-` for a
+#: four-gigabyte backup would try to allocate four gigabytes on a box with two
+#: free. Bounded ranges cap both sides at this, and give resume for nothing.
+TRANSFER_CHUNK = 8 * 1024 * 1024
+
+
+def _send_file_with_range(path: str):
+	"""Send one bounded slice of a file, as asked for by `Range`.
+
+	WHY THE CLIENT IS TOLD THE SIZE ELSEWHERE, and not by a `Content-Range`
+	header on this response. frappe's `as_binary()` builds a fresh `Response`
+	from `filename` and `filecontent` alone — it discards `http_status_code`
+	and any headers set on `frappe.local.response`. So a 206 and a
+	`Content-Range` set here never reach the wire, and a client trusting them
+	sees a plain 200 whose `Content-Length` is one chunk, concludes it has the
+	whole file, and writes a truncated backup that only fails at restore.
+
+	That is not a hypothetical: it is what the first version of this did.
+
+	The size therefore travels in the JSON metadata the caller already fetches
+	(`transferable_backups` / `prepare_backup_for_transfer`), and the client
+	loops on that until it has every byte. This endpoint just serves the
+	window it was asked for.
+	"""
+	size = os.path.getsize(path)
+	raw = (frappe.request.headers.get("Range") or "").strip() if frappe.request else ""
+	start, requested_end = 0, None
+
+	if raw.startswith("bytes="):
+		spec = raw[6:]
+		if "," in spec:
+			frappe.throw("Only one range at a time.", title="Range Not Supported")
+		begin, _, end = spec.partition("-")
+		try:
+			start = int(begin) if begin else 0
+			requested_end = int(end) if end else None
+		except ValueError:
+			start, requested_end = 0, None
+
+	if start >= size and size:
+		# Nothing left: the caller already has the file. An empty body is the
+		# signal, since a 416 status would be discarded along with everything
+		# else frappe drops from a binary response.
+		frappe.local.response["type"] = "binary"
+		frappe.local.response["filename"] = os.path.basename(path)
+		frappe.local.response["filecontent"] = b""
+		return
+
+	last = size - 1 if size else 0
+	end = min(requested_end if requested_end is not None else start + TRANSFER_CHUNK - 1, last)
+	length = max(0, end - start + 1)
+
+	with open(path, "rb") as handle:
+		handle.seek(start)
+		content = handle.read(length)
+
+	frappe.local.response["type"] = "binary"
+	frappe.local.response["filename"] = os.path.basename(path)
+	frappe.local.response["filecontent"] = content
+
+
+@frappe.whitelist()
+def server_identity() -> dict:
+	"""Who this machine is, for another server checking it can talk to us.
+
+	The one endpoint a remote calls before trusting anything else. It answers
+	"yes, this app is here and your key works" — which frappe's own `ping`
+	cannot, because a frappe site without this app installed answers ping
+	perfectly well and then fails at the first real call.
+	"""
+	_assert_server_admin()
+
+	import server as app
+
+	return {
+		"app": "server",
+		"version": getattr(app, "__version__", "") or "unknown",
+		"hostname": os.uname().nodename,
+		"site": frappe.local.site,
+		"user": frappe.session.user,
+		"benches": frappe.db.count("Server Bench", {"is_active": 1}),
+		"time": str(frappe.utils.now_datetime()),
+	}
+
+
+@frappe.whitelist()
+def list_managed_servers() -> list[dict]:
+	"""Every server in the switcher. Never returns a secret — only that one exists."""
+	_assert_server_admin()
+
+	rows = frappe.get_all(
+		"Managed Server",
+		fields=[
+			"name", "server_name", "base_url", "is_this_server", "verify_tls",
+			"status", "last_verified_at", "remote_hostname", "remote_version", "verify_error",
+			"api_key",
+		],
+		order_by="is_this_server desc, server_name asc",
+	)
+	for row in rows:
+		row["has_secret"] = bool(
+			frappe.utils.password.get_decrypted_password(
+				"Managed Server", row["name"], "api_secret", raise_exception=False
+			)
+		)
+	return rows
+
+
+@frappe.whitelist(methods=["POST"])
+def save_managed_server(
+	name: str | None = None,
+	server_name: str | None = None,
+	base_url: str | None = None,
+	api_key: str | None = None,
+	api_secret: str | None = None,
+	verify_tls: int | bool = 1,
+	is_this_server: int | bool = 0,
+) -> dict:
+	"""Add or update a server.
+
+	A blank secret on an edit means "keep the one you have", never "clear it" —
+	the same rule as the GitHub and DNS credentials, and for the same reason:
+	the form cannot show the existing value, so treating blank as a deletion
+	would silently break the connection on every unrelated edit.
+	"""
+	_assert_server_admin()
+
+	doc = frappe.get_doc("Managed Server", name) if name else frappe.new_doc("Managed Server")
+	doc.server_name = (server_name or doc.server_name or "").strip()
+	doc.base_url = (base_url or "").strip()
+	doc.api_key = (api_key or "").strip()
+	doc.verify_tls = 1 if frappe.parse_json(verify_tls) else 0
+	doc.is_this_server = 1 if frappe.parse_json(is_this_server) else 0
+	if api_secret:
+		doc.api_secret = api_secret
+
+	doc.flags.ignore_permissions = True
+	doc.save()
+	frappe.db.commit()
+	return {"name": doc.name}
+
+
+@frappe.whitelist(methods=["POST"])
+def delete_managed_server(name: str) -> dict:
+	_assert_server_admin()
+
+	frappe.utils.password.remove_encrypted_password("Managed Server", name, "api_secret")
+	frappe.delete_doc("Managed Server", name, ignore_permissions=True)
+	frappe.db.commit()
+	return {"deleted": name}
+
+
+@frappe.whitelist(methods=["POST"])
+def verify_managed_server(name: str) -> dict:
+	"""Can this server reach that one, and are the keys right?"""
+	_assert_server_admin()
+
+	doc = frappe.get_doc("Managed Server", name)
+	if doc.is_this_server:
+		doc.record_check(True, identity=server_identity())
+		return {"ok": True, "identity": server_identity(), "local": True}
+
+	result = doc.client().verify()
+	doc.record_check(result.ok, result.error, result.data if result.ok else {})
+	frappe.db.commit()
+	return {"ok": result.ok, "error": result.error, "identity": result.data if result.ok else {}}
+
+
+@frappe.whitelist()
+def call_remote(server: str, method: str, args: dict | str | None = None) -> dict:
+	"""Forward one read-only call to another server and return its answer.
+
+	The allow-list is the whole security model here. Without it this endpoint
+	would let anyone with a session on THIS machine invoke any whitelisted
+	method on every machine it holds keys for, which is a much larger hole
+	than the one the switcher was meant to fill.
+	"""
+	_assert_server_admin()
+
+	if method not in FORWARDABLE:
+		frappe.throw(
+			f"{method} is not forwarded to other servers. Read-only views are; anything that "
+			f"starts a job is not, so a destructive action cannot be aimed at a machine you only "
+			f"think you are looking at. Switch to that server and run it there.",
+			title="Not Forwardable",
+		)
+
+	doc = frappe.get_doc("Managed Server", server)
+	if doc.is_this_server:
+		# Switching "to" the local machine is a no-op, not a loopback request.
+		return {"ok": True, "message": frappe.call(method, **(frappe.parse_json(args) or {}))}
+
+	values = frappe.parse_json(args) if isinstance(args, str) else (args or {})
+	result = doc.client().call(method, values)
+
+	if not result.ok:
+		doc.record_check(False, result.error)
+		frappe.db.commit()
+		frappe.throw(result.error, title=f"{doc.server_name} did not answer")
+
+	return {"ok": True, "message": result.message}
 
 
 @frappe.whitelist()
