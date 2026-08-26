@@ -85,6 +85,20 @@
 			<Skeleton v-if="loading" height="132px" />
 			<BarTimeline v-else-if="timeline.length" :points="timeline" />
 			<EmptyState v-else title="No activity in this window" icon="gauge" />
+
+			<!-- The first read looks back 24 hours and then follows a cursor, so
+			     on a 7-day chart most of the days were never read. Saying so is
+			     the difference between "nothing happened" and "nobody looked". -->
+			<div v-if="gapDays" class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-[var(--rule)] pt-3">
+				<p class="min-w-0 flex-1 text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+					Nothing was collected before {{ shortDate(collectedFrom) }} — the first read looks back
+					24 hours. The system journal usually holds longer than that.
+				</p>
+				<Button variant="subtle" :loading="acting" @click="readHistory">
+					<template #prefix><Icon name="refresh" :size="13" /></template>
+					Read the last {{ days }} days
+				</Button>
+			</div>
 		</section>
 
 		<div class="mt-3 grid gap-3 lg:grid-cols-2">
@@ -177,7 +191,7 @@ import OutcomeMark from "../components/OutcomeMark.vue";
 import RankBars from "../components/RankBars.vue";
 import Skeleton from "../components/Skeleton.vue";
 import StatCard from "../components/StatCard.vue";
-import { overviewResource, replayFixtureResource, runIngestResource, setMonitoringResource, systemHealthResource } from "../api";
+import { overviewResource, readHistoryResource, replayFixtureResource, runIngestResource, setMonitoringResource, systemHealthResource } from "../api";
 
 const RANGES = [1, 7, 30];
 
@@ -323,6 +337,40 @@ async function copyCommand(text) {
 		setTimeout(() => (copiedCommand.value = false), 2000);
 	} catch {
 		toast.info("Copying was blocked — select the line instead.");
+	}
+}
+
+const collectedFrom = computed(() => overview.value.data?.collected_from || null);
+
+/** Days on the chart that predate anything this machine holds. */
+const gapDays = computed(() => timeline.value.filter((p) => p.collected === false).length);
+
+function shortDate(value) {
+	if (!value) return "";
+	const d = new Date(String(value).replace(" ", "T"));
+	return Number.isNaN(d.getTime())
+		? value
+		: d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/**
+ * Re-read the window from the start rather than from the stored cursor.
+ * Safe to press twice: every row carries a unique dedup hash.
+ */
+async function readHistory() {
+	acting.value = true;
+	try {
+		const result = await readHistoryResource().submit({ hours: days.value * 24 });
+		toast.success(
+			result.inserted
+				? `Recorded ${result.inserted} older events`
+				: "Read the journal; it holds nothing older",
+		);
+		await overview.value.fetch();
+	} catch (error) {
+		toast.error(error.messages?.[0] || "Could not read further back");
+	} finally {
+		acting.value = false;
 	}
 }
 

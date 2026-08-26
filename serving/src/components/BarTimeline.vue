@@ -23,6 +23,19 @@
 			<!-- baseline -->
 			<line :x1="0" :y1="plotH" :x2="width" :y2="plotH" stroke="var(--rule-strong)" stroke-width="1" />
 
+			<!-- Days before ingestion began. A zero bar there is a claim about
+			     a quiet server; the truth is that nobody looked, and the two
+			     used to be drawn identically. Shaded, so the eye reads "no
+			     data" rather than "no activity". -->
+			<g v-for="p in scaled.filter((s) => s.collected === false)" :key="`u-${p.day}`">
+				<rect
+					:x="p.x" :y="0" :width="barW" :height="plotH"
+					fill="var(--ink)" opacity="0.05"
+				>
+					<title>{{ p.day }} — not collected</title>
+				</rect>
+			</g>
+
 			<g v-for="(p, i) in scaled" :key="p.day">
 				<rect
 					:x="p.x" :y="plotH - p.successH - p.failureH"
@@ -53,6 +66,10 @@
 			<span class="inline-flex items-center gap-1.5">
 				<svg width="9" height="9"><rect width="9" height="9" fill="url(#hatch)" stroke="var(--ink)" stroke-width="0.75" /></svg>
 				Succeeded
+			</span>
+			<span v-if="uncollected" class="inline-flex items-center gap-1.5">
+				<svg width="9" height="9"><rect width="9" height="9" fill="var(--ink)" opacity="0.05" /></svg>
+				Not collected
 			</span>
 		</div>
 	</div>
@@ -89,6 +106,8 @@ const scaled = computed(() => {
 		};
 	});
 });
+
+const uncollected = computed(() => props.points.some((p) => p.collected === false));
 
 function shortDay(day) {
 	const d = new Date(day);

@@ -3495,6 +3495,65 @@ def resolve_geolocation(limit: int | None = None, backfill_all: bool = False) ->
 
 #: Only these may be replayed. An unrestricted path here would be an arbitrary
 #: file read dressed up as a feature.
+@frappe.whitelist(methods=["POST"])
+def read_history(hours: int = 168) -> dict:
+	"""Read further back than the first run did.
+
+	The very first read looks back `bootstrap_hours` — 24 by default — and
+	stores a cursor. Everything older than that window is never read, on a
+	journal that on a normal Ubuntu box holds a week or more. The dashboard
+	then drew those days as zeros, which is a claim about a quiet server rather
+	than about an app that did not look.
+
+	SAFE TO REPEAT, and not by luck: every row carries a UNIQUE dedup hash, so
+	re-reading a window already read inserts nothing. That property is what the
+	whole ingest design rests on — a crash between the two commits replays a
+	window too.
+
+	Drains in batches, because `max_records_per_run` is back-pressure against a
+	brute-force burst and a week of one is more than a single batch.
+	"""
+	_assert_server_admin()
+
+	hours = max(1, min(int(hours or 168), 24 * 90))
+	settings = get_settings()
+	if not settings.ssh_monitoring_enabled:
+		frappe.throw("SSH monitoring is switched off.", title="Nothing To Read")
+
+	# Forget where we are, so the next read starts from `hours` ago rather than
+	# from the stored cursor. Everything in between is already held, and the
+	# dedup hash discards it again.
+	for row in frappe.get_all("Server Ingest Checkpoint", pluck="name"):
+		checkpoint = frappe.get_doc("Server Ingest Checkpoint", row)
+		checkpoint.reset_position()
+		# reset_position() only mutates the document — inside the ingest its
+		# caller goes on to save it. Here nothing else would, and without this
+		# the stored cursor survives, `--since` is never passed, and the whole
+		# backfill reads exactly nothing while reporting success.
+		checkpoint.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	inserted = read = batches = 0
+	#: Bounded so a large window cannot loop until the request times out. Six
+	#: batches of 5000 is 30,000 records — past a week of a brute-forced
+	#: server — and the scheduler picks up any remainder on its own.
+	for _ in range(6):
+		result = ingest.run_ingest(since_hours=hours)
+		batches += 1
+		read += int(result.get("read") or 0)
+		inserted += int(result.get("inserted") or 0)
+		if not result.get("read"):
+			break
+
+	return {
+		"hours": hours,
+		"batches": batches,
+		"read": read,
+		"inserted": inserted,
+		"collected_from": dashboard.collected_from(),
+	}
+
+
 REPLAYABLE_FIXTURES = ("auth_rfc3339.log", "auth_classic.log")
 
 

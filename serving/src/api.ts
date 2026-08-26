@@ -678,6 +678,10 @@ export function setMonitoringResource() {
 	return createResource({ url: `${M}.set_monitoring_enabled` });
 }
 
+export function readHistoryResource() {
+	return switchable("read_history");
+}
+
 export function runIngestResource() {
 	return createResource({ url: `${M}.run_ingest_now` });
 }

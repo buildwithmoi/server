@@ -90,10 +90,23 @@ def get_timeline(days: int = 7) -> list[dict]:
 		as_dict=True,
 	)
 
+	# A day before ingestion started is not a quiet day, and drawing it as a
+	# zero is a claim this app cannot support. The first read looks back
+	# `bootstrap_hours` — 24 by default — so on a 7-day chart five of the days
+	# were simply never read, and they rendered exactly like a silent weekend.
+	first = collected_from()
+
 	buckets: dict[str, dict] = {}
 	for offset in range(days, -1, -1):
-		key = str(add_days(now_datetime(), -offset).date())
-		buckets[key] = {"day": key, "success": 0, "failure": 0, "info": 0}
+		day = add_days(now_datetime(), -offset).date()
+		key = str(day)
+		buckets[key] = {
+			"day": key,
+			"success": 0,
+			"failure": 0,
+			"info": 0,
+			"collected": bool(first and day >= first.date()),
+		}
 
 	for row in rows:
 		key = str(row.day)
@@ -101,6 +114,16 @@ def get_timeline(days: int = 7) -> list[dict]:
 			buckets[key][(row.outcome or "info").lower()] = row.n
 
 	return list(buckets.values())
+
+
+def collected_from():
+	"""The oldest event this machine actually holds, or None.
+
+	Used to separate "nothing happened" from "nobody looked", which are the
+	same picture on a bar chart and opposite facts about a server.
+	"""
+	value = frappe.db.sql("SELECT MIN(event_time) FROM `tabSSH Auth Event`")
+	return value[0][0] if value and value[0] else None
 
 
 def get_by_country(days: int = 7, limit: int = 8) -> list[dict]:
@@ -306,4 +329,5 @@ def get_overview(days: int = 7) -> dict:
 		"recent_events": get_recent_events(),
 		"recent_sudo": get_recent_sudo(),
 		"health": get_health(),
+		"collected_from": collected_from(),
 	}

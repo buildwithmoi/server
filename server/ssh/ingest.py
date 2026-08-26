@@ -276,9 +276,12 @@ def ingest_syslog_lines(lines: list[parser.SyslogLine], ingest_source: str) -> I
 # ---------------------------------------------------------------------------
 
 
-def _run_journald(cp, settings) -> tuple[IngestStats, str]:
+def _run_journald(cp, settings, since_hours: int | None = None) -> tuple[IngestStats, str]:
 	limit = int(settings.max_records_per_run or 5000)
-	bootstrap = int(settings.bootstrap_hours or 24)
+	# `since_hours` is the deliberate backfill: read further back than the
+	# ordinary bootstrap, once, because the first run only ever looked back
+	# `bootstrap_hours` and everything older was never read at all.
+	bootstrap = int(since_hours or settings.bootstrap_hours or 24)
 
 	try:
 		records, last_cursor = journal.read_batch(
@@ -393,7 +396,7 @@ def _commit_records(lines: list[parser.SyslogLine | None], ingest_source: str) -
 # ---------------------------------------------------------------------------
 
 
-def run_ingest(source: str | None = None) -> dict:
+def run_ingest(source: str | None = None, since_hours: int | None = None) -> dict:
 	"""Read one batch from the active source and record the outcome.
 
 	Returns a stats dict. Never raises out to the scheduler: an ingest failure
@@ -417,7 +420,7 @@ def run_ingest(source: str | None = None) -> dict:
 	cp = get_checkpoint(detected)
 	try:
 		if detected == checkpoint_module.SOURCE_JOURNALD:
-			stats, status = _run_journald(cp, settings)
+			stats, status = _run_journald(cp, settings, since_hours=since_hours)
 		else:
 			stats, status = _run_authlog(cp, settings)
 	except Exception as exc:
