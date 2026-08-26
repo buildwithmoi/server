@@ -109,7 +109,7 @@
 
 					<p v-for="note in plan.notes" :key="note"
 					   class="u-note text-[12.5px] leading-relaxed"
-					   :class="note.includes('REPLACED') ? 'u-note-danger' : ''">
+					   :class="note.includes('REPLACED') || note.includes('MISMATCH') ? 'u-note-danger' : ''">
 						{{ note }}
 					</p>
 

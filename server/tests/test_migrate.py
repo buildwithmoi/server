@@ -12,7 +12,7 @@ from two bench descriptions and runs nothing.
 
 import unittest
 
-from server.remote import migrate
+from server.remote import migrate, runner
 
 REMOTE = {
 	"name": "fb-16-1",
@@ -133,3 +133,73 @@ class TestAwkwardInput(unittest.TestCase):
 		self.assertIn("missing_apps", data)
 		self.assertTrue(all("action" in a for a in data["apps"]))
 		self.assertTrue(all("action" in s for s in data["sites"]))
+
+
+class MovingOntoABenchThatIsAlreadyHere(unittest.TestCase):
+	"""What "same name" means, which is not one thing.
+
+	A target bench of the same name is USED, not rebuilt: `bench init` is
+	skipped, only missing apps are cloned, and a site of the same name is
+	replaced rather than added. The version of that existing bench is the part
+	nothing else would notice.
+	"""
+
+	REMOTE = {
+		"name": "frappe-bench-senchi",
+		"frappe_branch": "version-15",
+		"apps": [
+			{"app_name": "frappe", "branch": "version-15"},
+			{"app_name": "erpnext", "branch": "version-15"},
+			{"app_name": "hrms", "branch": "version-15"},
+		],
+		"sites": [{"site_name": "senchi.example.com", "installed_apps": ["erpnext", "hrms"]}],
+	}
+
+	def _local(self, **overrides):
+		base = {
+			"name": "frappe-bench-senchi",
+			"frappe_branch": "version-15",
+			"apps": [{"app_name": "erpnext", "branch": "version-15"}],
+			"sites": [{"site_name": "senchi.example.com"}],
+		}
+		base.update(overrides)
+		return base
+
+	def test_an_existing_bench_is_not_rebuilt(self):
+		plan = migrate.build("hetzner", self.REMOTE, self._local(), "frappe-bench-senchi")
+		self.assertTrue(plan.bench_exists)
+		self.assertNotIn(
+			runner.KIND_PROVISION, [a["kind"] for a in runner.build_actions({**plan.as_dict(), "source_server_name": "hetzner"})]
+		)
+
+	def test_only_the_missing_apps_are_cloned(self):
+		plan = migrate.build("hetzner", self.REMOTE, self._local(), "frappe-bench-senchi")
+		cloned = [a["repo"] for a in runner.build_actions({**plan.as_dict(), "source_server_name": "hetzner"}) if a["kind"] == runner.KIND_CLONE]
+		# erpnext is here; frappe is never cloned — it is what a bench IS.
+		self.assertEqual(cloned, ["hrms"])
+
+	def test_a_site_of_the_same_name_is_replaced_and_says_so(self):
+		plan = migrate.build("hetzner", self.REMOTE, self._local(), "frappe-bench-senchi")
+		self.assertEqual(plan.sites[0].action, "replace")
+		self.assertTrue(any("REPLACED" in n for n in plan.notes))
+
+	def test_a_different_major_version_is_reported(self):
+		# Nothing else in the plan would notice. `bench init` is skipped, so
+		# the version is whatever that bench was built as, and a v15 dump in a
+		# v16 bench fails during migrate — after the database is replaced.
+		plan = migrate.build(
+			"hetzner", self.REMOTE, self._local(frappe_branch="version-16"), "frappe-bench-senchi"
+		)
+		self.assertFalse(plan.version_matches)
+		self.assertTrue(any("VERSION MISMATCH" in n for n in plan.notes))
+
+	def test_a_patch_level_difference_is_not_a_mismatch(self):
+		plan = migrate.build(
+			"hetzner", self.REMOTE, self._local(frappe_branch="15.116.0"), "frappe-bench-senchi"
+		)
+		self.assertTrue(plan.version_matches)
+
+	def test_a_bench_being_built_is_never_a_mismatch(self):
+		# It is built to match, by construction.
+		plan = migrate.build("hetzner", self.REMOTE, None, "frappe-bench-new")
+		self.assertTrue(plan.version_matches)

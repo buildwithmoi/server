@@ -32,6 +32,11 @@ from dataclasses import dataclass, field
 EXPANSION = 16
 
 
+def _major(version: str) -> str:
+	"""`15`, `15.116.0` and `version-15` are all the same bench to restore into."""
+	return str(version or "").strip().replace("version-", "").split(".")[0]
+
+
 @dataclass(frozen=True)
 class AppPlan:
 	"""One app the target bench needs before any of these sites can restore."""
@@ -71,6 +76,10 @@ class MigrationPlan:
 	target_bench: str
 	frappe_version: str = ""
 	bench_exists: bool = False
+	#: The frappe version of the bench ALREADY here, when one is. Empty when
+	#: the bench is being built, because then it is built to match by
+	#: construction.
+	local_frappe_version: str = ""
 	apps: tuple[AppPlan, ...] = ()
 	sites: tuple[SitePlan, ...] = ()
 	notes: tuple[str, ...] = ()
@@ -84,6 +93,20 @@ class MigrationPlan:
 		return tuple(a for a in self.apps if a.present and not a.branch_matches)
 
 	@property
+	def version_matches(self) -> bool:
+		"""Same major frappe on both sides.
+
+		Only meaningful for a bench that is already here. Moving a bench onto a
+		name that exists skips `bench init` entirely — so the version is
+		whatever that bench was built as, and nothing else in this plan would
+		notice it is not the source's. A v15 dump restored into a v16 bench
+		fails during migrate, after the database has already been replaced.
+		"""
+		if not self.bench_exists or not self.local_frappe_version or not self.frappe_version:
+			return True
+		return _major(self.local_frappe_version) == _major(self.frappe_version)
+
+	@property
 	def ready(self) -> bool:
 		"""Whether every site could be moved without anything else first."""
 		return self.bench_exists and not self.missing_apps
@@ -94,6 +117,8 @@ class MigrationPlan:
 			"source_bench": self.source_bench,
 			"target_bench": self.target_bench,
 			"frappe_version": self.frappe_version,
+			"local_frappe_version": self.local_frappe_version,
+			"version_matches": self.version_matches,
 			"bench_exists": self.bench_exists,
 			"apps": [{**a.__dict__, "action": a.action} for a in self.apps],
 			"sites": [{**s.__dict__, "apps": list(s.apps), "action": s.action} for s in self.sites],
@@ -145,7 +170,25 @@ def build(
 		installed = tuple(a for a in (site.get("installed_apps") or []) if a)
 		sites.append(SitePlan(site_name=name, apps=installed, exists_here=name in local_sites))
 
+	local_version = str((local_bench or {}).get("frappe_branch") or "").replace("version-", "")
+	remote_version = str(remote_bench.get("frappe_branch") or "").replace("version-", "")
+
 	notes = []
+	if (
+		local_bench
+		and local_version
+		and remote_version
+		and _major(local_version) != _major(remote_version)
+	):
+		# First, because it is the one thing here that cannot be worked around
+		# by continuing. Everything else in this plan is "do some work"; this
+		# is "you are about to put a v15 database into a v16 bench".
+		notes.append(
+			f"VERSION MISMATCH — the bench here is on frappe {local_version} and the one being "
+			f"moved is on {remote_version}. Restoring a site across major versions replaces the "
+			f"database and then fails to migrate it. Move it into a bench on {remote_version}, "
+			f"or upgrade that site on the source server first."
+		)
 	if not local_bench:
 		notes.append(
 			f"{target_bench_name or 'The target bench'} does not exist here yet — it is built first, "
@@ -164,7 +207,8 @@ def build(
 		source_server=source_server,
 		source_bench=remote_bench.get("name") or "",
 		target_bench=target_bench_name or remote_bench.get("name") or "",
-		frappe_version=str(remote_bench.get("frappe_branch") or "").replace("version-", ""),
+		frappe_version=remote_version,
+		local_frappe_version=local_version,
 		bench_exists=bool(local_bench),
 		apps=tuple(apps),
 		sites=tuple(sites),
