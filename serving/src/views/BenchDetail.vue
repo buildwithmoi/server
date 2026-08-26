@@ -318,10 +318,14 @@ const actions = computed(() => [
 	{
 		label: "Restore a site…",
 		icon: "database",
-		description: "Replace a site from one of its backups",
+		description: "From a backup here, or from another server",
 		onClick: () => (showRestore.value = true),
 		danger: true,
-		condition: () => bench.value.exists_on_disk !== false && bench.value.sites.length > 0,
+		// NOT gated on the bench having sites. It was, and that hid this entry
+		// on a freshly built bench — which is the one case where restoring is
+		// the entire point, and where the job already knows how to create the
+		// site before loading the dump into it.
+		condition: () => bench.value.exists_on_disk !== false,
 	},
 	{
 		label: "Rescan this bench",

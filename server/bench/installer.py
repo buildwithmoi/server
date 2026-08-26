@@ -600,10 +600,19 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 	The ordering matters: everything that would leave the site broken is
 	checked before anything that merely fails.
 	"""
+	from server.bench import provision
+
 	site = (request.install_on_site or "").strip()
-	remote = request.restore_source == "Remote Server"
-	if site not in bench_doc.site_names() and not remote:
-		raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
+	# A target that is not here yet is CREATED, whatever the source. That was
+	# only allowed for a remote pull, which made the obvious safe habit
+	# impossible: restore a backup under a temporary name, check it, and only
+	# then swap the names over. Restoring over the live site to find out
+	# whether the backup is any good is exactly the move worth avoiding.
+	if site not in bench_doc.site_names() and not provision.VALID_SITE_NAME.match(site):
+		raise InstallAborted(
+			f"{site!r} is not a site on {bench_doc.name} and is not a usable name for a new one. "
+			"Site names are lowercase letters, digits, dots and hyphens."
+		)
 
 	password = request.get_password("restore_db_password", raise_exception=False)
 
@@ -653,9 +662,15 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 		)
 
 	notes = [f"Restore {site} from {backup.taken_at} ({backup.source} backup)"]
-	mismatch = restore.describe_mismatch(backup, site)
+	# Right-backup-wrong-site is compared against the site the backup CAME
+	# from, not the site it is going into. Under a rename those differ by
+	# design, and comparing against the target would report the deliberate act
+	# as the accident this check exists to catch.
+	mismatch = restore.describe_mismatch(backup, request.backup_site)
 	if mismatch:
 		notes.append(mismatch)
+	if request.backup_site != site:
+		notes.append(f"Restoring {request.backup_site}'s backup into {site}, which is created here.")
 	if not request.restore_backup_first:
 		notes.append("No backup was taken first — this was explicitly turned off.")
 	return notes
@@ -1166,6 +1181,7 @@ def _plan_for(request) -> list:
 			create_site=bool(
 				bench_doc and request.install_on_site not in bench_doc.site_names()
 			),
+			with_domain=bool(request.provision_domain),
 		)
 	if request.is_pull():
 		return step_plan.for_pull()
@@ -1794,6 +1810,14 @@ def run_install_request(name: str) -> dict:
 							exit_code=code,
 							error=_explain_failure(code, timed_out, timeout, request, "bench restore"),
 						)
+
+					# Only once the site is actually up. Pointing a name at a
+					# site that failed to restore sends real traffic at a
+					# half-built one, and the record outlives the mistake.
+					if request.provision_domain:
+						step("domain")
+						for note in _provision_domain(request, bench_doc.bench_path, site):
+							emit(note)
 				elif request.is_pull():
 					step("pull")
 					app = scanner.read_app(request.app_path)

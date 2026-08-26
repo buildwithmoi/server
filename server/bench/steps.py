@@ -303,7 +303,12 @@ def for_ssl(mode: str, dry_run: bool) -> list[Step]:
 	)
 
 
-def for_restore(backup_first: bool, from_remote: bool = False, create_site: bool = False) -> list[Step]:
+def for_restore(
+	backup_first: bool,
+	from_remote: bool = False,
+	create_site: bool = False,
+	with_domain: bool = False,
+) -> list[Step]:
 	specs = [
 		("check", "Check before restoring", "Backup on disk, credentials present, room on the disk."),
 	]
@@ -328,8 +333,15 @@ def for_restore(backup_first: bool, from_remote: bool = False, create_site: bool
 		specs.append(
 			("create", "Create the site here", "bench new-site — an empty site for the dump to land in.")
 		)
-	specs += [
-		("restore", "Restore the site", "bench restore — the database is dropped and reloaded."),
-		RESCAN,
-	]
+	specs.append(
+		("restore", "Restore the site", "bench restore — the database is dropped and reloaded.")
+	)
+	if with_domain:
+		# Last, and after the restore rather than after the create: a record
+		# pointing at a site that failed to restore sends real traffic at a
+		# half-built site.
+		specs.append(
+			("domain", "Point the domain here", "Write the DNS record and say what is left to do.")
+		)
+	specs.append(RESCAN)
 	return make(*specs)

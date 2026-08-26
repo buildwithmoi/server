@@ -25,6 +25,7 @@
   "ssl_dry_run",
   "restore_section",
   "restore_source",
+  "restore_from_site",
   "restore_backup_key",
   "restore_database_file",
   "restore_public_file",
@@ -76,7 +77,7 @@
  "fields": [
   {
    "default": "Clone",
-   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app already there. Command runs one of the catalogued bench commands. SSL issues or renews a Let's Encrypt certificate. They are different enough that the choice is always explicit rather than inferred from which fields happen to be filled in. Console runs an arbitrary command in the bench directory \u2014 the one operation that is not assembled from a fixed argv, which is why every use of it is recorded as a Security Event.",
+   "description": "Clone runs `bench get-app` to bring a repository into the bench for the first time. Pull runs `git pull` inside an app already there. Command runs one of the catalogued bench commands. SSL issues or renews a Let's Encrypt certificate. They are different enough that the choice is always explicit rather than inferred from which fields happen to be filled in. Console runs an arbitrary command in the bench directory — the one operation that is not assembled from a fixed argv, which is why every use of it is recorded as a Security Event.",
    "fieldname": "operation",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -93,7 +94,7 @@
    "label": "Bench",
    "options": "Server Bench",
    "reqd": 0,
-   "description": "Empty only while a Provision request is building the bench it will point at \u2014 every other operation acts on a bench that already exists."
+   "description": "Empty only while a Provision request is building the bench it will point at — every other operation acts on a bench that already exists."
   },
   {
    "fieldname": "column_break_head",
@@ -136,7 +137,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Clone\" && doc.source_type==\"GitHub Profile\"",
-   "description": "Just the repository name, e.g. gh_erp \u2014 not the full URL.",
+   "description": "Just the repository name, e.g. gh_erp — not the full URL.",
    "fieldname": "repo",
    "fieldtype": "Data",
    "label": "Repository"
@@ -212,7 +213,7 @@
   },
   {
    "default": "Draft",
-   "description": "\u201cCompleted With Warnings\u201d means the work was done but the command still exited non-zero. The case this exists for: bench finishes a get-app by calling `sudo supervisorctl status`, which fails on a host with no passwordless sudo \u2014 the app is cloned and installed, and only the cosmetic restart failed. Reporting that as Failed invites a re-run, and a re-run needs --overwrite, which archives the app that was already fine.",
+   "description": "“Completed With Warnings” means the work was done but the command still exited non-zero. The case this exists for: bench finishes a get-app by calling `sudo supervisorctl status`, which fails on a host with no passwordless sudo — the app is cloned and installed, and only the cosmetic restart failed. Reporting that as Failed invites a re-run, and a re-run needs --overwrite, which archives the app that was already fine.",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -222,7 +223,7 @@
    "read_only": 1
   },
   {
-   "description": "The authoritative success signal \u2014 0 succeeded, above 0 the command failed, -1 means it never ran because a pre-flight refused it. stdout and stderr are interleaved in the log for readability, so the log text can never be used to decide whether it worked.",
+   "description": "The authoritative success signal — 0 succeeded, above 0 the command failed, -1 means it never ran because a pre-flight refused it. stdout and stderr are interleaved in the log for readability, so the log text can never be used to decide whether it worked.",
    "fieldname": "exit_code",
    "fieldtype": "Int",
    "label": "Exit Code",
@@ -283,7 +284,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Command\"",
-   "description": "Identifier from the catalogue in server/bench/commands.py. Commands are never assembled from free text \u2014 the argv comes from a fixed entry plus parameters matched against a pattern.",
+   "description": "Identifier from the catalogue in server/bench/commands.py. Commands are never assembled from free text — the argv comes from a fixed entry plus parameters matched against a pattern.",
    "fieldname": "bench_command",
    "fieldtype": "Data",
    "label": "Command",
@@ -314,7 +315,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"SSL\" && doc.ssl_mode==\"Issue Or Reinstall\"",
-   "description": "Leave empty to certify the site's own domain. Set it to certify one of the extra domains already configured for the site \u2014 it must already be listed there, and it must resolve to this server before Let's Encrypt will issue anything.",
+   "description": "Leave empty to certify the site's own domain. Set it to certify one of the extra domains already configured for the site — it must already be listed there, and it must resolve to this server before Let's Encrypt will issue anything.",
    "fieldname": "ssl_domain",
    "fieldtype": "Data",
    "label": "Custom Domain"
@@ -335,7 +336,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source!=\"Chosen Files\"",
-   "description": "Identifies one backup set \u2014 the timestamp and site name frappe shares across the database dump, the files tars and the site_config snapshot. The individual paths are resolved from disk when the job runs, so a set that has been rotated away is caught before anything is dropped rather than after.",
+   "description": "Identifies one backup set — the timestamp and site name frappe shares across the database dump, the files tars and the site_config snapshot. The individual paths are resolved from disk when the job runs, so a set that has been rotated away is caught before anything is dropped rather than after.",
    "fieldname": "restore_backup_key",
    "fieldtype": "Data",
    "label": "Backup Set"
@@ -380,7 +381,7 @@
   },
   {
    "depends_on": "eval:doc.operation==\"Restore\"",
-   "description": "Only for an encrypted backup. It is the `encryption_key` from the site config of the server the backup was taken on \u2014 an encrypted dump cannot be restored without it.",
+   "description": "Only for an encrypted backup. It is the `encryption_key` from the site config of the server the backup was taken on — an encrypted dump cannot be restored without it.",
    "fieldname": "restore_encryption_key",
    "fieldtype": "Password",
    "label": "Backup Encryption Key"
@@ -395,8 +396,16 @@
    "options": "Backup Set\nChosen Files\nRemote Server"
   },
   {
+   "fieldname": "restore_from_site",
+   "fieldtype": "Data",
+   "label": "Backups Come From",
+   "depends_on": "eval:doc.operation=='Restore'",
+   "read_only": 1,
+   "description": "The site whose backup directory holds the files, when that is not the site being restored into. Set when a backup is being brought up under a different name."
+  },
+  {
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
-   "description": "Absolute path to the database dump. Must be inside the bench directory \u2014 restoring from anywhere else on the server is refused, because this path arrives from a browser. Stored as Small Text rather than Data: a real backup path on a bench with a long site name exceeds the 140 characters a Data column holds, and the insert failed before the job could even be queued.",
+   "description": "Absolute path to the database dump. Must be inside the bench directory — restoring from anywhere else on the server is refused, because this path arrives from a browser. Stored as Small Text rather than Data: a real backup path on a bench with a long site name exceeds the 140 characters a Data column holds, and the insert failed before the job could even be queued.",
    "fieldname": "restore_database_file",
    "fieldtype": "Small Text",
    "label": "Database File"
@@ -416,7 +425,7 @@
    "label": "Private Files Tar"
   },
   {
-   "description": "The operation broken into named steps, as JSON. Written by the worker and read by the interface, which folds each step's output underneath it. The complete log is still in Output \u2014 this is the structure over it, so a failure can say which part failed rather than only that something did.",
+   "description": "The operation broken into named steps, as JSON. Written by the worker and read by the interface, which folds each step's output underneath it. The complete log is still in Output — this is the structure over it, so a failure can say which part failed rather than only that something did.",
    "fieldname": "steps",
    "fieldtype": "Code",
    "label": "Steps",
@@ -475,7 +484,7 @@
    "label": "Apps",
    "depends_on": "eval:doc.operation==\"Provision\"",
    "read_only": 1,
-   "description": "One per line, as profile|repo|branch. Fetched in order, then installed on the site in the same order \u2014 an app that depends on another has to come after it."
+   "description": "One per line, as profile|repo|branch. Fetched in order, then installed on the site in the same order — an app that depends on another has to come after it."
   },
   {
    "fieldname": "provision_port_index",
@@ -530,7 +539,7 @@
    "options": "Managed Server",
    "label": "From Server",
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Remote Server\"",
-   "description": "The machine holding the site being moved. This server pulls from it, so it needs that server's credentials \u2014 not the other way round."
+   "description": "The machine holding the site being moved. This server pulls from it, so it needs that server's credentials — not the other way round."
   },
   {
    "fieldname": "restore_remote_bench",
@@ -543,7 +552,7 @@
    "fieldtype": "Data",
    "label": "From Site",
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Remote Server\"",
-   "description": "A fresh backup is taken there when the job runs \u2014 not the newest existing one, because moving a site means moving it as it is now."
+   "description": "A fresh backup is taken there when the job runs — not the newest existing one, because moving a site means moving it as it is now."
   },
   {
    "fieldname": "migration",

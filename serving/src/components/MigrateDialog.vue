@@ -75,17 +75,34 @@
 
 						<div class="px-3 py-2">
 							<p class="u-label mb-1.5">Sites, in the order they move</p>
-							<ul v-if="plan.order.length" class="flex flex-col gap-1">
+							<ul v-if="plan.order.length" class="flex flex-col gap-1.5">
 								<li v-for="(name, i) in plan.order" :key="name"
 								    class="flex flex-wrap items-center gap-2 text-[12.5px]">
 									<span class="w-4 shrink-0 text-[11px] text-[var(--ink-faint)]">{{ i + 1 }}</span>
 									<span class="u-mono">{{ name }}</span>
-									<span class="ml-auto text-[11.5px]"
-									      :class="siteAction(name) === 'replace' ? 'text-[var(--danger)]' : 'text-[var(--ink-faint)]'">
-										{{ siteAction(name) }}
+									<span class="text-[var(--ink-faint)]">→</span>
+									<!--
+										Editable, because moving a site onto a
+										machine that already runs it means
+										bringing it up beside the live one under
+										another name, checking it, and swapping
+										later. Same name = restore in place.
+									-->
+									<input
+										v-model.trim="form.renames[name]"
+										:placeholder="name"
+										class="u-mono min-w-0 flex-1 rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2 py-1 text-[12px] outline-none focus:border-[var(--ink)]"
+									/>
+									<span class="shrink-0 text-[11.5px]"
+									      :class="actionFor(name) === 'replace' ? 'text-[var(--danger)]' : 'text-[var(--ink-faint)]'">
+										{{ actionFor(name) }}
 									</span>
 								</li>
 							</ul>
+							<p v-if="plan.order.length" class="u-item-detail mt-2">
+								Leave a name as it is to restore in place. Change it and the site is created
+								under the new name instead, and nothing here is touched.
+							</p>
 							<p v-else class="u-item-detail">That bench has no sites.</p>
 						</div>
 					</div>
@@ -186,6 +203,8 @@ const form = reactive({
 	backupFirst: true,
 	password: "",
 	confirm: "",
+	//: {source site: name to restore it as}. Empty or unchanged means "in place".
+	renames: {},
 });
 const starting = ref(false);
 const error = ref("");
@@ -223,6 +242,18 @@ const canStart = computed(
 
 const siteAction = (name) =>
 	(plan.value?.sites || []).find((s) => s.site_name === name)?.action || "";
+
+/**
+ * What will happen to a site, allowing for a rename.
+ *
+ * A renamed target is by definition not here, so it is created — even when a
+ * site of the ORIGINAL name is, which is exactly the case this exists for.
+ */
+function actionFor(name) {
+	const target = (form.renames[name] || "").trim();
+	if (target && target !== name) return "create then restore";
+	return siteAction(name);
+}
 
 function onServer() {
 	form.bench = null;
@@ -264,6 +295,11 @@ async function start() {
 			with_files: form.withFiles ? 1 : 0,
 			backup_first: form.backupFirst ? 1 : 0,
 			confirm: form.confirm,
+			// Only the ones actually changed. An untouched field is an empty
+			// string, and sending those would look like a rename to nothing.
+			renames: Object.fromEntries(
+				Object.entries(form.renames).filter(([from, to]) => to && to.trim() && to.trim() !== from),
+			),
 		});
 		toast.success(`${result.actions} step(s) queued`);
 		open.value = false;

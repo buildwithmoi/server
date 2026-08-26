@@ -25,6 +25,7 @@ from frappe.rate_limiter import rate_limit
 from server import dashboard, system
 from server.bench import commands as bench_commands
 from server.bench import discovery, doctor, github, installer, scanner
+from server.bench import provision as bench_provision
 from server.bench import backups as bench_backups
 from server.bench import inspect as bench_inspect
 from server.bench import logs as bench_logs
@@ -585,6 +586,7 @@ def start_bench_migration(
 	with_files: int | bool = 1,
 	backup_first: int | bool = 1,
 	confirm: str | None = None,
+	renames: dict | str | None = None,
 ) -> dict:
 	"""Move a whole bench here, as a chain of ordinary jobs.
 
@@ -608,10 +610,29 @@ def start_bench_migration(
 		)
 
 	plan = plan_bench_migration(server, remote_bench, target_bench)
+
+	# {source site: name to restore it as}. Every value is checked here rather
+	# than at restore time: a bad one would otherwise surface as one failed job
+	# in the middle of a chain that had already moved several sites.
+	renames = frappe.parse_json(renames) if isinstance(renames, str) else (renames or {})
+	for source_site, target_site in list(renames.items()):
+		target_site = (target_site or "").strip()
+		if not target_site or target_site == source_site:
+			renames.pop(source_site)
+			continue
+		if not bench_provision.VALID_SITE_NAME.match(target_site):
+			frappe.throw(
+				f"{target_site!r} is not a usable site name. "
+				"Lowercase letters, digits, dots and hyphens.",
+				title="Bad Site Name",
+			)
+		renames[source_site] = target_site
+
 	actions = runner.build_actions(
 		plan,
 		with_files=bool(frappe.parse_json(with_files)),
 		backup_first=bool(frappe.parse_json(backup_first)),
+		renames=renames,
 	)
 	if not actions:
 		frappe.throw("There is nothing to move — that bench has no sites and no missing apps.",
@@ -3039,21 +3060,37 @@ def run_restore(
 	with_private_files: int | bool = 0,
 	backup_first: int | bool = 1,
 	confirm: str | None = None,
+	domain: str | None = None,
+	domain_provider: str | None = None,
+	from_site: str | None = None,
 ) -> dict:
 	"""Queue a restore.
 
-	`confirm` must be the site name typed out. A restore drops the database and
-	this app takes no automatic undo, so the confirmation is deliberately
-	something you cannot do by reflex — the same bar as `drop-site`.
+	`confirm` must be the site name typed out — but ONLY when the target site
+	already exists. A restore drops the database and this app takes no
+	automatic undo, so the confirmation is deliberately something you cannot do
+	by reflex, the same bar as `drop-site`. Restoring into a name this bench
+	does not have destroys nothing, so demanding the ritual there is friction
+	with no safety in it — and it is the safe habit: bring a backup up under a
+	temporary name, check it, then swap.
 	"""
 	_assert_server_admin()
 	get_settings().assert_installs_allowed()
 
-	if (confirm or "").strip() != site:
+	existing = frappe.get_doc("Server Bench", bench).site_names()
+	replacing = site in existing
+
+	if replacing and (confirm or "").strip() != site:
 		frappe.throw(
 			f"Restoring replaces everything in {site} and cannot be undone. "
 			f"Type “{site}” to confirm you meant it.",
 			title="Confirmation Required",
+		)
+
+	if not replacing and not bench_provision.VALID_SITE_NAME.match((site or "").strip()):
+		frappe.throw(
+			f"{site!r} is not a usable site name. Lowercase letters, digits, dots and hyphens.",
+			title="Bad Site Name",
 		)
 
 	doc = frappe.get_doc(
@@ -3073,6 +3110,9 @@ def run_restore(
 			"restore_remote_bench": remote_bench or None,
 			"restore_remote_site": remote_site or None,
 			"restore_backup_key": backup_key,
+			# Whose backup directory to read. Differs from the target only when
+			# a backup is being brought up under another name.
+			"restore_from_site": (from_site or "").strip() or None,
 			"restore_database_file": (database_file or "").strip() or None,
 			"restore_public_file": (public_file or "").strip() or None,
 			"restore_private_file": (private_file or "").strip() or None,
@@ -3081,7 +3121,17 @@ def run_restore(
 			"restore_encryption_key": (encryption_key or "").strip() or None,
 			"restore_public_files": 1 if frappe.parse_json(with_public_files) else 0,
 			"restore_private_files": 1 if frappe.parse_json(with_private_files) else 0,
-			"restore_backup_first": 1 if frappe.parse_json(backup_first) else 0,
+			# A site that is not here has nothing to back up, and asking bench
+			# to back one up that does not exist fails the job before the
+			# restore is even attempted. Forced rather than trusted from the
+			# browser: this is the API, and the dialog is one caller of it.
+			"restore_backup_first": 1 if (replacing and frappe.parse_json(backup_first)) else 0,
+			# The same two fields the provisioning wizard uses. A site being
+			# created here needs pointing at exactly as much as one created
+			# there, and a second pair of fields would only be a second thing
+			# to keep in step.
+			"provision_domain": (domain or "").strip() or None,
+			"provision_domain_provider": (domain_provider or "").strip() or None,
 			"status": "Draft",
 		}
 	)

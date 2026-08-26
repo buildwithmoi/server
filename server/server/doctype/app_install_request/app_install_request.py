@@ -197,14 +197,20 @@ class AppInstallRequest(Document):
 
 		bench = frappe.get_doc("Server Bench", self.bench)
 
-		# A site pulled from another server may not be here yet — the job
-		# creates it. For every other source the site has to exist, because
-		# there is nothing to create it from.
-		if site not in bench.site_names() and self.restore_source != "Remote Server":
-			frappe.throw(
-				f"{site!r} is not a site on {self.bench}. "
-				f"Known sites: {', '.join(bench.site_names()) or 'none'}."
-			)
+		# A target that is not here yet is CREATED — from a remote pull, and
+		# equally from a backup already on this disk. That second case is the
+		# safe habit: restore under a temporary name, check it, and only then
+		# swap the names over. What has to hold is that the name is one bench
+		# will accept.
+		if site not in bench.site_names():
+			from server.bench import provision
+
+			if not provision.VALID_SITE_NAME.match(site):
+				frappe.throw(
+					f"{site!r} is not a site on {self.bench} and is not a usable name for a new "
+					f"one. Site names are lowercase letters, digits, dots and hyphens. "
+					f"Known sites: {', '.join(bench.site_names()) or 'none'}."
+				)
 
 		if self.restore_source == "Remote Server":
 			# There is nothing on disk to resolve yet — the files arrive during
@@ -373,14 +379,25 @@ class AppInstallRequest(Document):
 		if self.restore_source == "Chosen Files":
 			return restore.resolve_chosen(
 				bench_path,
-				self.install_on_site,
+				self.backup_site,
 				self.restore_database_file,
 				self.restore_public_file,
 				self.restore_private_file,
 			)
 		if not self.restore_backup_key:
 			raise restore.RestoreRefused("Choose which backup to restore.")
-		return restore.find(bench_path, self.install_on_site, self.restore_backup_key)
+		return restore.find(bench_path, self.backup_site, self.restore_backup_key)
+
+	@property
+	def backup_site(self) -> str:
+		"""Whose backup directory the files are in.
+
+		Normally the site being restored — but a backup brought up under a NEW
+		name lives in the directory of the site it came from, and looking for
+		it under the target's name finds an empty directory and reports that
+		the backup was rotated away.
+		"""
+		return (self.restore_from_site or "").strip() or self.install_on_site
 
 	#: Every Password field on this doctype. Listed in one place so adding a
 	#: sixth operation with a credential cannot quietly leave it behind — the

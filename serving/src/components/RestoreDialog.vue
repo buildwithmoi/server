@@ -7,14 +7,77 @@
 		<template #body-content>
 			<div class="flex flex-col gap-3.5">
 				<div class="flex flex-col gap-1.5">
-					<span class="u-label">Site to restore</span>
+					<div class="flex items-baseline justify-between gap-3">
+						<span class="u-label">{{ renaming && source !== "Remote Server" ? "Backups from" : "Restore into" }}</span>
+						<!--
+							The safe habit this makes possible: bring a backup up
+							under a temporary name, check it, and only then swap
+							the names over. Restoring over the live site to find
+							out whether the backup is any good is the move worth
+							avoiding, and until now it was the only one offered.
+						-->
+						<button
+							v-if="sites.length"
+							type="button"
+							class="text-[11.5px] text-[var(--ink-faint)] underline underline-offset-2 hover:text-[var(--ink)]"
+							@click="renaming = !renaming"
+						>
+							{{ renaming ? "restore in place instead" : "restore into a new site instead" }}
+						</button>
+					</div>
+
 					<SearchSelect
+						v-if="!renaming || source !== 'Remote Server'"
 						v-model="site"
 						:options="siteOptions"
-						placeholder="Choose a site"
+						:placeholder="renaming ? 'Whose backups?' : 'Choose a site'"
 						search-placeholder="Search sites"
 						empty-text="This bench has no sites."
 					/>
+					<template v-if="renaming">
+						<input
+							v-model.trim="newSite"
+							placeholder="test.example.com"
+							class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+						/>
+						<p class="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+							Not on this bench, so it is created first and the backup loaded into it.
+							<template v-if="source !== 'Remote Server'">
+								The backups listed below are
+								<span class="u-mono">{{ site?.value || "the site above" }}</span>'s, and
+								that site is left exactly as it is.
+							</template>
+							<template v-else>Nothing existing is touched.</template>
+						</p>
+					</template>
+				</div>
+
+				<!--
+					Only for a site being created. Pointing a name at a site that
+					is about to be replaced is a different decision, made once,
+					not every time it is restored.
+				-->
+				<div v-if="isNewSite" class="grid gap-3 sm:grid-cols-2">
+					<label class="flex flex-col gap-1.5">
+						<span class="u-label">Domain (optional)</span>
+						<input
+							v-model.trim="domain"
+							placeholder="test.example.com"
+							class="u-mono rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+						/>
+					</label>
+					<label class="flex flex-col gap-1.5">
+						<span class="u-label">Point it with</span>
+						<select
+							v-model="domainProvider"
+							class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+						>
+							<option value="">Do not touch DNS — I will point it myself</option>
+							<option v-for="p in providers" :key="p.name" :value="p.name">
+								{{ p.provider_name }} ({{ p.provider }})
+							</option>
+						</select>
+					</label>
 				</div>
 
 				<!--
@@ -394,6 +457,7 @@
 					</div>
 
 					<label
+						v-if="!isNewSite"
 						class="flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5"
 						:class="backupFirst ? 'u-note u-note-ok' : 'u-note u-note-danger'"
 					>
@@ -411,8 +475,11 @@
 					</label>
 
 					<!-- Typing the site name, for the same reason drop-site asks:
-					     a checkbox is something you tick without reading. -->
-					<div class="u-note u-note-danger flex flex-col gap-2">
+					     a checkbox is something you tick without reading. Not
+					     shown for a site being created: nothing is destroyed, and
+					     a ritual with no danger behind it teaches people to type
+					     through the ones that have. -->
+					<div v-if="!isNewSite" class="u-note u-note-danger flex flex-col gap-2">
 						<div class="flex items-start gap-2.5">
 							<Icon name="alert" :size="15" class="u-danger mt-0.5 shrink-0" />
 							<p class="text-[12.5px] leading-relaxed">
@@ -478,6 +545,7 @@ import {
 	restoreFilesResource,
 	restoreSpaceResource,
 	runRestoreResource,
+	domainProvidersResource,
 	uploadBackup,
 } from "../api";
 
@@ -536,7 +604,18 @@ const source = ref("Backup Set");
 const remote = reactive({ server: "", bench: null, site: null });
 const picks = ref({ database: null, public: null, private: null });
 const ignoreSpace = ref(false);
+//: Same rule bench applies — `provision.VALID_SITE_NAME` on the server side.
+const VALID_SITE_NAME = /^[a-z0-9][a-z0-9.-]{0,127}$/;
+
+const providersRes = domainProvidersResource();
 const site = ref(null);
+const newSite = ref("");
+// Forced on when the bench has no sites at all — which is exactly the bench a
+// migration restores into, and where the old dialog offered an empty dropdown
+// and no way forward.
+const renaming = ref(false);
+const domain = ref("");
+const domainProvider = ref("");
 const backup = ref(null);
 const withPublic = ref(false);
 const withPrivate = ref(false);
@@ -571,7 +650,12 @@ const busyLabel = computed(() => {
 });
 useBusyGuard(busy);
 
-const siteName = computed(() => site.value?.value || "");
+const siteName = computed(() => (renaming.value ? newSite.value : site.value?.value || ""));
+
+/** Nothing here by that name, so it gets created and nothing is destroyed. */
+const isNewSite = computed(() => Boolean(siteName.value) && !props.sites.includes(siteName.value));
+
+const providers = computed(() => providersRes.data || []);
 const siteOptions = computed(() =>
 	props.sites.map((s) => ({
 		label: s,
@@ -769,6 +853,9 @@ const canRun = computed(() => {
 	// Missing apps are the failure that looks like a success, so they block by
 	// default — but the operator can say they will install them next.
 	if (missingApps.value.length && !ignoreMissing.value) return false;
+	// Nothing to destroy, so nothing to confirm — but the name still has to be
+	// one bench will accept, and the browser should say so before the job does.
+	if (isNewSite.value) return VALID_SITE_NAME.test(siteName.value);
 	return confirm.value === siteName.value;
 });
 
@@ -784,6 +871,10 @@ watch(
 			return;
 		}
 		error.value = "";
+		// A bench with no sites has nothing to choose, and that is precisely
+		// the bench a migration restores into.
+		if (!props.sites.length) renaming.value = true;
+		providersRes.fetch();
 		if (!site.value) {
 			const preferred = props.defaultSite || props.sites[0];
 			if (preferred) site.value = { label: preferred, value: preferred };
@@ -820,6 +911,15 @@ watch(
 			public_file: publicFile || null,
 			private_file: privateFile || null,
 		});
+	},
+);
+
+// Prefill the new name from whatever is being restored, because nine times in
+// ten it is that name with a prefix on it.
+watch(
+	() => remote.site,
+	(value) => {
+		if (renaming.value && !newSite.value && value?.value) newSite.value = value.value;
 	},
 );
 
@@ -926,8 +1026,14 @@ async function run() {
 			encryption_key: encryptionKey.value || null,
 			with_public_files: withPublic.value ? 1 : 0,
 			with_private_files: withPrivate.value ? 1 : 0,
-			backup_first: backupFirst.value ? 1 : 0,
+			backup_first: isNewSite.value ? 0 : backupFirst.value ? 1 : 0,
 			confirm: confirm.value,
+			// Whose backup directory the files live in. Under a rename that is
+			// NOT the target: looking there finds an empty directory and
+			// reports the backup as rotated away.
+			from_site: renaming.value && source.value !== "Remote Server" ? site.value?.value || null : null,
+			domain: isNewSite.value ? domain.value || null : null,
+			domain_provider: isNewSite.value ? domainProvider.value || null : null,
 		});
 		watchJob(result.name, {
 			operation: "Restore",

@@ -32,7 +32,12 @@ KIND_CLONE = "clone"
 KIND_RESTORE = "restore"
 
 
-def build_actions(plan: dict, with_files: bool = True, backup_first: bool = True) -> list[dict]:
+def build_actions(
+	plan: dict,
+	with_files: bool = True,
+	backup_first: bool = True,
+	renames: dict | None = None,
+) -> list[dict]:
 	"""The ordered list of jobs a plan implies.
 
 	Order is not incidental. The bench has to exist before an app can be cloned
@@ -74,20 +79,29 @@ def build_actions(plan: dict, with_files: bool = True, backup_first: bool = True
 	ordered = sorted(
 		plan.get("sites", []), key=lambda s: (bool(s.get("exists_here")), s.get("site_name", ""))
 	)
+	renames = renames or {}
 	for site in ordered:
+		source_site = site["site_name"]
+		# The target name may differ from the source: bringing a site up beside
+		# the live one under a temporary name, checking it, and swapping later
+		# is the safe way to move a site, and it needs the two names to be
+		# separate values rather than one repeated twice.
+		target_site = (renames.get(source_site) or source_site).strip()
+		renamed = target_site != source_site
 		actions.append(
 			{
 				"kind": KIND_RESTORE,
-				"label": f"Move {site['site_name']}",
+				"label": f"Move {source_site} → {target_site}" if renamed else f"Move {source_site}",
 				"bench": plan["target_bench"],
-				"site": site["site_name"],
+				"site": target_site,
 				"remote_server": plan["source_server_name"],
 				"remote_bench": plan["source_bench"],
-				"remote_site": site["site_name"],
+				"remote_site": source_site,
 				"with_files": bool(with_files),
 				# A site that does not exist here has nothing to back up, so
-				# the option only means anything for a replacement.
-				"backup_first": bool(backup_first and site.get("exists_here")),
+				# the option only means anything for a replacement — and a
+				# renamed target never exists here.
+				"backup_first": bool(backup_first and site.get("exists_here") and not renamed),
 			}
 		)
 
