@@ -80,6 +80,12 @@ const routes = [
 		meta: { title: "GitHub Accounts" },
 	},
 	{
+		path: "/logs/deployments",
+		name: "DeploymentLogs",
+		component: () => import("../views/DeploymentLogs.vue"),
+		meta: { title: "Bench Deployment" },
+	},
+	{
 		path: "/settings",
 		name: "Settings",
 		component: () => import("../views/Settings.vue"),

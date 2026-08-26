@@ -40,6 +40,10 @@ const SHAPES = {
 	// A heartbeat trace: the detectors page is about whether anything is
 	// still running, and this is the shape everyone already reads as "alive".
 	activity: { paths: ["M3 12h4l3 8 4-16 3 8h4"] },
+	// A page with lines on it: the Logs group and the transcript download.
+	file: { paths: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z", "M14 3v5h5", "M9 13h6", "M9 17h4"] },
+	copy: { paths: ["M9 9h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z", "M5 15H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"] },
+	server: { paths: ["M4 8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2", "M4 8h16v5H4z", "M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5", "M7.5 10.5h.01", "M7.5 16.5h.01"] },
 	// A signpost, not a second globe: "Addresses" already owns the globe two
 	// rows above it in the sidebar, and two identical icons make a nav list
 	// harder to scan than no icons at all.

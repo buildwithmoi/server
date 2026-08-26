@@ -691,3 +691,13 @@ export function sshSessionsResource() {
 export function sshSessionDetailResource() {
 	return createResource({ url: `${M}.ssh_session_detail` });
 }
+
+/* ------------------------------------------------------------------- logs */
+
+export function deploymentLogsResource() {
+	return createResource({ url: `${M}.deployment_logs` });
+}
+
+export function deploymentLogResource() {
+	return createResource({ url: `${M}.deployment_log` });
+}

@@ -27,8 +27,38 @@
 				is already tight.
 			-->
 			<nav class="u-scroll mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2" aria-label="Sections">
+				<template v-for="item in nav" :key="item.name || item.label">
+				<!--
+					A group renders as a quiet heading with its children
+					indented under it. Collapsed, there is no room for a
+					heading, so the children are shown as ordinary icons —
+					hiding them behind a disclosure nobody can see would make
+					them unreachable.
+				-->
+				<template v-if="item.children">
+					<p v-if="!collapsed" class="u-label mt-3 px-2.5 pb-1">{{ item.label }}</p>
+					<div v-else class="my-1 border-t border-[var(--rule)]" />
+					<RouterLink
+						v-for="child in item.children"
+						:key="child.name"
+						:to="{ name: child.name }"
+						class="group relative flex items-center gap-2.5 rounded-md py-[7px] text-[13px] transition-colors duration-150"
+						:title="collapsed ? `${item.label} — ${child.label}` : undefined"
+						:class="[
+							isActive(child.name)
+								? 'bg-[var(--ink)] font-medium text-[var(--paper)]'
+								: 'text-[var(--ink-soft)] hover:bg-[var(--paper-sunk)] hover:text-[var(--ink)]',
+							collapsed ? 'justify-center px-0' : 'px-2.5',
+						]"
+						@click="open = false"
+					>
+						<Icon :name="child.icon" :size="16" class="shrink-0" />
+						<span v-if="!collapsed" class="truncate">{{ child.label }}</span>
+					</RouterLink>
+				</template>
+
 				<RouterLink
-					v-for="item in nav"
+					v-else
 					:key="item.name"
 					:to="{ name: item.name }"
 					class="group relative flex items-center gap-2.5 rounded-md py-[7px] text-[13px] transition-colors duration-150"
@@ -57,6 +87,7 @@
 						:class="isActive(item.name) ? 'text-[var(--paper)]/70' : 'text-[var(--ink-ghost)]'"
 					>{{ item.count }}</span>
 				</RouterLink>
+				</template>
 			</nav>
 
 			<div class="shrink-0 border-t border-[var(--rule)] p-3" :class="collapsed ? 'px-2' : ''">
@@ -197,6 +228,14 @@ const nav = [
 	{ name: "IpAddresses", label: "Addresses", icon: "globe" },
 	{ name: "Benches", label: "Benches", icon: "layers" },
 	{ name: "Installs", label: "App Installs", icon: "download" },
+	{
+		label: "Logs",
+		icon: "file",
+		// A group, not a destination. More log kinds are coming — SSL,
+		// restores, security scans — and each becomes another child here
+		// rather than another top-level entry in an already long list.
+		children: [{ name: "DeploymentLogs", label: "Bench Deployment", icon: "layers" }],
+	},
 	{ name: "GitHubProfiles", label: "GitHub Accounts", icon: "key" },
 	{ name: "DomainProviders", label: "Domain Providers", icon: "signpost" },
 	{ name: "Settings", label: "Settings", icon: "sliders" },

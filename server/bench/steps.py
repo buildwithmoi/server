@@ -162,12 +162,16 @@ class Plan:
 		Called when the job stops early. Without it the remaining steps sit in
 		`Pending` forever, which reads as "still going" long after it stopped.
 		"""
+		# The reason goes on the step that FAILED, not on every step after it.
+		# Repeating it made a five-step plan render the same sentence five
+		# times, which in a log somebody is reading to find out what went wrong
+		# is four lines of noise around the one that matters.
 		for step in self.steps:
 			if step.status == RUNNING:
 				self._close(step.key, FAILURE, detail)
 			elif step.status == PENDING:
 				step.status = SKIPPED
-				step.detail = detail or "Did not run."
+				step.detail = "Did not run."
 
 	# ------------------------------------------------------------------
 

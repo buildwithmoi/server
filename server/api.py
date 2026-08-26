@@ -519,6 +519,82 @@ def run_bench_command(
 
 
 @frappe.whitelist()
+def deployment_logs(start: int = 0, page_length: int = 50, status: str | None = None) -> dict:
+	"""Every bench build, newest first, with who ran it.
+
+	`owner` is a standard frappe column and is the whole reason this listing
+	exists separately from the Installs view — a deployment is the one job
+	somebody else usually has to read afterwards, and "which of us ran this"
+	is the first question they ask.
+	"""
+	_assert_server_admin()
+
+	filters = {"operation": "Provision"}
+	if status:
+		filters["status"] = status
+
+	rows = frappe.get_all(
+		"App Install Request",
+		filters=filters,
+		fields=[
+			"name", "owner", "creation", "status", "exit_code",
+			"provision_bench_name", "provision_site_name", "provision_frappe_version",
+			"started_at", "finished_at", "duration", "error_summary",
+		],
+		order_by="creation desc",
+		start=int(start or 0),
+		limit=min(int(page_length or 50), 200),
+	)
+
+	counts = frappe.get_all(
+		"App Install Request",
+		filters={"operation": "Provision"},
+		fields=["status", {"COUNT": "name", "as": "total"}],
+		group_by="status",
+	)
+
+	return {
+		"rows": rows,
+		"total": frappe.db.count("App Install Request", filters),
+		"by_status": {row.status: row.total for row in counts},
+	}
+
+
+@frappe.whitelist()
+def deployment_log(name: str) -> dict:
+	"""One build, as a document that explains itself.
+
+	Returns the transcript already rendered rather than the pieces, so the
+	copy button, the download and anything that later attaches one to an alert
+	all produce the identical text. A log that differs depending on how it was
+	obtained is one nobody can compare.
+	"""
+	_assert_server_admin()
+
+	from server.bench import transcript
+
+	doc = frappe.get_doc("App Install Request", name)
+	if doc.operation != "Provision":
+		frappe.throw(f"{name} is not a bench deployment.", title="Not A Deployment")
+
+	data = doc.as_dict()
+	# `as_dict` includes the Password columns, which hold frappe's `*****`
+	# placeholder rather than anything real — but they have no business in a
+	# document built to be pasted into a chat window.
+	for field in doc.SECRET_FIELDS:
+		data.pop(field, None)
+	data["host"] = os.uname().nodename
+
+	steps = frappe.parse_json(doc.steps or "[]")
+	return {
+		"request": data,
+		"steps": steps,
+		"transcript": transcript.build(data, steps),
+		"filename": transcript.filename(data),
+	}
+
+
+@frappe.whitelist()
 def provision_preflight(
 	bench_name: str,
 	site_name: str | None = None,
