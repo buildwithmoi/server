@@ -360,9 +360,16 @@ def readiness(bench_path: str, sites: list[dict]) -> dict:
 			detail=(
 				"Enabled."
 				if multitenant
-				else "bench refuses to set up SSL without it — and exits 0 while refusing, so this "
-				"would look like it worked. Run: bench config dns_multitenant on"
+				else "Off. bench refuses to set up SSL without it — and exits 0 while refusing, "
+				"so it would look like it worked. This job turns it on before it starts, along "
+				"with adding the domain to the site and regenerating the nginx config."
 			),
+			# NOT blocking. It was, and the panel then told the operator to run
+			# `bench config dns_multitenant on` themselves, per bench, before
+			# coming back — which is a page refusing to do the thing it knows
+			# how to do. The job does it now, so this is a note about what is
+			# going to happen rather than a reason to refuse.
+			blocking=False,
 		),
 	]
 

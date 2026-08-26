@@ -691,6 +691,8 @@ def start_bench_migration(
 	backup_first: int | bool = 1,
 	confirm: str | None = None,
 	renames: dict | str | None = None,
+	domains: dict | str | None = None,
+	domain_provider: str | None = None,
 ) -> dict:
 	"""Move a whole bench here, as a chain of ordinary jobs.
 
@@ -732,11 +734,26 @@ def start_bench_migration(
 			)
 		renames[source_site] = target_site
 
+	# {source site: the name it should answer to here}. Validated now for the
+	# same reason the renames are: a bad one would otherwise surface as one
+	# failed job in the middle of a chain that had already moved several sites.
+	domains = frappe.parse_json(domains) if isinstance(domains, str) else (domains or {})
+	for source_site, wanted in list(domains.items()):
+		wanted = (wanted or "").strip().lower()
+		if not wanted:
+			domains.pop(source_site)
+			continue
+		if not bench_ssl.VALID_DOMAIN.match(wanted):
+			frappe.throw(f"{wanted!r} is not a valid domain name.", title="Not a Domain")
+		domains[source_site] = wanted
+
 	actions = runner.build_actions(
 		plan,
 		with_files=bool(frappe.parse_json(with_files)),
 		backup_first=bool(frappe.parse_json(backup_first)),
 		renames=renames,
+		domains=domains,
+		domain_provider=(domain_provider or "").strip(),
 	)
 	if not actions:
 		frappe.throw("There is nothing to move — that bench has no sites and no missing apps.",
@@ -2111,6 +2128,138 @@ def verify_domain_provider(name: str) -> dict:
 	"""
 	_assert_server_admin()
 	return frappe.get_doc("Domain Provider", name).verify()
+
+
+@frappe.whitelist()
+def dns_records(name: str, zone: str) -> dict:
+	"""Every record in one zone, as this app understands them.
+
+	Read straight from the provider rather than from anything stored here. A
+	cached copy of somebody else's DNS is a copy that is wrong the moment
+	anyone edits it in the registrar's own console — which is where half of
+	these records were made.
+	"""
+	_assert_server_admin()
+
+	from server.domains import registry
+
+	doc = frappe.get_doc("Domain Provider", name)
+	result = registry.dispatch(doc.provider, doc.get_token() or "", "list_records", zone=zone)
+
+	payload = result.as_dict()
+	payload["zone"] = zone
+	payload["provider"] = doc.provider
+	payload["provider_name"] = doc.provider_name
+	# What this machine believes its own address is, so a record pointing here
+	# can be recognised without the operator holding it in their head.
+	payload["this_host"] = _public_address()
+	return payload
+
+
+@frappe.whitelist(methods=["POST"])
+def save_dns_record(
+	name: str,
+	zone: str,
+	label: str,
+	content: str,
+	record_type: str = "A",
+	ttl: int = 3600,
+	confirm: str | None = None,
+) -> dict:
+	"""Create or replace one record.
+
+	`confirm` must be the fully qualified name. Writing DNS for a live name is
+	not reversible on anybody else's schedule — a wrong record propagates and
+	is cached by resolvers that never asked this app's permission. Same bar as
+	pointing a domain here, for the same reason.
+	"""
+	_assert_server_admin()
+
+	from server.domains import base as domains_base
+	from server.domains import registry
+
+	label = (label or "").strip().rstrip(".").lower() or "@"
+	zone = (zone or "").strip().rstrip(".").lower()
+	fqdn = zone if label == "@" else f"{label}.{zone}"
+
+	if (confirm or "").strip().lower() != fqdn:
+		frappe.throw(
+			f"This writes a public DNS record. Type “{fqdn}” to confirm.",
+			title="Confirmation Required",
+		)
+	if not (content or "").strip():
+		frappe.throw("A record needs a value to point at.", title="Nothing To Point At")
+
+	doc = frappe.get_doc("Domain Provider", name)
+	record = domains_base.DnsRecord(
+		name=label,
+		type=(record_type or "A").strip().upper(),
+		content=(content or "").strip(),
+		ttl=frappe.utils.cint(ttl) or domains_base.DEFAULT_TTL,
+	)
+	result = registry.dispatch(
+		doc.provider, doc.get_token() or "", "upsert_record", zone=zone, record=record
+	)
+
+	raise_event(
+		"Medium",
+		"dns",
+		f"DNS record written: {record.type} {fqdn} → {record.content}",
+		f"Through {doc.provider_name} ({doc.provider}). Result: "
+		+ ("written" if result.ok else f"refused — {result.error}"),
+		"If this was not you, check who holds the API token for that provider and revoke it. "
+		"A DNS record is how traffic for a name is redirected somewhere else entirely.",
+	)
+	frappe.db.commit()
+
+	payload = result.as_dict()
+	payload["fqdn"] = fqdn
+	return payload
+
+
+@frappe.whitelist(methods=["POST"])
+def delete_dns_record(
+	name: str, zone: str, label: str, record_type: str = "A", record_id: str = "",
+	confirm: str | None = None,
+) -> dict:
+	"""Remove one record. Confirmed by name, like writing one."""
+	_assert_server_admin()
+
+	from server.domains import base as domains_base
+	from server.domains import registry
+
+	label = (label or "").strip().rstrip(".").lower() or "@"
+	zone = (zone or "").strip().rstrip(".").lower()
+	fqdn = zone if label == "@" else f"{label}.{zone}"
+
+	if (confirm or "").strip().lower() != fqdn:
+		frappe.throw(
+			f"Removing {fqdn} takes it off the internet. Type “{fqdn}” to confirm.",
+			title="Confirmation Required",
+		)
+
+	doc = frappe.get_doc("Domain Provider", name)
+	record = domains_base.DnsRecord(
+		name=label, type=(record_type or "A").strip().upper(), record_id=record_id or ""
+	)
+	result = registry.dispatch(
+		doc.provider, doc.get_token() or "", "delete_record", zone=zone, record=record
+	)
+
+	raise_event(
+		"High",
+		"dns",
+		f"DNS record removed: {record.type} {fqdn}",
+		f"Through {doc.provider_name} ({doc.provider}). Result: "
+		+ ("removed" if result.ok else f"refused — {result.error}"),
+		"Removing a record takes the name off the internet. If this was not you, the API token "
+		"for that provider should be treated as compromised and revoked.",
+	)
+	frappe.db.commit()
+
+	payload = result.as_dict()
+	payload["fqdn"] = fqdn
+	return payload
 
 
 @frappe.whitelist(methods=["POST"])

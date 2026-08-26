@@ -86,6 +86,12 @@ const routes = [
 		meta: { title: "Servers" },
 	},
 	{
+		path: "/dns",
+		name: "DnsRecords",
+		component: () => import("../views/DnsRecords.vue"),
+		meta: { title: "DNS records" },
+	},
+	{
 		path: "/migrations",
 		name: "Migrations",
 		component: () => import("../views/Migrations.vue"),

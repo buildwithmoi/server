@@ -97,6 +97,24 @@
 									      :class="actionFor(name) === 'replace' ? 'text-[var(--danger)]' : 'text-[var(--ink-faint)]'">
 										{{ actionFor(name) }}
 									</span>
+
+									<!--
+										The name it will answer to once it is
+										here. A site moved onto a new machine
+										with nothing pointing at it cannot be
+										reached at all — which makes the move
+										technically complete and practically
+										useless, and was found out the hard way
+										after one.
+									-->
+									<label class="flex w-full items-center gap-2 pl-6">
+										<span class="shrink-0 text-[11.5px] text-[var(--ink-faint)]">answers to</span>
+										<input
+											v-model.trim="form.domains[name]"
+											:placeholder="(form.renames[name] || name)"
+											class="u-mono min-w-0 flex-1 rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2 py-1 text-[12px] outline-none focus:border-[var(--ink)]"
+										/>
+									</label>
 								</li>
 							</ul>
 							<p v-if="plan.order.length" class="u-item-detail mt-2">
@@ -112,6 +130,24 @@
 					   :class="note.includes('REPLACED') || note.includes('MISMATCH') ? 'u-note-danger' : ''">
 						{{ note }}
 					</p>
+
+					<label v-if="anyDomain" class="flex flex-col gap-1.5">
+						<span class="u-label">Write those records with</span>
+						<select
+							v-model="form.domainProvider"
+							class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+						>
+							<option value="">Do not touch DNS — I will point them myself</option>
+							<option v-for="p in providers" :key="p.name" :value="p.name">
+								{{ p.provider_name }} ({{ p.provider }})
+							</option>
+						</select>
+						<span class="u-item-detail">
+							Each record is written after that site has restored, never before — a name
+							pointing at a site that failed to restore sends real traffic at a half-built
+							one, and the record outlives the mistake.
+						</span>
+					</label>
 
 					<div class="grid gap-3 sm:grid-cols-2">
 						<label class="flex items-start gap-2 text-[13px]">
@@ -183,6 +219,7 @@ import SearchSelect from "./SearchSelect.vue";
 import {
 	callRemoteResource,
 	managedServersResource,
+	domainProvidersResource,
 	planMigrationResource,
 	startMigrationResource,
 } from "../api";
@@ -192,6 +229,11 @@ const emit = defineEmits(["update:modelValue", "started"]);
 
 const serversRes = managedServersResource();
 const benches = callRemoteResource();
+const providersRes = domainProvidersResource();
+const providers = computed(() => providersRes.data?.providers || []);
+/** Any site has been given a name to answer to. */
+const anyDomain = computed(() => Object.values(form.domains).some((v) => v && v.trim()));
+
 const planRes = planMigrationResource();
 const startRes = startMigrationResource();
 
@@ -205,6 +247,9 @@ const form = reactive({
 	confirm: "",
 	//: {source site: name to restore it as}. Empty or unchanged means "in place".
 	renames: {},
+	//: {source site: the domain it should answer to here}.
+	domains: {},
+	domainProvider: "",
 });
 const starting = ref(false);
 const error = ref("");
@@ -300,6 +345,10 @@ async function start() {
 			renames: Object.fromEntries(
 				Object.entries(form.renames).filter(([from, to]) => to && to.trim() && to.trim() !== from),
 			),
+			domains: Object.fromEntries(
+				Object.entries(form.domains).filter(([, value]) => value && value.trim()),
+			),
+			domain_provider: form.domainProvider || null,
 		});
 		toast.success(`${result.actions} step(s) queued`);
 		open.value = false;
@@ -318,11 +367,13 @@ watch(
 	(isOpen) => {
 		if (isOpen) {
 			serversRes.fetch();
+			providersRes.fetch();
 			return;
 		}
 		Object.assign(form, {
 			server: "", bench: null, target: "", withFiles: true,
 			backupFirst: true, password: "", confirm: "",
+			renames: {}, domains: {}, domainProvider: "",
 		});
 		planRes.reset?.();
 		error.value = "";

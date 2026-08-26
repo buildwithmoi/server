@@ -669,7 +669,7 @@ const siteName = computed(() => (renaming.value ? newSite.value : site.value?.va
 /** Nothing here by that name, so it gets created and nothing is destroyed. */
 const isNewSite = computed(() => Boolean(siteName.value) && !props.sites.includes(siteName.value));
 
-const providers = computed(() => providersRes.data || []);
+const providers = computed(() => providersRes.data?.providers || []);
 
 /** The source server will not run anything for us: its interlock is off. */
 const sourceRefuses = computed(() => readiness.data?.source_installs_allowed === false);

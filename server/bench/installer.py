@@ -981,6 +981,78 @@ def _sudo_kill(pgid: int, sig: int) -> bool:
 	return result.returncode == 0
 
 
+def _prepare_for_ssl(request, bench_doc, settings, env, step, emit, finish, should_cancel):
+	"""Do the three things that must be true before certbot is worth running.
+
+	They were reported as instructions: turn on multitenancy, add the domain to
+	the site, regenerate nginx — per bench, by hand, before coming back to this
+	dialog. A page that tells somebody to run a command it could run itself is
+	a page that has stopped halfway.
+
+	None of the three needs root. The two that do — reloading nginx, and
+	certbot itself — are not here, and no amount of arranging changes that;
+	they need one NOPASSWD sudoers rule, and the readiness panel says so.
+
+	Returns a `finish(...)` on failure, or None to carry on. Each is skipped
+	when it is already true, because `bench config` on a value that is already
+	set still rewrites the file every other bench on this machine reads.
+	"""
+	site = (request.install_on_site or "").strip()
+	domain = (request.ssl_domain or "").strip() or site
+
+	if not ssl.is_dns_multitenant(bench_doc.bench_path):
+		step("multitenant")
+		argv = [settings.bench_executable, "config", "dns_multitenant", "on"]
+		emit(f"$ {' '.join(argv)}")
+		code, timed_out = _stream(argv, bench_doc.bench_path, env, 120, emit, should_cancel)
+		if code != 0:
+			return finish(
+				"Failed",
+				exit_code=code,
+				error=_explain_failure(code, timed_out, 120, request, "bench config dns_multitenant"),
+			)
+	else:
+		step("multitenant")
+		emit("Already on.")
+
+	# `bench setup add-domain` takes its OWN --site; the global one this app
+	# normally uses is rejected outright with "No such option".
+	step("domain")
+	if domain and site:
+		known = ssl.site_domains(bench_doc.bench_path, site)
+		if domain == known[0] or domain in known[1]:
+			emit(f"{site} already answers to {domain}.")
+		else:
+			argv = [settings.bench_executable, "setup", "add-domain", "--site", site, domain]
+			emit(f"$ {' '.join(argv)}")
+			code, timed_out = _stream(argv, bench_doc.bench_path, env, 180, emit, should_cancel)
+			if code != 0:
+				return finish(
+					"Failed",
+					exit_code=code,
+					error=_explain_failure(code, timed_out, 180, request, "bench setup add-domain"),
+				)
+	else:
+		emit("No domain to add — the certificate will cover the site name itself.")
+
+	step("nginx")
+	argv = [settings.bench_executable, "setup", "nginx", "--yes"]
+	emit(f"$ {' '.join(argv)}")
+	code, timed_out = _stream(argv, bench_doc.bench_path, env, 180, emit, should_cancel)
+	if code != 0:
+		return finish(
+			"Failed",
+			exit_code=code,
+			error=_explain_failure(code, timed_out, 180, request, "bench setup nginx"),
+		)
+	emit("")
+	emit(
+		"[note] nginx is still serving the OLD configuration. Reloading it needs root, which "
+		"this app does not have: sudo bench setup reload-nginx"
+	)
+	return None
+
+
 def _revive_nginx(emit) -> None:
 	"""Put nginx back after an SSL step ended badly.
 
@@ -1204,7 +1276,14 @@ def _plan_for(request) -> list:
 
 		return step_plan.for_console(console.summarise(request.console_command or "", 50))
 	if request.is_ssl():
-		return step_plan.for_ssl(request.ssl_mode_key(), bool(request.ssl_dry_run))
+		bench_doc = frappe.get_doc("Server Bench", request.bench) if request.bench else None
+		return step_plan.for_ssl(
+			request.ssl_mode_key(),
+			bool(request.ssl_dry_run),
+			# Announced only when there is something to prepare. A bench that is
+			# already multitenant should not show three steps that do nothing.
+			prepare=bool(bench_doc and request.ssl_mode_key() == ssl.MODE_ISSUE),
+		)
 	if request.is_restore():
 		bench_doc = frappe.get_doc("Server Bench", request.bench) if request.bench else None
 		return step_plan.for_restore(
@@ -1735,6 +1814,13 @@ def run_install_request(name: str) -> dict:
 							error=_explain_failure(code, timed_out, timeout, request, "the command"),
 						)
 				elif request.is_ssl():
+					if request.ssl_mode_key() == ssl.MODE_ISSUE:
+						failure = _prepare_for_ssl(
+							request, bench_doc, settings, env, step, emit, finish, should_cancel
+						)
+						if failure:
+							return failure
+
 					step("issue" if request.ssl_mode_key() == ssl.MODE_ISSUE else "renew")
 					argv = ssl.build_argv(
 						request.ssl_mode_key(),

@@ -862,6 +862,18 @@ export function cancelMigrationResource() {
 	return createResource({ url: `${M}.cancel_bench_migration` });
 }
 
+export function dnsRecordsResource() {
+	return switchable("dns_records");
+}
+
+export function saveDnsRecordResource() {
+	return switchable("save_dns_record");
+}
+
+export function deleteDnsRecordResource() {
+	return switchable("delete_dns_record");
+}
+
 export function benchMigrationsResource() {
 	return switchable("list_bench_migrations");
 }

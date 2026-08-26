@@ -286,6 +286,7 @@ const nav = [
 	// work waiting to be continued, and it was unreachable — the detail page
 	// existed and nothing linked to it.
 	{ name: "Migrations", label: "Bench Moves", icon: "server" },
+	{ name: "DnsRecords", label: "DNS Records", icon: "globe" },
 	{
 		label: "Logs",
 		icon: "file",

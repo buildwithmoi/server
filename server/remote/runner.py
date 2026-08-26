@@ -37,6 +37,8 @@ def build_actions(
 	with_files: bool = True,
 	backup_first: bool = True,
 	renames: dict | None = None,
+	domains: dict | None = None,
+	domain_provider: str = "",
 ) -> list[dict]:
 	"""The ordered list of jobs a plan implies.
 
@@ -102,6 +104,12 @@ def build_actions(
 				# the option only means anything for a replacement — and a
 				# renamed target never exists here.
 				"backup_first": bool(backup_first and site.get("exists_here") and not renamed),
+				# The name it should answer to once it is here. A site moved
+				# onto a new machine with no record pointing at it cannot be
+				# reached at all — which made the move technically complete and
+				# practically useless.
+				"domain": ((domains or {}).get(source_site) or "").strip(),
+				"domain_provider": domain_provider or "",
 			}
 		)
 
@@ -210,6 +218,8 @@ def start_next(migration_name: str) -> dict:
 				with_private_files=1 if action.get("with_files") else 0,
 				backup_first=1 if action.get("backup_first") else 0,
 				confirm=action["site"],
+				domain=action.get("domain") or None,
+				domain_provider=action.get("domain_provider") or None,
 			)
 	except Exception as exc:  # noqa: BLE001
 		migration.db_set("status", "Paused", update_modified=False)

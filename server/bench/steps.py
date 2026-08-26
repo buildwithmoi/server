@@ -287,12 +287,23 @@ def for_console(label: str) -> list[Step]:
 	)
 
 
-def for_ssl(mode: str, dry_run: bool) -> list[Step]:
+def for_ssl(mode: str, dry_run: bool, prepare: bool = False) -> list[Step]:
 	if mode == "issue":
-		return make(
-			CHECK,
-			("issue", "Issue the certificate", "Stop nginx, run certbot, write the config, start nginx."),
+		specs = [CHECK]
+		if prepare:
+			# The three things that have to be true before certbot is worth
+			# running, and that this app can do for itself. They were reported
+			# as instructions to go and type, per bench, before coming back —
+			# which is a page telling somebody to do what the page could do.
+			specs += [
+				("multitenant", "Turn on DNS multitenancy", "bench config dns_multitenant on — bench refuses SSL without it."),
+				("domain", "Tell the site its domain", "bench setup add-domain, so frappe serves this name rather than the default site."),
+				("nginx", "Regenerate the nginx config", "bench setup nginx --yes. Writes the file; the reload is separate."),
+			]
+		specs.append(
+			("issue", "Issue the certificate", "Stop nginx, run certbot, write the config, start nginx.")
 		)
+		return make(*specs)
 	return make(
 		CHECK,
 		(
