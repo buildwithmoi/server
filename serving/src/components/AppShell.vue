@@ -291,6 +291,7 @@ const nav = [
 			{ name: "InstallLogs", label: "App Installs", icon: "download" },
 			{ name: "SslLogs", label: "SSL Certificates", icon: "lock" },
 			{ name: "CommandLogs", label: "Commands", icon: "terminal" },
+			{ name: "ScheduledLogs", label: "Background work", icon: "activity" },
 			{ name: "CrashLogs", label: "Crashes", icon: "alert" },
 		],
 	},

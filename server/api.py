@@ -1217,6 +1217,124 @@ _FRAME = re.compile(r'File "(?P<file>[^"]*apps/server/[^"]*)", line (?P<line>\d+
 
 
 @frappe.whitelist()
+def scheduled_logs(start: int = 0, page_length: int = 50, failures_only: int | bool = 1) -> dict:
+	"""How the background work is going, and what it said when it stopped.
+
+	The detectors, the SSH ingest, geolocation and the digest all run on the
+	scheduler, and until now a failure left a 500-character summary on the
+	heartbeat and nothing else. frappe records the traceback in Scheduled Job
+	Log; this joins it to the job type, because the log row names the type by
+	its docname — `bb4l3kudhv` — which tells nobody anything.
+
+	Failures only by default. There are hundreds of Complete rows an hour and
+	they are not what anybody opens this page for.
+	"""
+	_assert_server_admin()
+
+	ours = frappe.get_all(
+		"Scheduled Job Type", filters={"method": ["like", "server.%"]}, fields=["name", "method"]
+	)
+	by_name = {row.name: row.method for row in ours}
+	if not by_name:
+		return {"rows": [], "total": 0, "failing": 0, "detectors": []}
+
+	filters = {"scheduled_job_type": ["in", list(by_name)]}
+	if frappe.parse_json(failures_only):
+		filters["status"] = ["!=", "Complete"]
+
+	rows = frappe.get_all(
+		"Scheduled Job Log",
+		filters=filters,
+		fields=["name", "creation", "status", "scheduled_job_type", "details"],
+		order_by="creation desc",
+		start=int(start or 0),
+		limit=min(int(page_length or 50), 200),
+	)
+	for row in rows:
+		row["method"] = by_name.get(row["scheduled_job_type"], row["scheduled_job_type"])
+		row["title"] = _last_exception_line(row.get("details") or "") or row["status"]
+		# Scrubbed here as well as in the detail: a traceback carries locals,
+		# and this is the same class of leak the crash log turned up.
+		row["details"] = bench_siteconfig.scrub(row["details"] or "")
+
+	return {
+		"rows": rows,
+		"total": frappe.db.count("Scheduled Job Log", filters),
+		"failing": frappe.db.count(
+			"Scheduled Job Log",
+			{"scheduled_job_type": ["in", list(by_name)], "status": ["!=", "Complete"]},
+		),
+		# The detectors' own view of themselves, which is the other half of
+		# "is the background work happening" — a job that never RAN leaves no
+		# log row at all, and only the heartbeat notices that.
+		"detectors": frappe.get_all(
+			"Ingest Heartbeat",
+			fields=["source", "last_run", "last_status", "last_error", "sequence", "expected_every"],
+			order_by="source asc",
+		),
+	}
+
+
+def _last_exception_line(text: str) -> str:
+	"""The exception line out of a traceback, which is what identifies it."""
+	# Indentation is the whole distinction, so it must NOT be stripped before
+	# the test: every frame line and every source line in a traceback is
+	# indented, and the exception is the one line that is not.
+	for line in reversed((text or "").splitlines()):
+		if not line.strip() or line[:1].isspace():
+			continue
+		if line.startswith(("File ", "Traceback")):
+			continue
+		return line.strip()[:200]
+	return ""
+
+
+@frappe.whitelist(methods=["POST"])
+@rate_limit(key="client_error", limit=60, seconds=60 * 60, ip_based=True)
+def report_client_error(
+	message: str, stack: str | None = None, route: str | None = None, kind: str = "error"
+) -> dict:
+	"""Record a failure that happened in the browser.
+
+	Everything else this app logs happens on the server. A Vue component that
+	throws leaves nothing anywhere — the page goes blank or a panel stays empty,
+	and the only record is a console the operator has already closed.
+
+	Written into frappe's Error Log so it appears on the Crashes page beside
+	the server-side ones, rather than inventing a second place to look.
+
+	RATE LIMITED, and that is not incidental: this is a guest-shaped write path
+	in the sense that anything running in the page can call it, and a component
+	throwing in a render loop would otherwise write a row per frame until the
+	disk filled.
+	"""
+	_assert_server_admin()
+
+	title = f"Browser: {(message or 'error').strip()[:120]}"
+	body = "\n".join(
+		[
+			f"Reported by the browser ({kind}).",
+			f"Route: {route or 'unknown'}",
+			f"User agent: {(frappe.request.headers.get('User-Agent') or '')[:200] if frappe.request else ''}",
+			"",
+			(stack or "(no stack)").strip()[:8000],
+		]
+	)
+
+	frappe.get_doc(
+		{
+			"doctype": "Error Log",
+			# The prefix is what makes these findable and, in the Crashes list,
+			# distinguishable from a server failure at a glance.
+			"method": title,
+			"error": f"apps/server (browser)\n{bench_siteconfig.scrub(body)}",
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.commit()
+	return {"recorded": True}
+
+
+@frappe.whitelist()
 def crash_logs(start: int = 0, page_length: int = 50, mine_only: int | bool = 1) -> dict:
 	"""Unhandled failures, with the traceback frappe already recorded.
 

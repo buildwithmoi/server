@@ -5,6 +5,7 @@ import "./style.css";
 import App from "./App.vue";
 import router from "./router";
 import { createSession } from "./auth";
+import { captureBrowserErrors } from "./errors";
 
 // frappe-ui's data layer speaks to /api/method for us and gives every request a
 // loading/error state, which is what the skeletons and toasts are driven from.
@@ -12,6 +13,10 @@ setConfig("resourceFetcher", frappeRequest);
 
 const app = createApp(App);
 const auth = createSession();
+
+// Anything that throws in the page ends up in the Error Log, so a blank panel
+// leaves a record instead of only a console nobody had open.
+captureBrowserErrors(app);
 
 app.use(router);
 app.provide("$auth", auth);

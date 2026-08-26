@@ -120,6 +120,12 @@ const routes = [
 		meta: { title: "Commands" },
 	},
 	{
+		path: "/logs/scheduled",
+		name: "ScheduledLogs",
+		component: () => import("../views/ScheduledLogs.vue"),
+		meta: { title: "Background work" },
+	},
+	{
 		path: "/logs/crashes",
 		name: "CrashLogs",
 		component: () => import("../views/CrashLogs.vue"),
