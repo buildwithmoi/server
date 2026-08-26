@@ -38,6 +38,18 @@
 				<div class="min-w-0 flex-1">
 					<p class="text-[13px] font-medium">{{ banner.title }}</p>
 					<p class="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-soft)]">{{ banner.body }}</p>
+
+					<!-- The command that fixes it, verbatim and selectable. A
+					     banner that describes a fix without giving the line to
+					     run leaves the operator to reconstruct it. -->
+					<div v-if="banner.command" class="mt-2 flex items-center gap-2">
+						<code class="u-mono u-scroll min-w-0 flex-1 overflow-x-auto rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2 py-1.5 text-[12px]">{{ banner.command }}</code>
+						<Button variant="ghost" @click="copyCommand(banner.command)">
+							<template #prefix><Icon name="copy" :size="13" /></template>
+							{{ copiedCommand ? "Copied" : "Copy" }}
+						</Button>
+					</div>
+					<p v-if="banner.note" class="mt-1.5 text-[11.5px] text-[var(--ink-faint)]">{{ banner.note }}</p>
 				</div>
 				<Button v-if="banner.action" :loading="acting" @click="banner.action.run">
 					{{ banner.action.label }}
@@ -165,7 +177,7 @@ import OutcomeMark from "../components/OutcomeMark.vue";
 import RankBars from "../components/RankBars.vue";
 import Skeleton from "../components/Skeleton.vue";
 import StatCard from "../components/StatCard.vue";
-import { overviewResource, replayFixtureResource, setMonitoringResource, systemHealthResource } from "../api";
+import { overviewResource, replayFixtureResource, runIngestResource, setMonitoringResource, systemHealthResource } from "../api";
 
 const RANGES = [1, 7, 30];
 
@@ -227,10 +239,49 @@ const banner = computed(() => {
 		};
 	}
 	if (!totals.value.total) {
+		const c = h.collection || {};
+
+		// The cause that actually happened, and the one this banner used to
+		// hide: the reader cannot open a single file. The install script says
+		// so once, in a terminal; this page went on reporting zeros.
+		if (!c.journal_readable && !c.auth_log_readable) {
+			return {
+				title: "Nothing can be read on this machine",
+				body:
+					`Neither the systemd journal nor ${c.auth_log_path || "the auth log"} is readable by ` +
+					`${c.user || "the user this app runs as"}, so no SSH event can ever arrive. ` +
+					`On Debian and Ubuntu the fix is to add that user to the 'adm' group.`,
+				command: `sudo usermod -aG adm ${c.user || "$USER"}`,
+				note: "Then restart the bench — group membership is only picked up by new processes.",
+			};
+		}
+
+		// Nothing runs on its own while the scheduler is paused, and no other
+		// page in this app would say so.
+		if (c.scheduler_paused) {
+			return {
+				title: "The scheduler is paused",
+				body: "The log reader runs every five minutes on the scheduler, and the scheduler is not running — so nothing will arrive on its own. Read once now, or start it.",
+				command: "bench --site <site> enable-scheduler",
+				action: { label: "Read now", run: readNow },
+			};
+		}
+
+		const ran = (h.checkpoints || []).some((c2) => c2.last_run_status && c2.last_run_status !== "Never Run");
+		if (!ran) {
+			return {
+				title: "Not read yet",
+				body: `Monitoring is on and ${c.detected_source || "a source"} is readable (${c.explanation || ""}). The first read happens within five minutes, or do it now.`,
+				action: { label: "Read now", run: readNow },
+			};
+		}
+
 		return {
 			title: "No events recorded yet",
-			body: "Monitoring is on but nothing has arrived. On a machine with no sshd you can replay the bundled fixtures to see how the dashboard behaves.",
-			action: { label: "Replay fixtures", run: replay },
+			body: `The ${c.detected_source || "log"} reader ran and found nothing to record. On a quiet machine that is the correct answer — an SSH login will appear here within five minutes of happening.`,
+			// Offered ONLY in developer mode. It is refused anywhere else, and
+			// a button that refuses silently is worse than no button.
+			action: c.developer_mode ? { label: "Replay fixtures", run: replay } : null,
 		};
 	}
 	return {};
@@ -258,6 +309,34 @@ async function enableMonitoring() {
 		overview.value.fetch();
 	} catch (error) {
 		toast.error(error.messages?.[0] || "Could not enable monitoring");
+	} finally {
+		acting.value = false;
+	}
+}
+
+const copiedCommand = ref(false);
+
+async function copyCommand(text) {
+	try {
+		await navigator.clipboard.writeText(text);
+		copiedCommand.value = true;
+		setTimeout(() => (copiedCommand.value = false), 2000);
+	} catch {
+		toast.info("Copying was blocked — select the line instead.");
+	}
+}
+
+/** Run the log reader immediately rather than waiting for the scheduler. */
+async function readNow() {
+	acting.value = true;
+	try {
+		const result = await runIngestResource().submit({});
+		const inserted = result.inserted || 0;
+		toast.success(inserted ? `Recorded ${inserted} events` : "Read the log; nothing new to record");
+		systemHealth.fetch();
+		overview.value.fetch();
+	} catch (error) {
+		toast.error(error.messages?.[0] || "Could not read the log");
 	} finally {
 		acting.value = false;
 	}

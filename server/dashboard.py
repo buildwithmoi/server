@@ -232,6 +232,63 @@ def get_health() -> dict:
 		"pending_geolocation": pending_geo,
 		"checkpoints": checkpoints,
 		"fixture_rows": frappe.db.count(AUTH, {"ingest_source": "fixture"}),
+		"collection": collection_surface(),
+	}
+
+
+def collection_surface() -> dict:
+	"""Whether this machine can be read at all, and by whom.
+
+	"Monitoring is on and nothing has arrived" has two completely different
+	causes and they looked identical: a quiet server, or a reader that cannot
+	open a single file. On the first machine this app was installed on it was
+	the second — the bench user was not in `adm`, so neither the journal nor
+	auth.log was readable — and the install script said so, in a terminal, once,
+	while the dashboard went on reporting zeros with no explanation.
+
+	The OS user is included because the fix is a command with that user's name
+	in it, and an operator reading this page is not necessarily the one who
+	created the account.
+	"""
+	import getpass
+
+	from frappe.utils.scheduler import is_scheduler_inactive
+
+	from server.install import check_prerequisites
+	from server.ssh import sources
+
+	try:
+		prerequisites = check_prerequisites()
+		logs = prerequisites.get("logs", {})
+	except Exception:  # noqa: BLE001
+		logs = {}
+
+	detected, explanation = sources.detect_source()
+
+	try:
+		user = getpass.getuser()
+	except Exception:  # noqa: BLE001
+		user = ""
+
+	try:
+		# Nothing here runs on its own while the scheduler is paused, and a
+		# paused scheduler is invisible from every page in this app.
+		paused = bool(is_scheduler_inactive())
+	except Exception:  # noqa: BLE001
+		paused = False
+
+	return {
+		"user": user,
+		"journal_readable": bool(logs.get("journal_readable")),
+		"auth_log_readable": bool(logs.get("auth_log_readable")),
+		"auth_log_path": logs.get("auth_log_path") or "",
+		"detected_source": detected,
+		"explanation": explanation,
+		"scheduler_paused": paused,
+		# The replay button is developer-mode only, and offering it on a server
+		# that will refuse it is how it came to look like a button that does
+		# nothing at all.
+		"developer_mode": bool(frappe.conf.get("developer_mode")),
 	}
 
 

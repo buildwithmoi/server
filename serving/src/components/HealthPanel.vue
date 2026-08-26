@@ -11,7 +11,10 @@
 			</span>
 		</header>
 
-		<div class="grid gap-px bg-[var(--rule)] sm:grid-cols-2 lg:grid-cols-4">
+		<!-- The column count follows the gauges, because it is not fixed: a
+		     machine with no swap has three, and a four-column grid then paints
+		     an empty grey cell that reads as a metric that failed to load. -->
+		<div class="grid gap-px bg-[var(--rule)] sm:grid-cols-2" :class="columns">
 			<Gauge
 				v-for="gauge in gauges"
 				:key="gauge.label"
@@ -90,6 +93,16 @@ function fillFor(level) {
 function chipFor(level) {
 	return level === "critical" ? "u-chip-danger" : "u-chip-warn";
 }
+
+/** Static class names on purpose — Tailwind cannot see an interpolated one. */
+const COLUMNS = {
+	1: "lg:grid-cols-1",
+	2: "lg:grid-cols-2",
+	3: "lg:grid-cols-3",
+	4: "lg:grid-cols-4",
+};
+
+const columns = computed(() => COLUMNS[Math.min(gauges.value.length, 4)] || "lg:grid-cols-4");
 
 const gauges = computed(() => {
 	const d = props.data;
