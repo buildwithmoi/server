@@ -1,7 +1,9 @@
 <template>
 	<AppShell :title="title" :subtitle="subtitle">
 		<template #actions>
-			<Button v-if="canResume" variant="solid" :loading="acting" @click="resume">Continue</Button>
+			<Button v-if="canResume" variant="solid" :loading="acting" @click="resume">
+				{{ retryCount ? `Retry ${retryCount} and continue` : "Continue" }}
+			</Button>
 			<Button v-if="canStop" :loading="acting" @click="stop">Stop</Button>
 		</template>
 
@@ -97,6 +99,8 @@ const data = computed(() => resource.data);
 const loading = computed(() => resource.loading);
 const running = computed(() => data.value?.status === "Running");
 const canResume = computed(() => data.value?.status === "Paused");
+/** How many actions Continue would retry rather than skip past. */
+const retryCount = computed(() => (data.value?.failed || []).length);
 const canStop = computed(() => ["Running", "Paused"].includes(data.value?.status));
 
 const title = computed(() => `Move · ${data.value?.target_bench || route.params.name}`);
@@ -123,13 +127,20 @@ function jobRoute(action) {
 }
 
 function failed(index) {
+	if (data.value?.states?.[index] === "Failed") return true;
 	const job = jobFor(index);
 	return Boolean(job) && !["Success", "Queued", "Running", "Completed With Warnings"].includes(job.status);
 }
 
 function markFor(index) {
+	// Per-action state, not a pointer. A pointer cannot say "the first app did
+	// not clone and the two after it did", which is exactly what a batch of
+	// clones looks like once it is allowed to finish.
+	const state = data.value?.states?.[index];
+	if (state === "Success") return { icon: "check", class: "u-ok", label: "done" };
+	if (state === "Failed") return { icon: "alert", class: "u-danger", label: "did not complete" };
+
 	const current = data.value?.current_action ?? 0;
-	if (index < current) return { icon: "check", class: "u-ok", label: "done" };
 	if (index === current && running.value) return { icon: "refresh", class: "", label: "running" };
 	if (index === current && canResume.value) return { icon: "alert", class: "u-danger", label: "stopped here" };
 	return { icon: "chevron", class: "text-[var(--ink-ghost)]", label: "waiting" };

@@ -126,13 +126,36 @@ def start_next(migration_name: str) -> dict:
 		return {"skipped": migration.status}
 
 	actions = migration.actions()
-	index = int(migration.current_action or 0)
+	index = migration.next_pending()
+	failed = migration.failed_indexes()
 
 	if index >= len(actions):
+		if failed:
+			migration.pause(_unfinished_note(migration, failed) + " Everything else is done.")
+			return {"paused": True, "failed": len(failed)}
 		migration.finish("Success", f"All {len(actions)} actions completed.")
 		return {"done": True, "actions": len(actions)}
 
 	action = actions[index]
+
+	# THE LINE A FAILED CLONE MUST NOT CROSS.
+	#
+	# Restoring a site into a bench that is missing an app the site uses
+	# APPEARS to work: the site comes up and every DocType belonging to that
+	# app is gone. It surfaces days later as import errors nobody connects back
+	# to the restore. So a clone that failed is allowed to be stepped over —
+	# the rest of the apps are worth having — but not past the first site.
+	if action["kind"] == KIND_RESTORE and failed:
+		migration.db_set("current_action", index, update_modified=False)
+		migration.pause(
+			_unfinished_note(migration, failed)
+			+ " Nothing is restored until those are here: a site restored into a bench missing "
+			"one of its apps comes up looking fine with that app's data gone. Fix them and "
+			"continue — Continue retries only the ones that failed."
+		)
+		return {"paused": True, "failed": len(failed)}
+
+	migration.db_set("current_action", index, update_modified=False)
 	password = migration.get_secret()
 
 	try:
@@ -189,6 +212,11 @@ def start_next(migration_name: str) -> dict:
 	return {"started": request, "action": action["label"], "index": index}
 
 
+def _unfinished_note(migration, failed: list[int]) -> str:
+	names = ", ".join(migration.describe(i) for i in failed)
+	return f"{len(failed)} of {len(migration.actions())} did not complete: {names}."
+
+
 def on_job_finished(request_name: str, status: str) -> None:
 	"""Called from `installer.finish` for every job, migration or not.
 
@@ -214,6 +242,24 @@ def on_job_finished(request_name: str, status: str) -> None:
 	label = migration.describe(index)
 
 	if status not in CONTINUE_ON:
+		migration.set_state(index, migration.FAILED)
+		actions = migration.actions()
+		kind = actions[index].get("kind") if 0 <= index < len(actions) else None
+
+		# A failed CLONE does not stop the run. Seven apps and a failure on the
+		# first meant six more visits to get the rest, when every one of those
+		# failures was independent and knowable in one pass. The batch finishes
+		# and the list of what did not clone is reported once.
+		#
+		# Anything else does stop. A bench that failed to build has nothing to
+		# clone into, and a site that failed to restore is a site — the next
+		# one is not more of the same work, it is another irreversible act on
+		# another database.
+		if kind == KIND_CLONE:
+			frappe.db.commit()
+			start_next(migration_name)
+			return
+
 		# Paused, not Failed. The bench and the sites already moved are real
 		# work, and the useful next move is nearly always to fix one thing and
 		# continue rather than to start the whole migration again.
@@ -226,7 +272,7 @@ def on_job_finished(request_name: str, status: str) -> None:
 		frappe.db.commit()
 		return
 
-	migration.db_set("current_action", index + 1, update_modified=False)
+	migration.set_state(index, migration.DONE)
 	frappe.db.commit()
 	start_next(migration_name)
 

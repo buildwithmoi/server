@@ -17,6 +17,7 @@
   "current_action",
   "sec_plan",
   "actions_json",
+  "action_states",
   "sec_options",
   "with_files",
   "backup_first",
@@ -26,29 +27,125 @@
   "notes"
  ],
  "fields": [
-  {"fieldname": "source_server", "fieldtype": "Link", "options": "Managed Server", "label": "From Server", "reqd": 1, "read_only": 1, "in_list_view": 1},
-  {"fieldname": "source_bench", "fieldtype": "Data", "label": "From Bench", "reqd": 1, "read_only": 1, "in_list_view": 1},
-  {"fieldname": "target_bench", "fieldtype": "Data", "label": "To Bench", "reqd": 1, "read_only": 1, "in_list_view": 1,
-   "description": "The bench here. Built first if it does not exist."},
-  {"fieldname": "cb_1", "fieldtype": "Column Break"},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Planned\nRunning\nPaused\nSuccess\nFailed\nCancelled", "default": "Planned", "read_only": 1, "in_list_view": 1},
-  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started", "read_only": 1},
-  {"fieldname": "finished_at", "fieldtype": "Datetime", "label": "Finished", "read_only": 1},
-  {"fieldname": "current_action", "fieldtype": "Int", "label": "On Action", "default": "0", "read_only": 1,
-   "description": "Which action in the list is running. A migration that stopped can be continued from here rather than restarted."},
-  {"fieldname": "sec_plan", "fieldtype": "Section Break", "label": "Plan"},
-  {"fieldname": "actions_json", "fieldtype": "Code", "options": "JSON", "label": "Actions", "read_only": 1,
-   "description": "The ordered list, decided once when the migration is created. Each entry becomes an ordinary job, so each shows in the dock and in its own log."},
-  {"fieldname": "sec_options", "fieldtype": "Section Break", "label": "Options"},
-  {"fieldname": "with_files", "fieldtype": "Check", "label": "Move Files Too", "default": "1",
-   "description": "Public and private files as well as the database. Off means a much faster move that loses every attachment."},
-  {"fieldname": "backup_first", "fieldtype": "Check", "label": "Back Up Before Replacing", "default": "1",
-   "description": "Only applies to sites that already exist here and would be overwritten. A new site has nothing to back up."},
-  {"fieldname": "cb_2", "fieldtype": "Column Break"},
-  {"fieldname": "db_password", "fieldtype": "Password", "label": "Database Root Password",
-   "description": "Needed to create each site and to restore into it. Held for the length of the migration and cleared when it ends, however it ends."},
-  {"fieldname": "sec_log", "fieldtype": "Section Break", "label": "Notes"},
-  {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes", "read_only": 1}
+  {
+   "fieldname": "source_server",
+   "fieldtype": "Link",
+   "options": "Managed Server",
+   "label": "From Server",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "source_bench",
+   "fieldtype": "Data",
+   "label": "From Bench",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "target_bench",
+   "fieldtype": "Data",
+   "label": "To Bench",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "The bench here. Built first if it does not exist."
+  },
+  {
+   "fieldname": "cb_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Planned\nRunning\nPaused\nSuccess\nFailed\nCancelled",
+   "default": "Planned",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started",
+   "read_only": 1
+  },
+  {
+   "fieldname": "finished_at",
+   "fieldtype": "Datetime",
+   "label": "Finished",
+   "read_only": 1
+  },
+  {
+   "fieldname": "current_action",
+   "fieldtype": "Int",
+   "label": "On Action",
+   "default": "0",
+   "read_only": 1,
+   "description": "Which action in the list is running. A migration that stopped can be continued from here rather than restarted."
+  },
+  {
+   "fieldname": "sec_plan",
+   "fieldtype": "Section Break",
+   "label": "Plan"
+  },
+  {
+   "fieldname": "actions_json",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Actions",
+   "read_only": 1,
+   "description": "The ordered list, decided once when the migration is created. Each entry becomes an ordinary job, so each shows in the dock and in its own log."
+  },
+  {
+   "fieldname": "action_states",
+   "fieldtype": "Long Text",
+   "label": "Action States",
+   "read_only": 1,
+   "description": "One state per action: Pending, Success or Failed. The pointer alone could not express 'this app did not clone but the rest did' — which is the whole reason a batch of clones now finishes before anything stops."
+  },
+  {
+   "fieldname": "sec_options",
+   "fieldtype": "Section Break",
+   "label": "Options"
+  },
+  {
+   "fieldname": "with_files",
+   "fieldtype": "Check",
+   "label": "Move Files Too",
+   "default": "1",
+   "description": "Public and private files as well as the database. Off means a much faster move that loses every attachment."
+  },
+  {
+   "fieldname": "backup_first",
+   "fieldtype": "Check",
+   "label": "Back Up Before Replacing",
+   "default": "1",
+   "description": "Only applies to sites that already exist here and would be overwritten. A new site has nothing to back up."
+  },
+  {
+   "fieldname": "cb_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "db_password",
+   "fieldtype": "Password",
+   "label": "Database Root Password",
+   "description": "Needed to create each site and to restore into it. Held for the length of the migration and cleared when it ends, however it ends."
+  },
+  {
+   "fieldname": "sec_log",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes",
+   "read_only": 1
+  }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
@@ -57,7 +154,20 @@
  "module": "Server",
  "name": "Bench Migration",
  "owner": "Administrator",
- "permissions": [{"email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1, "create": 1, "delete": 1}],
+ "permissions": [
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  }
+ ],
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

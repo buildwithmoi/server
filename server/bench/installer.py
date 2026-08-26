@@ -97,6 +97,21 @@ STEP_EVENT = "server:app_install_steps"
 #: failures here.
 _SUPERVISOR_POSTSTEP = re.compile(r"supervisorctl|restart_supervisor_processes", re.IGNORECASE)
 
+#: The OTHER thing bench does after the app is already on disk: `yarn install`
+#: in the app directory, which runs whatever `postinstall` the app declares.
+#: An app whose postinstall does `cd roster && yarn install` on a branch that
+#: has no `roster` directory fails there — after the clone, after the checkout,
+#: and after `uv pip install -e` have all succeeded.
+#:
+#: This is NOT the same claim as the supervisor one. Nothing about the app's
+#: Python side is affected and the app is importable and installable on a site;
+#: what is missing is its frontend's node_modules, so building assets for it
+#: will fail until the postinstall is fixed. That is a warning with a
+#: consequence, and the warning says what the consequence is.
+_FRONTEND_POSTSTEP = re.compile(
+	r"CommandFailedError: yarn|ERROR: yarn install|yarn install --check-files", re.IGNORECASE
+)
+
 #: exit_code when the command was never executed at all — a pre-flight refused
 #: it. A frappe Int column is NOT NULL, so None is not storable, and 0 already
 #: means "ran and succeeded". Writing None here throws a MySQL error from inside
@@ -1853,8 +1868,29 @@ def run_install_request(name: str) -> dict:
 						# the log to decide success — the app either landed on disk
 						# at the branch that was asked for, or it did not.
 						landed = _clone_landed(request)
-						benign = landed and _SUPERVISOR_POSTSTEP.search("\n".join(buffer[-60:]))
-						if benign:
+						tail = "\n".join(buffer[-60:])
+						benign = landed and _SUPERVISOR_POSTSTEP.search(tail)
+						frontend = landed and not benign and _FRONTEND_POSTSTEP.search(tail)
+
+						if frontend:
+							emit("")
+							emit(
+								"[note] The app was cloned, checked out at the branch asked for and "
+								"installed into the environment. bench then exited "
+								f"{code} running `yarn install` in the app directory, which runs "
+								"the app's own postinstall script. The Python side is complete; "
+								"the app's frontend dependencies are not."
+							)
+							clone_warning = (
+								"Installed, but `yarn install` failed in the app directory — that "
+								"runs the app's own postinstall, and a postinstall that refers to "
+								"a directory this branch does not have fails there. The app is on "
+								"disk at the right branch and installed into the environment, so "
+								"it can be installed on a site. Building assets for it will fail "
+								"until the postinstall is fixed. Read the output above for the "
+								"line that failed."
+							)
+						elif benign:
 							emit("")
 							emit(
 								"[note] The app was cloned and installed. bench then exited "

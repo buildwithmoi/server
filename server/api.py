@@ -725,6 +725,11 @@ def bench_migration(name: str) -> dict:
 		"source_bench": doc.source_bench,
 		"target_bench": doc.target_bench,
 		"current_action": doc.current_action,
+		# Per action, so the page can show "this one failed and the two after
+		# it succeeded" — which a single pointer cannot express, and which is
+		# the whole shape of a batch of clones.
+		"states": doc.states(),
+		"failed": doc.failed_indexes(),
 		"actions": actions,
 		"jobs": jobs,
 		"notes": doc.notes,
@@ -755,6 +760,23 @@ def resume_bench_migration(name: str) -> dict:
 			"be skipped, because the bench and those sites now exist.",
 			title="Password Was Cleared",
 		)
+
+	# Retry what failed, in place. A clone that failed is stepped over during
+	# the run so the rest of the batch finishes; Continue is where those get
+	# another go — because Continue is pressed by somebody who has just fixed
+	# something, and retrying only the failures is the difference between one
+	# more clone and re-cloning six apps that are already there.
+	retried = doc.failed_indexes()
+	for index in retried:
+		doc.set_state(index, doc.PENDING)
+	if retried:
+		doc.db_set(
+			"notes",
+			f"Retrying {len(retried)} that did not complete: "
+			+ ", ".join(doc.describe(i) for i in retried),
+			update_modified=False,
+		)
+	frappe.db.commit()
 
 	return runner.start_next(name)
 

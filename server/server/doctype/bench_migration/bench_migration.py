@@ -43,6 +43,55 @@ class BenchMigration(Document):
 		except ValueError:
 			return []
 
+	#: Per-action outcome. `current_action` alone is a pointer, and a pointer
+	#: cannot say "the fourth app did not clone but the fifth and sixth did" —
+	#: which is exactly what a batch of clones has to be able to say.
+	PENDING = "Pending"
+	DONE = "Success"
+	FAILED = "Failed"
+
+	def states(self) -> list[str]:
+		"""One state per action, defaulted for a migration started before this.
+
+		Older rows have no states at all. Everything before `current_action` is
+		known to have succeeded — that is what advancing the pointer meant — so
+		the list is reconstructed from it rather than the row being treated as
+		broken.
+		"""
+		count = len(self.actions())
+		try:
+			stored = json.loads(self.action_states or "[]")
+		except ValueError:
+			stored = []
+		if len(stored) == count and all(stored):
+			return stored
+		at = int(self.current_action or 0)
+		return [self.DONE if i < at else self.PENDING for i in range(count)]
+
+	def set_state(self, index: int, state: str) -> None:
+		states = self.states()
+		if 0 <= index < len(states):
+			states[index] = state
+			self.db_set("action_states", json.dumps(states), update_modified=False)
+
+	def next_pending(self) -> int:
+		"""The next action to run, skipping ones that already failed.
+
+		Failed ones are stepped over rather than retried here: a clone that
+		fails for a reason on GitHub fails identically a second later, and
+		stopping the whole batch at the first one is what made moving a bench
+		of seven apps a seven-visit job. They are retried on Continue, once
+		somebody has fixed something.
+		"""
+		states = self.states()
+		for index, state in enumerate(states):
+			if state == self.PENDING:
+				return index
+		return len(states)
+
+	def failed_indexes(self) -> list[int]:
+		return [i for i, state in enumerate(self.states()) if state == self.FAILED]
+
 	def get_secret(self) -> str:
 		return self.get_password("db_password", raise_exception=False) or ""
 
@@ -64,6 +113,22 @@ class BenchMigration(Document):
 		if 0 <= index < len(actions):
 			return actions[index].get("label") or actions[index].get("kind") or "?"
 		return "—"
+
+	def pause(self, note: str = "") -> None:
+		"""Stop, but keep what is needed to continue.
+
+		NOT `finish("Paused")`. `finish` clears the database password, which is
+		correct for something that is over and fatal for something that is
+		meant to be resumed: creating and restoring a site both need it, and
+		without it the only way forward is to start the whole migration again.
+		Caught by walking a migration through a failed clone and finding
+		Continue refusing to run.
+		"""
+		self.db_set(
+			{"status": "Paused", "notes": (note or self.notes or "")[:1000] or None},
+			update_modified=False,
+		)
+		frappe.db.commit()
 
 	def finish(self, status: str, note: str = "") -> None:
 		self.db_set(
