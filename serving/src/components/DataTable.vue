@@ -70,7 +70,11 @@
 			v-if="!loading && !rows.length"
 			:title="emptyTitle"
 			:hint="emptyHint"
-		/>
+		>
+			<!-- For an empty state that has something to explain: which
+			     directory was searched, which filter is hiding everything. -->
+			<slot name="empty-extra" />
+		</EmptyState>
 
 		<!-- pager -->
 		<div

@@ -24,7 +24,7 @@ from frappe.rate_limiter import rate_limit
 
 from server import dashboard, system
 from server.bench import commands as bench_commands
-from server.bench import discovery, doctor, github, installer
+from server.bench import discovery, doctor, github, installer, scanner
 from server.bench import backups as bench_backups
 from server.bench import inspect as bench_inspect
 from server.bench import logs as bench_logs
@@ -3147,6 +3147,27 @@ def rescan_benches() -> dict:
 	"""Rescan the bench root now."""
 	_assert_server_admin()
 	return discovery.scan_benches()
+
+
+@frappe.whitelist()
+def bench_root_report() -> dict:
+	"""Where the scan looked, and what it rejected there.
+
+	Exists because "no benches" and "wrong directory" looked identical. This app
+	shipped a Bench Root default of the home directory it was written in, and
+	the first server it was installed on displayed an empty page while holding
+	twelve benches — with nothing on screen naming the path it had searched.
+	"""
+	_assert_server_admin()
+
+	settings = get_settings()
+	report = scanner.diagnose(settings.get_bench_root())
+	# Named separately so the page can say "this came from Settings" versus
+	# "this is where the app itself is installed" — which is the distinction an
+	# operator needs in order to know what to change.
+	report["configured"] = (settings.bench_root or "").strip()
+	report["default_root"] = os.path.dirname(frappe.utils.get_bench_path().rstrip("/"))
+	return report
 
 
 @frappe.whitelist()

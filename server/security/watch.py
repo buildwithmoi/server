@@ -1211,17 +1211,20 @@ def scan_site(record_only: bool = False) -> dict:
 	Every other detector here watches the operating system. This one watches
 	the application on top of it, which is where the credentials actually are.
 	"""
+	import os
+
 	from server.security import site, site_rules
 
-	settings = get_settings()
-	bench_path = settings.bench_root or "/home/patoo/fb-16-server"
 	# The bench this app is installed in, not every bench on the box: reading
 	# another bench's site configs would mean this app holding credentials for
 	# sites it has nothing to do with.
-	import os
-
-	if not os.path.isdir(os.path.join(bench_path, "sites")):
-		bench_path = frappe.utils.get_bench_path()
+	#
+	# Asked of frappe rather than read from Server Settings. `bench_root` is the
+	# directory benches sit IN, so using it here was a category error that only
+	# worked because of a fallback below it — and it defaulted to a path from
+	# the machine this app was written on, which on any other server made this
+	# detector scan a directory that did not exist.
+	bench_path = frappe.utils.get_bench_path()
 
 	sites = _bench_sites(bench_path)
 	try:
@@ -1283,10 +1286,10 @@ def scan_web(record_only: bool = False) -> dict:
 	from server.server.doctype.security_baseline import security_baseline as baseline
 
 	settings = get_settings()
-	bench_path = settings.bench_root or frappe.utils.get_bench_path()
-	apps_path = os.path.join(bench_path, "apps")
-	if not os.path.isdir(apps_path):
-		apps_path = os.path.join(frappe.utils.get_bench_path(), "apps")
+	# This app's own bench, from frappe — not Server Settings' Bench Root, which
+	# names the directory benches sit IN and defaulted to a path from another
+	# machine entirely.
+	apps_path = os.path.join(frappe.utils.get_bench_path(), "apps")
 
 	installed = frappe.get_installed_apps()
 	snapshot = web.collect(apps_path, installed)

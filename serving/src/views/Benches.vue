@@ -89,10 +89,52 @@
 			:total="rows.length"
 			:page-length="100"
 			clickable
-			empty-title="No benches found"
-			empty-hint="Nothing under the configured Bench Root looks like a bench. A directory counts only if it has apps, sites, config, logs and config/pids."
+			:empty-title="report ? `No benches under ${report.root}` : 'No benches found'"
+			:empty-hint="emptyHint"
 			@row-click="open"
 		>
+			<!-- Naming the directory is the whole point. "No benches found" and
+			     "I looked in the wrong place" read identically, and the second
+			     one is a one-field fix nobody can make without being told where
+			     the app actually searched. -->
+			<template #empty-extra>
+				<div v-if="report" class="mx-auto mt-4 max-w-xl text-left">
+					<dl class="rounded-lg border border-[var(--rule)] bg-[var(--paper-sunk)] p-3 text-[12.5px]">
+						<div class="flex gap-2">
+							<dt class="w-28 shrink-0 text-[var(--ink-faint)]">Searched</dt>
+							<dd class="u-mono break-all">{{ report.root }}</dd>
+						</div>
+						<div class="mt-1.5 flex gap-2">
+							<dt class="w-28 shrink-0 text-[var(--ink-faint)]">Set in</dt>
+							<dd>{{ report.configured ? "Settings → Bench Root" : "unset, so this bench's parent" }}</dd>
+						</div>
+						<div v-if="report.configured && report.configured !== report.default_root" class="mt-1.5 flex gap-2">
+							<dt class="w-28 shrink-0 text-[var(--ink-faint)]">This bench</dt>
+							<dd class="u-mono break-all">{{ report.default_root }}</dd>
+						</div>
+					</dl>
+
+					<template v-if="report.candidates.length">
+						<p class="mt-3 text-[12.5px] text-[var(--ink-faint)]">
+							Directories that came close:
+						</p>
+						<ul class="mt-1.5 space-y-1">
+							<li v-for="c in report.candidates" :key="c.path" class="text-[12.5px]">
+								<span class="u-mono">{{ c.name }}</span>
+								<span class="text-[var(--ink-faint)]"> — {{ c.reason }}</span>
+							</li>
+						</ul>
+					</template>
+
+					<p v-if="!report.exists" class="mt-3 text-[12.5px] u-danger">
+						That directory does not exist on this machine. Clear Bench Root in Settings to
+						use <span class="u-mono">{{ report.default_root }}</span> instead.
+					</p>
+					<p v-else-if="!report.readable" class="mt-3 text-[12.5px] u-danger">
+						That directory could not be read by the user this app runs as.
+					</p>
+				</div>
+			</template>
 			<template #cell-name="{ row }">
 				<span class="font-medium">{{ row.name }}</span>
 				<span v-if="!row.is_active" class="ml-2 text-[11px] text-[var(--ink-faint)]">missing on disk</span>
@@ -134,7 +176,7 @@ import Skeleton from "../components/Skeleton.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import MigrateDialog from "../components/MigrateDialog.vue";
 import ProvisionDialog from "../components/ProvisionDialog.vue";
-import { benchesResource, gitAuthResource, rescanBenchesResource } from "../api";
+import { benchRootReportResource, benchesResource, gitAuthResource, rescanBenchesResource } from "../api";
 
 const COLUMNS = [
 	{ key: "name", label: "Bench", width: "170px" },
@@ -150,10 +192,19 @@ const COLUMNS = [
 const router = useRouter();
 const resource = benchesResource();
 const auth = gitAuthResource();
+const rootReport = benchRootReportResource();
 const rescanning = ref(false);
 const showAuth = ref(false);
 
 const rows = computed(() => resource.data || []);
+const report = computed(() => rootReport.data || null);
+
+const emptyHint = computed(() => {
+	if (!report.value) return "A directory counts as a bench only if it has apps, sites, config, logs and config/pids.";
+	if (!report.value.exists) return "That directory does not exist on this machine.";
+	if (!report.value.readable) return "That directory could not be read.";
+	return "A directory counts as a bench only if it has apps, sites, config, logs and config/pids.";
+});
 const loading = computed(() => resource.loading && !resource.data);
 const subtitle = computed(() =>
 	loading.value ? "scanning…" : `${rows.value.length} found on this machine`,
@@ -206,8 +257,12 @@ async function rescan() {
 	}
 }
 
-onMounted(() => {
-	resource.fetch();
+onMounted(async () => {
+	await resource.fetch();
 	auth.fetch();
+	// Only when there is nothing to show. On a working machine this is a
+	// directory listing nobody needs, and the empty state is the only place
+	// its answer is used.
+	if (!rows.value.length) rootReport.fetch();
 });
 </script>

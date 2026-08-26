@@ -210,8 +210,7 @@
    "label": "Allow App Installs"
   },
   {
-   "default": "/home/patoo",
-   "description": "Directory scanned for benches. A folder counts as a bench only if it contains all of apps/, sites/, config/, logs/ and config/pids — the same test the bench CLI itself uses. Leave blank to use the parent directory of the bench this app is running in.",
+   "description": "Directory scanned for benches. Leave EMPTY to use the directory this bench sits in, which is right on almost every machine — a fixed default here would be one developer's home directory shipped to every server. A folder counts as a bench only if it contains all of apps/, sites/, config/, logs/ and config/pids.",
    "fieldname": "bench_root",
    "fieldtype": "Data",
    "label": "Bench Root"

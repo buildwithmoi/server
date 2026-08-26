@@ -850,6 +850,10 @@ export function cancelMigrationResource() {
 	return createResource({ url: `${M}.cancel_bench_migration` });
 }
 
+export function benchRootReportResource() {
+	return switchable("bench_root_report");
+}
+
 export function scheduledLogsResource() {
 	return switchable("scheduled_logs");
 }

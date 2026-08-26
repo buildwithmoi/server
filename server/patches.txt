@@ -12,3 +12,7 @@ server.patches.seed_server_settings
 # site and the detectors silently never run. Patch Log matches the whole line,
 # so the trailing comment is what makes it execute again.
 server.patches.seed_server_settings # security monitoring defaults
+# The DocType shipped a Bench Root default of one developer's home directory,
+# which every install wrote into its own settings the first time it saved. The
+# scan then looked somewhere that did not exist and reported no benches.
+server.patches.fix_bench_root

@@ -109,6 +109,78 @@ def find_benches(root: str) -> list[str]:
 	return found
 
 
+@dataclass
+class Candidate:
+	"""One directory under the bench root, and what it is missing."""
+
+	name: str
+	path: str
+	is_bench: bool
+	missing: list[str] = field(default_factory=list)
+
+	@property
+	def reason(self) -> str:
+		if self.is_bench:
+			return "a bench"
+		if not self.missing:
+			return "not a bench"
+		return "missing " + ", ".join(self.missing)
+
+
+def diagnose(root: str) -> dict:
+	"""Why the scan found what it found.
+
+	"No benches found" and "I looked in the wrong place" render identically,
+	and the difference is everything: this app shipped a Bench Root default of
+	one developer's home directory, and the first server it was installed on
+	showed an empty page while holding twelve benches. The page said nothing
+	about WHERE it had looked.
+
+	So the answer names the directory and lists every candidate with the
+	markers it lacks. Same rule as the security detectors: a surface that could
+	not be read is reported, never assumed empty.
+	"""
+	report = {
+		"root": root,
+		"exists": os.path.isdir(root),
+		"readable": False,
+		"candidates": [],
+		"benches": 0,
+	}
+	if not report["exists"]:
+		return report
+
+	try:
+		entries = sorted(os.scandir(root), key=lambda e: e.name)
+		report["readable"] = True
+	except OSError as exc:
+		report["error"] = str(exc)
+		return report
+
+	for entry in entries:
+		if entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
+			continue
+		missing = [m for m in BENCH_MARKERS if not os.path.isdir(os.path.join(entry.path, m))]
+		candidate = Candidate(
+			name=entry.name, path=entry.path, is_bench=not missing, missing=missing
+		)
+		# A directory missing everything is somebody's Documents folder, not a
+		# broken bench. Listing those would bury the near-miss that matters.
+		if candidate.is_bench or len(missing) < len(BENCH_MARKERS):
+			report["candidates"].append(
+				{
+					"name": candidate.name,
+					"path": candidate.path,
+					"is_bench": candidate.is_bench,
+					"missing": candidate.missing,
+					"reason": candidate.reason,
+				}
+			)
+		report["benches"] += 1 if candidate.is_bench else 0
+
+	return report
+
+
 def _read_json(path: str) -> dict:
 	try:
 		with open(path, encoding="utf-8") as fh:
