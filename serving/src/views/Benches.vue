@@ -15,6 +15,7 @@
 		</template>
 
 		<ProvisionDialog v-model="showProvision" @started="onProvisionStarted" />
+		<MigrateDialog v-model="showMigrate" @started="onMigrationStarted" />
 
 		<!-- Git access is a one-line summary here and the full report lives on a
 		     bench, because this page is now a list you scan rather than read. -->
@@ -131,6 +132,7 @@ import Icon from "../components/Icon.vue";
 import OutcomeMark from "../components/OutcomeMark.vue";
 import Skeleton from "../components/Skeleton.vue";
 import ActionMenu from "../components/ActionMenu.vue";
+import MigrateDialog from "../components/MigrateDialog.vue";
 import ProvisionDialog from "../components/ProvisionDialog.vue";
 import { benchesResource, gitAuthResource, rescanBenchesResource } from "../api";
 
@@ -161,8 +163,16 @@ const dirtyCount = (bench) => bench.apps.filter((a) => a.is_dirty).length;
 const open = (bench) => router.push({ name: "BenchDetail", params: { name: bench.name } });
 
 const showProvision = ref(false);
+const showMigrate = ref(false);
 
 const actions = computed(() => [
+	{
+		label: "Move a bench here…",
+		icon: "server",
+		description: "Bring every site on a bench from another server, building it here first.",
+		danger: true,
+		onClick: () => (showMigrate.value = true),
+	},
 	{
 		label: "Rescan benches",
 		icon: "refresh",
@@ -170,6 +180,12 @@ const actions = computed(() => [
 		onClick: rescan,
 	},
 ]);
+
+function onMigrationStarted(name) {
+	// Each step is an ordinary job, so the dock already shows them one by one.
+	// The migration row is what says how far through the whole thing it is.
+	router.push({ name: "Migration", params: { name } });
+}
 
 function onProvisionStarted() {
 	// The dock owns the job from here. A rescan once it is likely to have

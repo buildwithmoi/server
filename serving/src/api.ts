@@ -827,3 +827,25 @@ export function callRemoteResource() {
 export function remoteReadinessResource() {
 	return createResource({ url: `${M}.remote_site_readiness` });
 }
+
+/* ------------------------------------------------------------- migrations */
+
+export function planMigrationResource() {
+	return createResource({ url: `${M}.plan_bench_migration` });
+}
+
+export function startMigrationResource() {
+	return createResource({ url: `${M}.start_bench_migration` });
+}
+
+export function migrationResource() {
+	return createResource({ url: `${M}.bench_migration` });
+}
+
+export function resumeMigrationResource() {
+	return createResource({ url: `${M}.resume_bench_migration` });
+}
+
+export function cancelMigrationResource() {
+	return createResource({ url: `${M}.cancel_bench_migration` });
+}

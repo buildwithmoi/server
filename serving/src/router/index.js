@@ -86,6 +86,12 @@ const routes = [
 		meta: { title: "Servers" },
 	},
 	{
+		path: "/migrations/:name",
+		name: "Migration",
+		component: () => import("../views/Migration.vue"),
+		meta: { title: "Bench Move" },
+	},
+	{
 		path: "/logs/deployments",
 		name: "DeploymentLogs",
 		component: () => import("../views/JobLogs.vue"),
