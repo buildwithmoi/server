@@ -27,6 +27,33 @@
 				and some sites are already across. Continuing picks up at the
 				step that stopped rather than starting again.
 			-->
+			<!--
+				Only shown when it is actually needed. Every terminal state
+				clears the password, so continuing a stopped move needs it
+				again — and "it was cleared, start over" cost an hour of
+				re-cloning to work around.
+			-->
+			<div v-if="askingPassword" class="u-note mb-4 flex flex-col gap-2">
+				<p class="text-[12.5px] leading-relaxed">
+					The database root password was cleared when this move stopped — it is never kept
+					longer than a run needs it. Supply it again to continue. Nothing already done is
+					repeated.
+				</p>
+				<div class="flex flex-wrap items-center gap-2">
+					<input
+						v-model="password"
+						type="password"
+						placeholder="Database root password"
+						class="min-w-0 flex-1 rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+						@keyup.enter="resume"
+					/>
+					<Button variant="solid" :loading="acting" :disabled="!password" @click="resume">
+						Continue
+					</Button>
+					<Button variant="ghost" @click="askingPassword = false; password = ''">Cancel</Button>
+				</div>
+			</div>
+
 			<p v-if="data.notes" class="u-note mb-4 text-[12.5px] leading-relaxed"
 			   :class="data.status === 'Paused' ? 'u-note-danger' : ''">
 				{{ data.notes }}
@@ -102,9 +129,16 @@ let timer = null;
 const data = computed(() => resource.data);
 const loading = computed(() => resource.loading);
 const running = computed(() => data.value?.status === "Running");
-const canResume = computed(() => data.value?.status === "Paused");
+// Cancelled counts as stopped. Stopping a move by hand ends the chain; it does
+// not void the plan or undo what it had already done — and refusing to
+// continue one meant a new migration was the only way forward, which is the
+// thing this page exists to avoid.
+const canResume = computed(() => ["Paused", "Cancelled", "Failed"].includes(data.value?.status));
 /** How many actions Continue would retry rather than skip past. */
 const retryCount = computed(() => (data.value?.failed || []).length);
+
+const askingPassword = ref(false);
+const password = ref("");
 const canStop = computed(() => ["Running", "Paused"].includes(data.value?.status));
 
 const title = computed(() => `Move · ${data.value?.target_bench || route.params.name}`);
@@ -155,9 +189,22 @@ function load() {
 }
 
 async function resume() {
+	// The password is cleared whenever a migration reaches a terminal state —
+	// deliberately, it is a database root password. Asked for again rather
+	// than failing after the button is pressed.
+	if (data.value?.needs_password && !password.value) {
+		askingPassword.value = true;
+		return;
+	}
+
 	acting.value = true;
 	try {
-		await resumeRes.submit({ name: route.params.name });
+		await resumeRes.submit({
+			name: route.params.name,
+			db_root_password: password.value || null,
+		});
+		askingPassword.value = false;
+		password.value = "";
 		toast.success("Continuing");
 		load();
 	} catch (caught) {

@@ -89,14 +89,22 @@ const subtitle = computed(() => {
 	return rows.value.length ? `${rows.value.length} recorded` : "none yet";
 });
 
-/** Running or Paused: work in flight, not a record of work done. */
-const needsSomebody = (row) => ["Running", "Paused"].includes(row.status);
+/**
+ * Work in flight, not a record of work done.
+ *
+ * Cancelled is included: stopping by hand ends the chain, it does not void the
+ * plan or undo what was already done, and it is continuable from where it
+ * stopped.
+ */
+const needsSomebody = (row) =>
+	["Running", "Paused", "Cancelled", "Failed"].includes(row.status) && row.done < row.total;
 
 function markFor(row) {
 	if (row.status === "Success") return { icon: "check", class: "u-ok" };
 	if (row.status === "Paused") return { icon: "alert", class: "u-danger" };
 	if (row.status === "Running") return { icon: "refresh", class: "" };
 	if (row.status === "Cancelled") return { icon: "close", class: "text-[var(--ink-faint)]" };
+	if (row.status === "Failed") return { icon: "alert", class: "u-danger" };
 	return { icon: "alert", class: "u-danger" };
 }
 

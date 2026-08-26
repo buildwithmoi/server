@@ -771,6 +771,9 @@ def bench_migration(name: str) -> dict:
 		# it succeeded" — which a single pointer cannot express, and which is
 		# the whole shape of a batch of clones.
 		"states": doc.states(),
+		# Cleared on every terminal state, so Continue has to ask for it again
+		# rather than failing after the button is pressed.
+		"needs_password": not bool(doc.get_secret()),
 		"failed": doc.failed_indexes(),
 		"actions": actions,
 		"jobs": jobs,
@@ -779,12 +782,23 @@ def bench_migration(name: str) -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
-def resume_bench_migration(name: str) -> dict:
+def resume_bench_migration(name: str, db_root_password: str | None = None) -> dict:
 	"""Continue a migration that stopped, from where it stopped.
 
 	Not a restart. Everything before the failing action is real work — a bench
 	built, sites already across — and redoing it would cost hours and would
 	overwrite sites that moved correctly.
+
+	CANCELLED COUNTS AS STOPPED. Stopping a move by hand ends the chain; it
+	does not void the plan or undo the eight things it had done. Refusing to
+	continue one meant the only way forward was a new migration, which is the
+	thing this whole page exists to avoid. Only a move that SUCCEEDED has
+	nothing left to do.
+
+	The password is asked for again rather than being a dead end. It is cleared
+	whenever a migration reaches a terminal state — deliberately, it is a
+	database root password — and "it was cleared, start over" was an answer
+	that cost an hour of cloning to work around.
 	"""
 	_assert_server_admin()
 	get_settings().assert_installs_allowed()
@@ -792,15 +806,21 @@ def resume_bench_migration(name: str) -> dict:
 	from server.remote import runner
 
 	doc = frappe.get_doc("Bench Migration", name)
-	if doc.status in ("Success", "Cancelled"):
-		frappe.throw(f"{name} is {doc.status.lower()} — there is nothing to resume.",
-		             title="Not Resumable")
+	if doc.status == "Success":
+		frappe.throw(f"{name} finished — there is nothing to resume.", title="Not Resumable")
+
+	if db_root_password:
+		doc.db_set("db_password", db_root_password)
+		frappe.db.commit()
+		doc.reload()
+
 	if not doc.get_secret():
 		frappe.throw(
-			"The database password was cleared when this migration stopped, and creating or "
-			"restoring a site needs it. Start a new migration — the actions already done will "
-			"be skipped, because the bench and those sites now exist.",
-			title="Password Was Cleared",
+			"The database password was cleared when this migration stopped — it is a database "
+			"root password and is never kept longer than a run needs it. Supply it again to "
+			"continue: nothing already done is repeated.",
+			title="Password Needed",
+			exc=frappe.ValidationError,
 		)
 
 	# Retry what failed, in place. A clone that failed is stepped over during
@@ -818,6 +838,14 @@ def resume_bench_migration(name: str) -> dict:
 			+ ", ".join(doc.describe(i) for i in retried),
 			update_modified=False,
 		)
+
+	# Out of the terminal state before asking for the next action: `start_next`
+	# refuses to touch a migration that is Cancelled, Success or Failed, so
+	# resuming one without this returned "skipped" and did nothing at all.
+	doc.db_set(
+		{"status": "Running", "finished_at": None},
+		update_modified=False,
+	)
 	frappe.db.commit()
 
 	return runner.start_next(name)

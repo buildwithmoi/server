@@ -96,7 +96,7 @@
 			<Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
 			<div class="min-w-0 flex-1">
 				<p class="text-[13px] font-medium">
-					A bench move is {{ unfinishedMove.status.toLowerCase() }}
+					A bench move is unfinished
 				</p>
 				<p class="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
 					<span class="u-mono">{{ unfinishedMove.source_bench }}</span> →
@@ -245,7 +245,13 @@ const report = computed(() => rootReport.data || null);
 /** The most recent move still waiting on somebody, if there is one. */
 const unfinishedMove = computed(() => {
 	const rows = moves.data?.rows || [];
-	return rows.find((row) => ["Running", "Paused"].includes(row.status)) || null;
+	return (
+		rows.find(
+			(row) =>
+				["Running", "Paused", "Cancelled", "Failed"].includes(row.status) &&
+				row.done < row.total,
+		) || null
+	);
 });
 
 /** Benches exist on disk; the table simply has not been filled from them. */
