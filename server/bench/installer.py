@@ -618,6 +618,7 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 	from server.bench import provision
 
 	site = (request.install_on_site or "").strip()
+	remote = request.restore_source == "Remote Server"
 	# A target that is not here yet is CREATED, whatever the source. That was
 	# only allowed for a remote pull, which made the obvious safe habit
 	# impossible: restore a backup under a temporary name, check it, and only
