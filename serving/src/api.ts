@@ -190,6 +190,14 @@ export function ipAddressesResource() {
 	return createResource({ url: `${M}.list_ip_addresses` });
 }
 
+export function settingsFormResource() {
+	return switchable("server_settings_form");
+}
+
+export function saveSettingsResource() {
+	return switchable("save_server_settings");
+}
+
 export function settingsResource() {
 	return createResource({ url: `${M}.get_settings_summary` });
 }

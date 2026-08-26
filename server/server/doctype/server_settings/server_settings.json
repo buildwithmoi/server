@@ -29,6 +29,12 @@
   "alert_on_root_login",
   "trusted_countries",
   "bench_section",
+  "allow_app_install",
+  "bench_root",
+  "bench_executable",
+  "column_break_bench",
+  "install_timeout_seconds",
+  "git_ssh_command",
   "security_section",
   "security_scans_enabled",
   "security_record_only",
@@ -36,13 +42,7 @@
   "column_break_security",
   "forward_events_to",
   "forward_events_token",
-  "watchdog_token",
-  "allow_app_install",
-  "bench_root",
-  "bench_executable",
-  "column_break_bench",
-  "install_timeout_seconds",
-  "git_ssh_command"
+  "watchdog_token"
  ],
  "fields": [
   {
@@ -203,8 +203,8 @@
    "label": "Bench Management"
   },
   {
-   "default": "0",
-   "description": "Safety interlock. While OFF, no App Install Request can run and nothing in this app will execute a bench command. Turn it on deliberately, and consider turning it back off once the apps you needed are installed.",
+   "default": "1",
+   "description": "Safety interlock. While OFF, no App Install Request can run and nothing in this app will execute a bench command. Turn it on deliberately, and consider turning it back off once the apps you needed are installed. On by default: an app that cannot run a command cannot do the thing it was installed for. Switch it off to freeze all subprocess activity — every path that spawns a process checks it, including ones another server calls.",
    "fieldname": "allow_app_install",
    "fieldtype": "Check",
    "label": "Allow App Installs"

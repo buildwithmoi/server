@@ -248,6 +248,110 @@ def get_settings_summary() -> dict:
 	}
 
 
+@frappe.whitelist()
+def server_settings_form() -> dict:
+	"""Every setting, grouped the way the DocType groups them.
+
+	Built from `frappe.get_meta` rather than from a list written out here. A
+	hand-kept copy drifts: a field added to the DocType would simply not appear,
+	and the only sign would be somebody wondering why the thing they read about
+	is not on the page.
+
+	NO SECRET IS EVER RETURNED. A Password field reports only whether one is
+	set, which is the single fact the interface needs in order to say "leave
+	blank to keep it".
+	"""
+	_assert_server_admin()
+
+	settings = get_settings()
+	meta = frappe.get_meta("Server Settings")
+
+	groups: list[dict] = []
+	current: dict | None = None
+
+	for field in meta.fields:
+		if field.fieldtype in ("Section Break", "Tab Break"):
+			current = {"key": field.fieldname, "label": field.label or "General", "fields": []}
+			groups.append(current)
+			continue
+		if field.fieldtype == "Column Break":
+			continue
+		if field.fieldtype in frappe.model.no_value_fields:
+			continue
+		if current is None:
+			current = {"key": "general", "label": "General", "fields": []}
+			groups.append(current)
+
+		row = {
+			"fieldname": field.fieldname,
+			"label": field.label or field.fieldname,
+			"fieldtype": field.fieldtype,
+			"description": field.description or "",
+			"options": [o for o in (field.options or "").split("\n") if o]
+			if field.fieldtype == "Select"
+			else None,
+			"read_only": bool(field.read_only),
+		}
+		if field.fieldtype == "Password":
+			# Never the value. `has_value` is what lets the field say "leave
+			# blank to keep the one already there" without ever carrying it.
+			row["has_value"] = bool(settings.get_password(field.fieldname, raise_exception=False))
+			row["value"] = ""
+		else:
+			row["value"] = settings.get(field.fieldname)
+		current["fields"].append(row)
+
+	return {"groups": [g for g in groups if g["fields"]]}
+
+
+@frappe.whitelist(methods=["POST"])
+def save_server_settings(values: dict | str) -> dict:
+	"""Write settings from the SPA.
+
+	Only fields the DocType actually declares, and only ones it does not mark
+	read-only — the payload comes from a browser, and "it is our own form" is
+	not a reason to trust the shape of what arrives.
+
+	A blank Password is "keep what is there", never "clear it". Sending an
+	empty string for a secret is what a form does when it does not know the
+	value, which is always — the form is never given it.
+	"""
+	_assert_server_admin()
+
+	values = frappe.parse_json(values) if isinstance(values, str) else (values or {})
+	meta = frappe.get_meta("Server Settings")
+	editable = {
+		field.fieldname: field
+		for field in meta.fields
+		if field.fieldtype not in frappe.model.no_value_fields and not field.read_only
+	}
+
+	doc = frappe.get_doc("Server Settings")
+	written = []
+	for name, value in values.items():
+		field = editable.get(name)
+		if not field:
+			continue
+		if field.fieldtype == "Password":
+			if not (value or "").strip():
+				continue
+			doc.set(name, value)
+		elif field.fieldtype == "Check":
+			doc.set(name, 1 if frappe.parse_json(value) else 0)
+		elif field.fieldtype == "Int":
+			doc.set(name, frappe.utils.cint(value))
+		else:
+			doc.set(name, (value or "").strip() or None)
+		written.append(name)
+
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	# Settings are read through a cached document on every scheduled tick, so a
+	# save nobody cleared would take effect at some unpredictable point later.
+	frappe.clear_cache()
+	return {"saved": written}
+
+
 @frappe.whitelist(methods=["POST"])
 def set_monitoring_enabled(enabled: bool = False) -> dict:
 	"""Toggle the ingest master switch from the SPA.
