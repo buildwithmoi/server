@@ -1153,6 +1153,11 @@ def run_install_request(name: str) -> dict:
 	request = frappe.get_doc("App Install Request", name)
 	settings = get_settings()
 	buffer: list[str] = []
+	#: The previous line and how many times it has repeated since, for
+	#: collapsing a redrawn progress bar. Lists rather than plain values
+	#: because `emit` is a closure and rebinding would shadow them.
+	last_line = [""]
+	repeated = [0]
 	last_emit = [0.0]
 	last_steps = [0.0]
 
@@ -1241,6 +1246,26 @@ def run_install_request(name: str) -> dict:
 			# catalogued read-only command was enough to write both into a log
 			# this app renders — undoing the redaction in the config editor.
 			line = siteconfig.scrub(line)
+
+			# A progress bar redrawn with carriage returns arrives here as one
+			# line per repaint, and `bench new-site` emits the same "40%" forty
+			# times in a row. Collapsing consecutive identical lines is what
+			# keeps the stored log readable — and this log exists to be copied
+			# out and sent to somebody, where thousands of duplicate rows are
+			# the difference between a diagnosis and a scroll.
+			#
+			# Only CONSECUTIVE and only IDENTICAL: a repeated line separated by
+			# anything else is a real repetition and is kept.
+			if line and line == last_line[0]:
+				repeated[0] += 1
+				return
+			if repeated[0]:
+				note = f"    … the line above repeated {repeated[0]} more times"
+				repeated[0] = 0
+				pending.append(note)
+				buffer.append(note)
+			last_line[0] = line
+
 			pending.append(line)
 			buffer.append(line)
 			# The tail is all that is needed after the fact — _tail for the
