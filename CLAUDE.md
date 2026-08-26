@@ -363,7 +363,8 @@ fixture-built and still needs confirming on real hardware — the same position
   (DocType schema convention).
 - `.eslintrc` declares Frappe desk globals (`frappe`, `__`, `cur_frm`, …) — desk-side JS may reference
   them without imports.
-- Default branch here is `version-16`; CI runs on pushes to it. The CI job has a `Find tests` step that
+- Default branch here is `main`; CI runs on pushes to it. The app still targets Frappe
+  v16 — the branch name says where the code lives, not which Frappe it is for. The CI job has a `Find tests` step that
   greps for `def test` and **fails when the app has no tests** — adding the first test file is what makes
   CI green.
 - New DocTypes go under `server/server/doctype/` (the `Server` module, declared in `server/modules.txt`);

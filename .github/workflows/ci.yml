@@ -3,11 +3,11 @@ name: CI
 on:
   push:
     branches:
-      - version-16
+      - main
   pull_request:
 
 concurrency:
-  group: version-16-server-${{ github.event.number }}
+  group: main-server-${{ github.event.number }}
   cancel-in-progress: true
 
 jobs:
