@@ -315,6 +315,66 @@ def _provision_domain(request, bench_path: str, site: str) -> list[str]:
 	return notes
 
 
+def _create_site_for_restore(request, bench_doc, settings, env, step, emit, finish, should_cancel):
+	"""Make an empty site for the dump to land in.
+
+	`bench restore` loads into an EXISTING site and will not create one, so
+	pulling a site onto a machine that has never had it needs this first —
+	which is nearly every site in a migration.
+
+	It reuses the database root password the restore already required, so this
+	asks for nothing extra. The site is created with no apps: `bench restore`
+	replaces the database wholesale a moment later, so installing anything here
+	would be work thrown away.
+	"""
+	from server.bench import provision
+
+	site = request.install_on_site
+	step("create")
+	emit(f"{site} is not on this bench yet — creating it for the dump to land in.")
+
+	# Generated rather than omitted: `bench new-site` prompts for it when the
+	# flag is absent, and stdin is closed. It is replaced by the dump a moment
+	# later, but it is printed below because if the restore then fails this is
+	# the only way into the site that was just created.
+	admin_password = provision.generate_admin_password()
+	argv = provision.build_new_site_argv(
+		settings.bench_executable,
+		site,
+		request.get_password("restore_db_password", raise_exception=False) or "",
+		admin_password=admin_password,
+	)
+	# `--set-default` belongs to a bench's FIRST site, not to a site being
+	# restored alongside others. Dropped here so a migration does not silently
+	# change which site the bench serves by default.
+	argv = [a for a in argv if a != "--set-default"]
+
+	shown = " ".join(restore.redact(argv))
+	emit(f"$ {shown}")
+	code, timed_out = _stream(
+		argv, bench_doc.bench_path, env, settings.get_install_timeout(), emit, should_cancel
+	)
+	if code != 0:
+		return finish(
+			"Failed",
+			exit_code=code,
+			error=_explain_failure(
+				code, timed_out, settings.get_install_timeout(), request, "bench new-site"
+			),
+		)
+
+	emit(
+		f"Administrator password for the empty site is {admin_password} — the restore replaces it "
+		f"with whatever the dump carries, so this only matters if the restore does not finish."
+	)
+
+	# The site list on the document is stale the moment the site is made, and
+	# the restore checks it again.
+	bench_doc.reload()
+	emit("")
+	return None
+
+
 def _pull_from_remote(request, bench_doc, step, emit, finish):
 	"""Ask the other server for a fresh backup, then bring it here.
 
@@ -480,12 +540,13 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 	checked before anything that merely fails.
 	"""
 	site = (request.install_on_site or "").strip()
-	if site not in bench_doc.site_names():
+	remote = request.restore_source == "Remote Server"
+	if site not in bench_doc.site_names() and not remote:
 		raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
 
 	password = request.get_password("restore_db_password", raise_exception=False)
 
-	if request.restore_source == "Remote Server":
+	if remote:
 		# Nothing is on disk yet — the files are pulled in the step after this
 		# one. What matters here is that the credential is present and the
 		# other end answers, both of which are cheap and both of which are
@@ -501,11 +562,14 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 		if not check.ok:
 			raise InstallAborted(f"{server.server_name} is not answering: {check.error}")
 
-		return [
+		notes = [
 			f"Restore {site} from {request.restore_remote_site} on {server.server_name}.",
 			f"{server.server_name} answered as {check.data.get('hostname', 'itself')}.",
 			"A fresh backup will be taken there, pulled here, and only then restored.",
 		]
+		if site not in bench_doc.site_names():
+			notes.append(f"{site} does not exist on this bench yet and will be created first.")
+		return notes
 
 	try:
 		backup = request.resolve_backup(bench_doc.bench_path)
@@ -1034,9 +1098,13 @@ def _plan_for(request) -> list:
 	if request.is_ssl():
 		return step_plan.for_ssl(request.ssl_mode_key(), bool(request.ssl_dry_run))
 	if request.is_restore():
+		bench_doc = frappe.get_doc("Server Bench", request.bench) if request.bench else None
 		return step_plan.for_restore(
 			bool(request.restore_backup_first),
 			from_remote=request.restore_source == "Remote Server",
+			create_site=bool(
+				bench_doc and request.install_on_site not in bench_doc.site_names()
+			),
 		)
 	if request.is_pull():
 		return step_plan.for_pull()
@@ -1211,6 +1279,21 @@ def run_install_request(name: str) -> dict:
 			doctype="App Install Request",
 			docname=name,
 		)
+
+		# A whole-bench move is a chain of ordinary jobs, and this is the one
+		# terminal point every job passes through — so it is where the next
+		# action starts. Wrapped, because Invariant 3 applies to everything on
+		# the way out of a job: an exception here would surface from inside the
+		# handler reporting the failure that just happened.
+		try:
+			from server.remote import runner
+
+			runner.on_job_finished(name, status)
+		except Exception:  # noqa: BLE001
+			frappe.logger("server").error(
+				f"could not advance the migration after {name}", exc_info=True
+			)
+
 		return {"name": name, "status": status, "exit_code": exit_code, "error": error}
 
 	try:
@@ -1547,6 +1630,13 @@ def run_install_request(name: str) -> dict:
 				elif request.is_restore():
 					if request.restore_source == "Remote Server":
 						failure = _pull_from_remote(request, bench_doc, step, emit, finish)
+						if failure:
+							return failure
+
+					if request.install_on_site not in bench_doc.site_names():
+						failure = _create_site_for_restore(
+							request, bench_doc, settings, env, step, emit, finish, should_cancel
+						)
 						if failure:
 							return failure
 

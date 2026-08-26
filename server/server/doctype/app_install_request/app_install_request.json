@@ -58,6 +58,7 @@
   "provision_domain_provider",
   "provision_db_password",
   "provision_admin_password",
+  "migration",
   "status_section",
   "status",
   "exit_code",
@@ -543,6 +544,15 @@
    "label": "From Site",
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Remote Server\"",
    "description": "A fresh backup is taken there when the job runs \u2014 not the newest existing one, because moving a site means moving it as it is now."
+  },
+  {
+   "fieldname": "migration",
+   "fieldtype": "Link",
+   "options": "Bench Migration",
+   "label": "Migration",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Set when this job is one step of a whole-bench move. It is how the chain knows to start the next action when this one finishes."
   }
  ],
  "index_web_pages_for_search": 0,

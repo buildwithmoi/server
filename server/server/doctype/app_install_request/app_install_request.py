@@ -196,7 +196,11 @@ class AppInstallRequest(Document):
 			frappe.throw("Restoring needs a site.")
 
 		bench = frappe.get_doc("Server Bench", self.bench)
-		if site not in bench.site_names():
+
+		# A site pulled from another server may not be here yet — the job
+		# creates it. For every other source the site has to exist, because
+		# there is nothing to create it from.
+		if site not in bench.site_names() and self.restore_source != "Remote Server":
 			frappe.throw(
 				f"{site!r} is not a site on {self.bench}. "
 				f"Known sites: {', '.join(bench.site_names()) or 'none'}."

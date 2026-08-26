@@ -84,6 +84,19 @@ class Refusal(Exception):
 	"""This cannot be built, with a reason worth showing the operator."""
 
 
+def generate_admin_password(length: int = 20) -> str:
+	"""A random Administrator password, for when the caller supplied none.
+
+	`secrets`, not `random`: this is a credential, and on a site whose restore
+	fails it is the only way in.
+	"""
+	import secrets
+	import string
+
+	alphabet = string.ascii_letters + string.digits
+	return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 @dataclass(frozen=True)
 class Ports:
 	index: int
@@ -268,8 +281,18 @@ def build_new_site_argv(
 	argv = [bench_exe, "new-site", site, "--db-root-password", db_root_password]
 	if db_root_username:
 		argv += ["--db-root-username", db_root_username]
-	if admin_password:
-		argv += ["--admin-password", admin_password]
+
+	# ALWAYS supplied, generated when the caller did not give one. Without the
+	# flag `bench new-site` calls `getpass` for the Administrator password, and
+	# under a job — where stdin is closed — that is an immediate EOFError
+	# several minutes into creating the site. It fails fast rather than
+	# hanging, which is the design working, but it still fails.
+	#
+	# Generating one is safe precisely where it matters: a site created to
+	# receive a restore has its Administrator replaced by the dump moments
+	# later, so the value is true for about thirty seconds. The generated one
+	# is printed to the log so it is recoverable if the restore never happens.
+	argv += ["--admin-password", admin_password or generate_admin_password()]
 
 	# The first site on a new bench becomes the default, so `bench <command>`
 	# works without `--site` on every subsequent call — including the ones an

@@ -571,8 +571,151 @@ FORWARDABLE = frozenset(
 		"server.api.transferable_backups",
 		"server.api.remote_site_readiness",
 		"server.api.plan_bench_migration",
+		"server.api.bench_migration",
 	}
 )
+
+
+@frappe.whitelist(methods=["POST"])
+def start_bench_migration(
+	server: str,
+	remote_bench: str,
+	target_bench: str,
+	db_root_password: str,
+	with_files: int | bool = 1,
+	backup_first: int | bool = 1,
+	confirm: str | None = None,
+) -> dict:
+	"""Move a whole bench here, as a chain of ordinary jobs.
+
+	The plan is rebuilt at this moment rather than taken from the browser: what
+	was shown a minute ago may not still be true, and acting on a stale plan is
+	how a site gets overwritten that somebody created in between.
+
+	`confirm` must equal the target bench name. This can replace existing sites
+	and runs for hours.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	from server.remote import runner
+
+	if (confirm or "").strip() != target_bench:
+		frappe.throw(
+			f"This moves every site on {remote_bench} and can run for hours. "
+			f"Type “{target_bench}” to confirm.",
+			title="Confirmation Required",
+		)
+
+	plan = plan_bench_migration(server, remote_bench, target_bench)
+	actions = runner.build_actions(
+		plan,
+		with_files=bool(frappe.parse_json(with_files)),
+		backup_first=bool(frappe.parse_json(backup_first)),
+	)
+	if not actions:
+		frappe.throw("There is nothing to move — that bench has no sites and no missing apps.",
+		             title="Nothing To Do")
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "Bench Migration",
+			"source_server": server,
+			"source_bench": remote_bench,
+			"target_bench": target_bench,
+			"actions_json": frappe.as_json(actions),
+			"with_files": 1 if frappe.parse_json(with_files) else 0,
+			"backup_first": 1 if frappe.parse_json(backup_first) else 0,
+			"current_action": 0,
+			"status": "Planned",
+		}
+	)
+	doc.db_password = db_root_password
+	doc.insert()
+	frappe.db.commit()
+
+	raise_event(
+		"Medium",
+		"transfer",
+		f"A whole-bench migration started: {remote_bench} → {target_bench}",
+		f"{frappe.session.user} started moving {len(plan.get('sites', []))} site(s) from "
+		f"{remote_bench} on {plan['source_server']} to {target_bench}. Recorded as {doc.name}.",
+		"If you started it, no action. Each step is an ordinary job and appears in the "
+		"deployment and restoration logs, so what it actually did is readable there.",
+		source_doctype="Bench Migration",
+		source_name=doc.name,
+	)
+
+	started = runner.start_next(doc.name)
+	return {"name": doc.name, "actions": len(actions), "first": started}
+
+
+@frappe.whitelist()
+def bench_migration(name: str) -> dict:
+	"""One migration, its actions, and where it has got to."""
+	_assert_server_admin()
+
+	doc = frappe.get_doc("Bench Migration", name)
+	actions = doc.actions()
+	jobs = frappe.get_all(
+		"App Install Request",
+		filters={"migration": name},
+		fields=["name", "operation", "app_name", "status", "started_at", "finished_at"],
+		order_by="creation asc",
+	)
+	return {
+		"name": doc.name,
+		"status": doc.status,
+		"source_server": doc.source_server,
+		"source_bench": doc.source_bench,
+		"target_bench": doc.target_bench,
+		"current_action": doc.current_action,
+		"actions": actions,
+		"jobs": jobs,
+		"notes": doc.notes,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def resume_bench_migration(name: str) -> dict:
+	"""Continue a migration that stopped, from where it stopped.
+
+	Not a restart. Everything before the failing action is real work — a bench
+	built, sites already across — and redoing it would cost hours and would
+	overwrite sites that moved correctly.
+	"""
+	_assert_server_admin()
+	get_settings().assert_installs_allowed()
+
+	from server.remote import runner
+
+	doc = frappe.get_doc("Bench Migration", name)
+	if doc.status in ("Success", "Cancelled"):
+		frappe.throw(f"{name} is {doc.status.lower()} — there is nothing to resume.",
+		             title="Not Resumable")
+	if not doc.get_secret():
+		frappe.throw(
+			"The database password was cleared when this migration stopped, and creating or "
+			"restoring a site needs it. Start a new migration — the actions already done will "
+			"be skipped, because the bench and those sites now exist.",
+			title="Password Was Cleared",
+		)
+
+	return runner.start_next(name)
+
+
+@frappe.whitelist(methods=["POST"])
+def cancel_bench_migration(name: str) -> dict:
+	"""Stop a migration. The job currently running is left to finish.
+
+	Killing a restore mid-flight leaves a site with a half-loaded database,
+	which is worse than one extra site having moved.
+	"""
+	_assert_server_admin()
+
+	doc = frappe.get_doc("Bench Migration", name)
+	doc.finish("Cancelled", "Stopped by hand. Any job already running was left to finish.")
+	return {"name": name, "status": "Cancelled"}
 
 
 @frappe.whitelist()
@@ -611,6 +754,9 @@ def plan_bench_migration(server: str, remote_bench: str, target_bench: str | Non
 	)
 	return {
 		**plan.as_dict(),
+		# The label is for reading; the docname is what an action has to carry,
+		# and two servers can legitimately share a display name.
+		"source_server_name": source.name,
 		"order": [s.site_name for s in migrate.order_sites(plan)],
 	}
 

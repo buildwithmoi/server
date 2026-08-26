@@ -303,7 +303,7 @@ def for_ssl(mode: str, dry_run: bool) -> list[Step]:
 	)
 
 
-def for_restore(backup_first: bool, from_remote: bool = False) -> list[Step]:
+def for_restore(backup_first: bool, from_remote: bool = False, create_site: bool = False) -> list[Step]:
 	specs = [
 		("check", "Check before restoring", "Backup on disk, credentials present, room on the disk."),
 	]
@@ -319,6 +319,14 @@ def for_restore(backup_first: bool, from_remote: bool = False) -> list[Step]:
 	if backup_first:
 		specs.append(
 			("safety", "Back up the site first", "So there is a way back if this restore is the wrong one.")
+		)
+	if create_site:
+		# Only when the site is not here yet. `bench restore` loads a dump into
+		# an EXISTING site — it does not make one — so pulling a site onto a
+		# machine that has never had it needs this first, and a migration is
+		# almost entirely that case.
+		specs.append(
+			("create", "Create the site here", "bench new-site — an empty site for the dump to land in.")
 		)
 	specs += [
 		("restore", "Restore the site", "bench restore — the database is dropped and reloaded."),

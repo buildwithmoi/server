@@ -209,6 +209,24 @@ class TestTheCommands(unittest.TestCase):
 		the operator running things by hand later."""
 		self.assertIn("--set-default", provision.build_new_site_argv(self.BENCH, "a.test", "pw"))
 
+	def test_an_admin_password_is_always_supplied(self):
+		"""Without the flag `bench new-site` calls getpass for it, and stdin is
+		closed under a job — so it dies with EOFError several minutes into
+		creating the site. Fast, but still dead."""
+		argv = provision.build_new_site_argv(self.BENCH, "a.test", "pw")
+		self.assertIn("--admin-password", argv)
+		self.assertTrue(argv[argv.index("--admin-password") + 1])
+
+	def test_a_supplied_admin_password_is_used_rather_than_a_generated_one(self):
+		argv = provision.build_new_site_argv(self.BENCH, "a.test", "pw", admin_password="chosen")
+		self.assertEqual(argv[argv.index("--admin-password") + 1], "chosen")
+
+	def test_generated_passwords_are_not_predictable(self):
+		"""On a site whose restore then fails, this is the only way in."""
+		made = {provision.generate_admin_password() for _ in range(50)}
+		self.assertEqual(len(made), 50)
+		self.assertTrue(all(len(p) >= 16 for p in made))
+
 	def test_force_is_never_passed(self):
 		"""It drops an existing database of the same name without asking.
 
