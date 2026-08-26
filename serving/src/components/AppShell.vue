@@ -166,6 +166,28 @@
 				</div>
 			</header>
 
+			<!--
+				A full-width band, not a chip in the corner. The whole risk of a
+				server switch is doing something to a machine you only think you
+				are looking at, and a quiet indicator is one you stop seeing by
+				the second day. It stays until you switch back.
+			-->
+			<div
+				v-if="isRemote"
+				class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--warn-border)] bg-[var(--warn-bg)] px-4 py-2 text-[12.5px] sm:px-6"
+			>
+				<Icon name="server" :size="14" class="shrink-0" />
+				<span>
+					Showing <b>{{ currentServer }}</b> — everything on this page is from that machine.
+				</span>
+				<button
+					class="ml-auto rounded-md border border-[var(--warn-border)] px-2 py-1 text-[12px] transition-colors hover:bg-[var(--paper)]"
+					@click="backToLocal"
+				>
+					Back to this server
+				</button>
+			</div>
+
 			<main class="u-scroll relative flex-1 overflow-y-auto px-4 py-5 sm:px-6">
 				<slot />
 			</main>
@@ -184,6 +206,7 @@ import Icon from "./Icon.vue";
 import AlertsPanel from "./AlertsPanel.vue";
 import JobDock from "./JobDock.vue";
 import { activeJobs, adoptRunningJobs, isRunning } from "../jobs";
+import { currentServer, isRemote, switchToServer } from "../state";
 import { loadSettings, monitoringEnabled } from "../state";
 
 defineProps({
@@ -238,10 +261,20 @@ const nav = [
 	},
 	{ name: "GitHubProfiles", label: "GitHub Accounts", icon: "key" },
 	{ name: "DomainProviders", label: "Domain Providers", icon: "signpost" },
+	{ name: "Servers", label: "Servers", icon: "server" },
 	{ name: "Settings", label: "Settings", icon: "sliders" },
 ];
 
 const isActive = (name) => route.name === name;
+
+function backToLocal() {
+	switchToServer("");
+	// A hard reload rather than a re-fetch: every open view holds data from
+	// the other machine, and re-fetching them one by one would leave whichever
+	// page is not currently mounted showing the remote's numbers next time it
+	// is opened.
+	window.location.reload();
+}
 
 // The chrome owns this, so every page shows the same truth without passing it.
 onMounted(() => {

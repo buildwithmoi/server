@@ -79,6 +79,49 @@ class TestHooksResolve(unittest.TestCase):
 
 
 @unittest.skipUnless(frappe is not None, "requires frappe on the path")
+class TestTheForwardableListIsReal(unittest.TestCase):
+	"""Every method the proxy will forward must actually exist.
+
+	`FORWARDABLE` is a set of dotted strings, so a typo or a renamed endpoint
+	is not an error anywhere — it is a method that silently cannot be reached
+	from a switched console, and the page it feeds just stays empty. Five of
+	the first thirty were wrong: `health`, `dashboard_summary`, `auth_events`,
+	`sudo_commands` and `ip_addresses` were all guesses at names that were
+	really `get_health`, `get_overview`, `list_auth_events`,
+	`list_sudo_commands` and `list_ip_addresses`.
+	"""
+
+	def test_every_forwardable_method_exists(self):
+		from server import api
+
+		defined = {name for name, value in vars(api).items() if callable(value)}
+		missing = sorted(m for m in api.FORWARDABLE if m.rsplit(".", 1)[-1] not in defined)
+		self.assertEqual(missing, [], f"named in FORWARDABLE but not defined: {missing}")
+
+	def test_nothing_that_starts_a_job_is_forwardable(self):
+		"""The rule the allow-list exists for.
+
+		A destructive action aimed at a machine you only think you are looking
+		at is the accident the server switch could otherwise cause, so these
+		are refused at the proxy and must be run from the server itself.
+		"""
+		from server import api
+
+		for method in (
+			"run_provision",
+			"run_restore",
+			"run_ssl",
+			"run_console_command",
+			"run_bench_command",
+			"run_install_request",
+			"prune_backups",
+			"update_site_config",
+		):
+			with self.subTest(method=method):
+				self.assertNotIn(f"server.api.{method}", api.FORWARDABLE)
+
+
+@unittest.skipUnless(frappe is not None, "requires frappe on the path")
 class TestSchedulerSlotsAreUnique(unittest.TestCase):
 	"""A repeated cron key silently discards every job but the last.
 

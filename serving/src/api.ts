@@ -8,9 +8,94 @@
  * rename is one edit.
  */
 
+import { reactive, ref } from "vue";
 import { createResource } from "frappe-ui";
 
+import { currentServer } from "./serverSwitch";
+
 const M = "server.api";
+
+/**
+ * A resource that follows the server switch.
+ *
+ * WHY NOT `createResource`. frappe-ui fixes a resource's URL when it is
+ * created, and the switch happens long afterwards — so a resource built for
+ * `list_benches` cannot later decide to go through `call_remote` instead.
+ * `makeParams` can rewrite the arguments and `transform` the answer, but
+ * neither can change where the call goes.
+ *
+ * So this is a small hand-rolled equivalent exposing the same four things the
+ * views use — `data`, `loading`, `submit`, `fetch` — which is why switching
+ * required no change to any view. `uploadBackup` below bypasses
+ * `createResource` for the same kind of reason.
+ *
+ * WHEN NO SERVER IS SELECTED it calls the method directly, so the local path
+ * is exactly what it was before this existed.
+ */
+export function switchable(method: string) {
+	const data = ref<any>(null);
+	const loading = ref(false);
+	const error = ref<any>(null);
+
+	async function run(args: Record<string, any> = {}) {
+		loading.value = true;
+		error.value = null;
+		try {
+			const server = currentServer.value;
+			const payload = server
+				? { url: `${M}.call_remote`, body: { server, method: `${M}.${method}`, args } }
+				: { url: `${M}.${method}`, body: args };
+
+			const response = await fetch(`/api/method/${payload.url}`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Frappe-CSRF-Token": (window as any).csrf_token,
+				},
+				body: JSON.stringify(payload.body),
+			});
+
+			const text = await response.text();
+			let parsed: any = {};
+			try {
+				parsed = text ? JSON.parse(text) : {};
+			} catch {
+				throw new Error(`${method} returned something that is not JSON`);
+			}
+
+			if (!response.ok) throw asError(parsed, response.status);
+
+			// Unwrap frappe's `message`, then the proxy's own envelope — a view
+			// asking for benches should get benches whichever route it took.
+			const message = parsed.message ?? parsed;
+			data.value = server && message && typeof message === "object" && "message" in message
+				? message.message
+				: message;
+			return data.value;
+		} catch (caught) {
+			error.value = caught;
+			throw caught;
+		} finally {
+			loading.value = false;
+		}
+	}
+
+	return reactive({ data, loading, error, submit: run, fetch: run, reset: () => (data.value = null) });
+}
+
+/** frappe reports errors in `_server_messages`, double-encoded and in HTML. */
+function asError(parsed: any, status: number) {
+	let text = "";
+	try {
+		const messages = JSON.parse(parsed._server_messages || "[]");
+		text = messages.map((m: string) => JSON.parse(m).message || m).join(" ");
+	} catch {
+		text = parsed.exception || parsed.message || "";
+	}
+	const error: any = new Error(String(text || `Request failed (${status})`).replace(/<[^>]+>/g, ""));
+	error.messages = [error.message];
+	return error;
+}
 
 export type Outcome = "Success" | "Failure" | "Info";
 
@@ -115,7 +200,7 @@ export function logSourceResource() {
 
 /** What the reader has actually done — distinct from probing the machine. */
 export function healthResource() {
-	return createResource({ url: `${M}.get_health` });
+	return switchable("get_health");
 }
 
 /* ----------------------------------------------------------- github profiles */
@@ -166,7 +251,7 @@ export function repoBranchesResource() {
 }
 
 export function benchAppsResource() {
-	return createResource({ url: `${M}.list_bench_apps` });
+	return switchable("list_bench_apps");
 }
 
 /* --------------------------------------------------------- bench commands */
@@ -279,7 +364,7 @@ export function updateSiteConfigResource() {
 }
 
 export function backupPlanResource() {
-	return createResource({ url: `${M}.backup_plan` });
+	return switchable("backup_plan");
 }
 
 export function pruneBackupsResource() {
@@ -321,7 +406,7 @@ export function systemHealthResource() {
 }
 
 export function backupUsageResource() {
-	return createResource({ url: `${M}.backup_usage` });
+	return switchable("backup_usage");
 }
 
 export function sslReadinessResource() {
@@ -468,7 +553,7 @@ export async function uploadBackup(
 }
 
 export function restoreFilesResource() {
-	return createResource({ url: `${M}.list_restore_files` });
+	return switchable("list_restore_files");
 }
 
 export function restoreSpaceResource() {
@@ -476,7 +561,7 @@ export function restoreSpaceResource() {
 }
 
 export function backupsResource() {
-	return createResource({ url: `${M}.list_backups` });
+	return switchable("list_backups");
 }
 
 export function runRestoreResource() {
@@ -512,11 +597,11 @@ export interface Bench {
 }
 
 export function benchesResource() {
-	return createResource({ url: `${M}.list_benches` });
+	return switchable("list_benches");
 }
 
 export function benchResource() {
-	return createResource({ url: `${M}.get_bench` });
+	return switchable("get_bench");
 }
 
 export function rescanBenchesResource() {
@@ -528,7 +613,7 @@ export function gitAuthResource() {
 }
 
 export function installRequestsResource() {
-	return createResource({ url: `${M}.list_install_requests` });
+	return switchable("list_install_requests");
 }
 
 export function installRequestResource() {
@@ -661,15 +746,15 @@ export interface SshSession {
 }
 
 export function securityEventsResource() {
-	return createResource({ url: `${M}.security_events` });
+	return switchable("security_events");
 }
 
 export function securityOverviewResource() {
-	return createResource({ url: `${M}.security_overview` });
+	return switchable("security_overview");
 }
 
 export function securityInventoryResource() {
-	return createResource({ url: `${M}.security_inventory` });
+	return switchable("security_inventory");
 }
 
 export function acknowledgeEventResource() {
@@ -685,19 +770,56 @@ export function acceptBaselineResource() {
 }
 
 export function sshSessionsResource() {
-	return createResource({ url: `${M}.ssh_sessions` });
+	return switchable("ssh_sessions");
 }
 
 export function sshSessionDetailResource() {
-	return createResource({ url: `${M}.ssh_session_detail` });
+	return switchable("ssh_session_detail");
 }
 
 /* ------------------------------------------------------------------- logs */
 
 export function deploymentLogsResource() {
-	return createResource({ url: `${M}.deployment_logs` });
+	return switchable("deployment_logs");
 }
 
 export function deploymentLogResource() {
-	return createResource({ url: `${M}.deployment_log` });
+	return switchable("deployment_log");
+}
+
+/* ---------------------------------------------------------------- servers */
+
+export interface ManagedServer {
+	name: string;
+	server_name: string;
+	base_url: string;
+	is_this_server: 0 | 1;
+	verify_tls: 0 | 1;
+	status: "Unverified" | "Reachable" | "Unreachable" | "Refused";
+	last_verified_at: string | null;
+	remote_hostname: string;
+	remote_version: string;
+	verify_error: string;
+	api_key: string;
+	has_secret: boolean;
+}
+
+export function managedServersResource() {
+	return createResource({ url: `${M}.list_managed_servers` });
+}
+
+export function saveManagedServerResource() {
+	return createResource({ url: `${M}.save_managed_server` });
+}
+
+export function deleteManagedServerResource() {
+	return createResource({ url: `${M}.delete_managed_server` });
+}
+
+export function verifyManagedServerResource() {
+	return createResource({ url: `${M}.verify_managed_server` });
+}
+
+export function callRemoteResource() {
+	return createResource({ url: `${M}.call_remote` });
 }

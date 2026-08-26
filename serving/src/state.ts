@@ -27,3 +27,9 @@ export function loadSettings(force = false) {
 	loaded.value = true;
 	return resource.fetch();
 }
+
+/* ---------------------------------------------------------- server switch */
+
+// Lives in its own module because `api.ts` needs it and this file imports
+// `api.ts`. Re-exported here so views can keep importing it from one place.
+export { currentServer, isRemote, switchToServer } from "./serverSwitch";
