@@ -155,6 +155,22 @@ def start_next(migration_name: str) -> dict:
 		)
 		return {"paused": True, "failed": len(failed)}
 
+	# ALREADY TRUE ON DISK.
+	#
+	# A clone that "failed" can still have landed — bench exits non-zero from
+	# steps that run after the app is checked out and installed. Retrying it
+	# then hits `bench get-app` refusing because the directory exists, which
+	# reports a second, different failure for work that is already done, and
+	# the migration can never get past it.
+	#
+	# So the disk is asked before a job is made. Same rule as everywhere else
+	# here: the exit code answers "did the command end cleanly", which is not
+	# the question.
+	if action["kind"] == KIND_CLONE and _app_already_here(action):
+		migration.set_state(index, migration.DONE)
+		frappe.db.commit()
+		return start_next(migration_name)
+
 	migration.db_set("current_action", index, update_modified=False)
 	password = migration.get_secret()
 
@@ -210,6 +226,36 @@ def start_next(migration_name: str) -> dict:
 	)
 	frappe.db.commit()
 	return {"started": request, "action": action["label"], "index": index}
+
+
+def _app_already_here(action: dict) -> bool:
+	"""Is this app on the target bench already, at the branch asked for?
+
+	Branch included deliberately: an app present on the wrong branch is not
+	this step done, and skipping it would restore a site against code it was
+	never running.
+	"""
+	import os
+
+	from server.bench import scanner
+
+	bench_path = frappe.db.get_value("Server Bench", action.get("bench"), "bench_path")
+	if not bench_path:
+		return False
+
+	app_path = os.path.join(bench_path, "apps", action.get("repo") or "")
+	if not os.path.isdir(app_path):
+		return False
+
+	try:
+		app = scanner.read_app(app_path)
+	except Exception:  # noqa: BLE001
+		return False
+
+	wanted = (action.get("branch") or "").strip()
+	if wanted and app.branch and app.branch != wanted:
+		return False
+	return bool(app.git_url)
 
 
 def _unfinished_note(migration, failed: list[int]) -> str:

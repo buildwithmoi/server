@@ -192,3 +192,34 @@ class PausingMustNotThrowAwayTheKey(unittest.TestCase):
 		source = inspect.getsource(runner)
 		self.assertNotIn('finish(\n\t\t\t\t"Paused"', source)
 		self.assertNotIn('finish("Paused"', source)
+
+
+class WorkThatIsAlreadyDone(unittest.TestCase):
+	"""Continue must not fail on a clone that already landed.
+
+	`bench get-app` exits non-zero from steps that run AFTER the app is checked
+	out and installed — the supervisor call, the app's own postinstall. So an
+	action marked Failed can have an app sitting on disk, and retrying it hits
+	`bench get-app` refusing because the directory exists. That is a second,
+	different failure reported for work that is already done, and it is one the
+	migration can never get past: every Continue produces it again.
+	"""
+
+	def test_the_disk_is_asked_before_a_clone_job_is_made(self):
+		import inspect
+
+		from server.remote import runner
+
+		source = inspect.getsource(runner.start_next)
+		self.assertIn("_app_already_here(action)", source)
+		self.assertIn("migration.set_state(index, migration.DONE)", source)
+
+	def test_the_branch_is_part_of_the_question(self):
+		# An app present on the WRONG branch is not this step done, and
+		# skipping it would restore a site against code it never ran.
+		import inspect
+
+		from server.remote import runner
+
+		source = inspect.getsource(runner._app_already_here)
+		self.assertIn("app.branch != wanted", source)
