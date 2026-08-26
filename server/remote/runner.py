@@ -220,6 +220,26 @@ def start_next(migration_name: str) -> dict:
 		return {"error": str(exc)}
 
 	request = result.get("name") if isinstance(result, dict) else None
+
+	# THE LINK THE WHOLE CHAIN HANGS ON.
+	#
+	# `on_job_finished` looks this up to decide whether a job belongs to a
+	# migration, and nothing was setting it. So every job ran, finished, and
+	# the migration was never told — it sat at "step 0 of 9" with every action
+	# still marked waiting while the work had actually happened. The advance
+	# only ever ran for jobs that already had it.
+	#
+	# The index is stored with it. Jobs used to be matched to actions by
+	# position, which was true only while every action made exactly one job —
+	# and an action that is already satisfied on disk now makes none.
+	if request:
+		frappe.db.set_value(
+			"App Install Request",
+			request,
+			{"migration": migration.name, "migration_action": index},
+			update_modified=False,
+		)
+
 	migration.db_set(
 		{"status": "Running", "started_at": migration.started_at or frappe.utils.now_datetime()},
 		update_modified=False,

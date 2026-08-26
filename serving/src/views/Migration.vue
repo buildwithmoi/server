@@ -97,6 +97,21 @@
 					   class="u-note u-note-danger w-full text-[12px] leading-relaxed">
 						{{ jobFor(i).error_summary }}
 					</p>
+
+					<!--
+						The step under way, live, on the step that is under way.
+						A restore is four or five minutes of pulling gigabytes
+						across a network, and "running" for five minutes is
+						indistinguishable from stuck. Its own steps tick, and
+						the tail of its output carries the byte counter.
+					-->
+					<div v-if="isLive(i) && live" class="w-full border-t border-[var(--rule)] pt-3">
+						<JobSteps v-if="live.steps?.length" :steps="live.steps" class="mb-3" />
+						<pre
+							v-if="tail"
+							class="u-term u-scroll max-h-[11rem] overflow-auto rounded-lg p-3 text-[11.5px] leading-[1.5]"
+						>{{ tail }}</pre>
+					</div>
 				</li>
 			</ol>
 		</template>
@@ -113,15 +128,30 @@ import { useRoute } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Icon from "../components/Icon.vue";
+import JobSteps from "../components/JobSteps.vue";
 import Skeleton from "../components/Skeleton.vue";
-import { cancelMigrationResource, migrationResource, resumeMigrationResource } from "../api";
+import {
+	cancelMigrationResource,
+	installRequestResource,
+	migrationResource,
+	resumeMigrationResource,
+} from "../api";
 
 const POLL_MS = 4000;
+//: How often the running job itself is re-read. Half the migration's cadence:
+//: the job is the thing actually moving.
+const LIVE_MS = 2000;
+//: Enough to see the byte counter climb and the last command echoed, not
+//: enough to turn this page into the log.
+const TAIL_LINES = 14;
 
 const route = useRoute();
 const resource = migrationResource();
 const resumeRes = resumeMigrationResource();
 const cancelRes = cancelMigrationResource();
+const jobRes = installRequestResource();
+const liveJob = ref(null);
+let ticks = 0;
 
 const acting = ref(false);
 let timer = null;
@@ -149,9 +179,16 @@ const subtitle = computed(() => {
 	return `${data.value.status.toLowerCase()} · step ${at} of ${total}`;
 });
 
-/** The job this action produced, matched by position among jobs of its kind. */
+/**
+ * The job this action produced.
+ *
+ * Keyed by the action it belongs to, not by position. Position held only while
+ * every action made exactly one job — and an action already satisfied on disk
+ * makes none, which slid every later job up a row and put each failure against
+ * the wrong step.
+ */
 function jobFor(index) {
-	return (data.value?.jobs || [])[index];
+	return data.value?.job_for_action?.[index] || null;
 }
 
 const ROUTE_FOR_KIND = {
@@ -184,8 +221,45 @@ function markFor(index) {
 	return { icon: "chevron", class: "text-[var(--ink-ghost)]", label: "waiting" };
 }
 
+/** The action currently being worked on, when something is actually running. */
+function isLive(index) {
+	const job = jobFor(index);
+	return Boolean(job) && ["Queued", "Running"].includes(job.status);
+}
+
+const live = computed(() => liveJob.value);
+
+/**
+ * The last lines of the running job's output.
+ *
+ * A tail rather than the whole thing: a clone emits tens of thousands of lines
+ * and this panel is for answering "is it moving", not for reading afterwards —
+ * the log page is for that, and it is one click away.
+ */
+const tail = computed(() => {
+	const text = liveJob.value?.output || "";
+	if (!text) return "";
+	return text.split("\n").slice(-TAIL_LINES).join("\n");
+});
+
+async function loadLive() {
+	const index = (data.value?.actions || []).findIndex((_, i) => isLive(i));
+	if (index < 0) {
+		liveJob.value = null;
+		return;
+	}
+	try {
+		liveJob.value = await jobRes.submit({ name: jobFor(index).name });
+	} catch {
+		// A transient failure must not blank the panel that is being watched.
+	}
+}
+
 function load() {
-	resource.submit({ name: route.params.name }).catch(() => {});
+	resource
+		.submit({ name: route.params.name })
+		.then(loadLive)
+		.catch(() => {});
 }
 
 async function resume() {
@@ -234,9 +308,17 @@ onMounted(() => {
 	load();
 	// Polled rather than pushed, for the same reason the job dock is: this app
 	// has no socket client, and a poll is what survives a page reload.
+	//
+	// The RUNNING job is polled faster than the migration around it. The
+	// migration changes state a handful of times in an hour; the job under it
+	// is emitting a byte counter, and a four-second refresh on that reads as a
+	// page that has frozen.
 	timer = setInterval(() => {
-		if (running.value) load();
-	}, POLL_MS);
+		if (!running.value) return;
+		ticks += 1;
+		if (ticks % 2 === 0) load();
+		else loadLive();
+	}, LIVE_MS);
 });
 onBeforeUnmount(() => clearInterval(timer));
 </script>

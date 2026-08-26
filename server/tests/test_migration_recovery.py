@@ -118,3 +118,65 @@ class TheFailureReasonTravels(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TheLinkTheChainHangsOn(unittest.TestCase):
+	"""Nothing was writing `migration` onto the job.
+
+	`on_job_finished` looks that field up to decide whether a job belongs to a
+	migration, and no code path set it. So every step ran, finished, and the
+	migration was never told: it sat at "step 0 of 9" with every action still
+	marked waiting while the work had actually happened, and the next step was
+	never started. The chain could not advance at all.
+	"""
+
+	def test_starting_an_action_stamps_the_job_with_its_migration(self):
+		source = inspect.getsource(runner.start_next)
+		self.assertIn('"migration": migration.name', source)
+
+	def test_it_stamps_which_action_too(self):
+		# Jobs used to be matched to actions by position, which held only
+		# while every action produced exactly one job. An action already
+		# satisfied on disk produces none, and every later job then slid up a
+		# row — putting each failure against the wrong step.
+		source = inspect.getsource(runner.start_next)
+		self.assertIn('"migration_action": index', source)
+
+	def test_the_page_reads_them_by_action_not_by_position(self):
+		import pathlib
+
+		view = (
+			pathlib.Path(__file__).resolve().parents[2] / "serving" / "src" / "views" / "Migration.vue"
+		).read_text()
+		self.assertIn("job_for_action?.[index]", view)
+
+
+class WatchingItWork(unittest.TestCase):
+	"""A restore is minutes of pulling gigabytes, and "running" is not progress.
+
+	Five minutes of an unchanging word is indistinguishable from a job that has
+	hung — which is the state this migration was actually in twice.
+	"""
+
+	def test_the_running_step_shows_its_own_steps_and_output(self):
+		import pathlib
+
+		view = (
+			pathlib.Path(__file__).resolve().parents[2] / "serving" / "src" / "views" / "Migration.vue"
+		).read_text()
+		self.assertIn("<JobSteps", view)
+		self.assertIn("isLive(i)", view)
+
+	def test_the_running_job_is_polled_faster_than_the_migration(self):
+		import pathlib
+
+		view = (
+			pathlib.Path(__file__).resolve().parents[2] / "serving" / "src" / "views" / "Migration.vue"
+		).read_text()
+		self.assertIn("const LIVE_MS = 2000", view)
+
+	def test_the_transfer_reports_bytes_as_it_goes(self):
+		# What makes the tail worth watching during the long step.
+		from server.bench import installer
+
+		self.assertIn("progress.percent", inspect.getsource(installer._pull_from_remote))

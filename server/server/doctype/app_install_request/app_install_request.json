@@ -60,6 +60,7 @@
   "provision_db_password",
   "provision_admin_password",
   "migration",
+  "migration_action",
   "status_section",
   "status",
   "exit_code",
@@ -562,6 +563,13 @@
    "read_only": 1,
    "search_index": 1,
    "description": "Set when this job is one step of a whole-bench move. It is how the chain knows to start the next action when this one finishes."
+  },
+  {
+   "fieldname": "migration_action",
+   "fieldtype": "Int",
+   "label": "Migration Action",
+   "read_only": 1,
+   "description": "Which action of the migration this job is. Matched by position used to be enough, until an action that was already satisfied stopped creating a job at all."
   }
  ],
  "index_web_pages_for_search": 0,

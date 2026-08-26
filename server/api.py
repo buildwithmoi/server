@@ -729,10 +729,19 @@ def bench_migration(name: str) -> dict:
 			# the migration view could say "Failed" and nothing else, and the
 			# job holding the reason was three pages away — on whichever log
 			# page happens to carry that operation.
-			"error_summary", "exit_code", "bench", "install_on_site",
+			"error_summary", "exit_code", "bench", "install_on_site", "migration_action",
 		],
 		order_by="creation asc",
 	)
+
+	# Keyed by the action each job belongs to, not by position in this list.
+	# Position was only ever true while every action produced exactly one job,
+	# and an action already satisfied on disk now produces none — which slid
+	# every later job up a row and attributed each one to the wrong step.
+	by_action: dict[int, dict] = {}
+	for order, job in enumerate(jobs):
+		index = job.get("migration_action")
+		by_action[int(index) if index is not None else order] = job
 	# A migration that says Running while its current job has already failed.
 	#
 	# The chain is advanced from `installer.finish`, which calls
@@ -777,6 +786,7 @@ def bench_migration(name: str) -> dict:
 		"failed": doc.failed_indexes(),
 		"actions": actions,
 		"jobs": jobs,
+		"job_for_action": by_action,
 		"notes": doc.notes,
 	}
 
