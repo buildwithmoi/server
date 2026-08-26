@@ -823,3 +823,7 @@ export function verifyManagedServerResource() {
 export function callRemoteResource() {
 	return createResource({ url: `${M}.call_remote` });
 }
+
+export function remoteReadinessResource() {
+	return createResource({ url: `${M}.remote_site_readiness` });
+}

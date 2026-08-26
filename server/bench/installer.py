@@ -315,6 +315,111 @@ def _provision_domain(request, bench_path: str, site: str) -> list[str]:
 	return notes
 
 
+def _pull_from_remote(request, bench_doc, step, emit, finish):
+	"""Ask the other server for a fresh backup, then bring it here.
+
+	Returns None when the files are on disk and the request has been pointed at
+	them, or a `finish(...)` when it could not be done. Everything after this
+	is the ordinary Chosen Files restore — which is the point: a pulled backup
+	takes exactly the same path as one picked by hand, so there is no second
+	notion of what a restorable set is.
+	"""
+	import os
+
+	from server.remote import transfer
+
+	server = frappe.get_doc("Managed Server", request.restore_remote_server)
+	source_bench = request.restore_remote_bench
+	source_site = request.restore_remote_site
+	client = server.client()
+
+	step("prepare")
+	emit(f"Asking {server.server_name} to back up {source_site} on {source_bench}…")
+	emit("A fresh backup, not the newest existing one — moving a site means moving it as it is now.")
+
+	prepared = client.call(
+		"server.api.prepare_backup_for_transfer",
+		{"bench": source_bench, "site": source_site, "with_files": 1},
+		# A backup of a large site is minutes of work on the other machine.
+		timeout=max(900, get_settings().get_install_timeout()),
+	)
+	if not prepared.ok:
+		return finish("Failed", exit_code=None, error=f"{server.server_name}: {prepared.error}")
+
+	backup = (prepared.message or {}).get("backup") or {}
+	emit(f"{server.server_name} made {backup.get('key') or 'a backup'} ({backup.get('size_text') or '?'}).")
+
+	directory = os.path.join(bench_doc.bench_path, "backups")
+	os.makedirs(directory, exist_ok=True)
+
+	try:
+		wanted = transfer.plan(
+			backup,
+			directory,
+			want_public=bool(request.restore_public_files),
+			want_private=bool(request.restore_private_files),
+		)
+		transfer.check_room(directory, wanted)
+	except transfer.TransferRefused as refused:
+		return finish("Failed", exit_code=None, error=str(refused))
+
+	step("fetch")
+	emit(f"Pulling {transfer.describe(wanted)} into {directory}")
+
+	for item in wanted:
+		last = [0.0]
+
+		def report(progress, part=item.part):
+			# Throttled to the same quarter second the log stream uses; a
+			# progress line per chunk on a multi-gigabyte file is thousands of
+			# rows nobody reads.
+			now = time.time()
+			if now - last[0] < 1.0 and progress.received < progress.total:
+				return
+			last[0] = now
+			emit(f"  {part}: {progress.percent:.0f}% ({progress.received:,} of {progress.total:,} bytes)")
+
+		try:
+			result = client.download(
+				"server.api.download_backup_file",
+				{
+					"bench": source_bench,
+					"site": source_site,
+					"key": backup.get("key"),
+					"part": item.part,
+				},
+				item.destination,
+				expected_size=item.size,
+				on_progress=report,
+			)
+		except Exception as exc:  # noqa: BLE001
+			# The partial file is left where it is: a second attempt resumes
+			# from it rather than starting the gigabytes again.
+			return finish(
+				"Failed",
+				exit_code=None,
+				error=f"Copying the {item.part} file stopped: {exc}. Running this again resumes it.",
+			)
+
+		emit(f"  {item.part}: {result.received:,} bytes" + (" (resumed)" if result.resumed_from else ""))
+
+	# Point the request at what was pulled, and let the ordinary path take over.
+	by_part = {item.part: item.destination for item in wanted}
+	request.db_set(
+		{
+			"restore_source": "Chosen Files",
+			"restore_database_file": by_part.get("database"),
+			"restore_public_file": by_part.get("public"),
+			"restore_private_file": by_part.get("private"),
+		},
+		update_modified=False,
+	)
+	request.reload()
+	frappe.db.commit()
+	emit("")
+	return None
+
+
 def _preflight_provision(request, settings) -> list[str]:
 	"""Answer everything before four gigabytes are spent on a clone.
 
@@ -378,6 +483,30 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 	if site not in bench_doc.site_names():
 		raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
 
+	password = request.get_password("restore_db_password", raise_exception=False)
+
+	if request.restore_source == "Remote Server":
+		# Nothing is on disk yet — the files are pulled in the step after this
+		# one. What matters here is that the credential is present and the
+		# other end answers, both of which are cheap and both of which are
+		# worth knowing BEFORE a multi-gigabyte transfer rather than after.
+		if not password:
+			raise InstallAborted(
+				"The database root password is missing. bench restore cannot drop and recreate "
+				"the database without it, and there is no terminal here for it to ask on."
+			)
+
+		server = frappe.get_doc("Managed Server", request.restore_remote_server)
+		check = server.client().verify()
+		if not check.ok:
+			raise InstallAborted(f"{server.server_name} is not answering: {check.error}")
+
+		return [
+			f"Restore {site} from {request.restore_remote_site} on {server.server_name}.",
+			f"{server.server_name} answered as {check.data.get('hostname', 'itself')}.",
+			"A fresh backup will be taken there, pulled here, and only then restored.",
+		]
+
 	try:
 		backup = request.resolve_backup(bench_doc.bench_path)
 	except restore.RestoreRefused as exc:
@@ -386,7 +515,6 @@ def _preflight_restore(request, bench_doc) -> list[str]:
 	if not os.path.isfile(backup.database):
 		raise InstallAborted(f"{backup.database} is gone. Nothing was changed.")
 
-	password = request.get_password("restore_db_password", raise_exception=False)
 	if not password:
 		raise InstallAborted(
 			"The database root password is missing. bench restore cannot drop and recreate the "
@@ -906,7 +1034,10 @@ def _plan_for(request) -> list:
 	if request.is_ssl():
 		return step_plan.for_ssl(request.ssl_mode_key(), bool(request.ssl_dry_run))
 	if request.is_restore():
-		return step_plan.for_restore(bool(request.restore_backup_first))
+		return step_plan.for_restore(
+			bool(request.restore_backup_first),
+			from_remote=request.restore_source == "Remote Server",
+		)
 	if request.is_pull():
 		return step_plan.for_pull()
 	return step_plan.for_clone(bool(request.install_on_site))
@@ -1414,6 +1545,11 @@ def run_install_request(name: str) -> dict:
 					if quiet:
 						return finish("Failed", exit_code=code, error=quiet)
 				elif request.is_restore():
+					if request.restore_source == "Remote Server":
+						failure = _pull_from_remote(request, bench_doc, step, emit, finish)
+						if failure:
+							return failure
+
 					site = request.install_on_site
 					backup = request.resolve_backup(bench_doc.bench_path)
 

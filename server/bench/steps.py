@@ -303,10 +303,19 @@ def for_ssl(mode: str, dry_run: bool) -> list[Step]:
 	)
 
 
-def for_restore(backup_first: bool) -> list[Step]:
+def for_restore(backup_first: bool, from_remote: bool = False) -> list[Step]:
 	specs = [
 		("check", "Check before restoring", "Backup on disk, credentials present, room on the disk."),
 	]
+	if from_remote:
+		# Announced as two steps because they fail for completely different
+		# reasons and take completely different amounts of time: the source
+		# refusing to back up is a problem there and over in seconds, while
+		# the pull is the long one and can be interrupted halfway.
+		specs += [
+			("prepare", "Back up the source site", "bench backup on the other server, so what arrives is current."),
+			("fetch", "Copy the files here", "Pulled in chunks, and resumed if the connection drops."),
+		]
 	if backup_first:
 		specs.append(
 			("safety", "Back up the site first", "So there is a way back if this restore is the wrong one.")

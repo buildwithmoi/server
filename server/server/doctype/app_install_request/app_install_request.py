@@ -202,6 +202,19 @@ class AppInstallRequest(Document):
 				f"Known sites: {', '.join(bench.site_names()) or 'none'}."
 			)
 
+		if self.restore_source == "Remote Server":
+			# There is nothing on disk to resolve yet — the files arrive during
+			# the job. What CAN be checked now is that the other end is named,
+			# and that is worth checking now rather than after a queue delay.
+			if not self.restore_remote_server:
+				frappe.throw("Choose the server to pull from.", title="No Source Server")
+			if not (self.restore_remote_bench and self.restore_remote_site):
+				frappe.throw(
+					"Choose the bench and site on that server.", title="No Source Site"
+				)
+			self.app_name = f"Restore · {site} ← {self.restore_remote_site}"
+			return
+
 		# Resolved now so a rotated-away backup, or a path that points outside
 		# the bench, is refused before the record exists rather than after the
 		# queue has picked it up.

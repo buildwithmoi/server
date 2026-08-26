@@ -33,6 +33,10 @@ from server.bench import restore as bench_restore
 from server.bench import ssl as bench_ssl
 from server.geo import registry
 from server.server.doctype.app_install_request.app_install_request import SSL_MODES
+# Module level, not per-function. It was imported inside each caller, and the
+# third one to need it simply forgot — which is a NameError at the moment the
+# finding is raised, i.e. on the failure path, where it is least welcome.
+from server.server.doctype.security_event.security_event import raise_event
 from server.server.doctype.server_settings.server_settings import get_settings
 from server.ssh import ingest, parser, sources
 
@@ -563,8 +567,74 @@ FORWARDABLE = frozenset(
 		# The two the cross-server restore needs.
 		"server.api.prepare_backup_for_transfer",
 		"server.api.transferable_backups",
+		"server.api.remote_site_readiness",
 	}
 )
+
+
+@frappe.whitelist()
+def remote_site_readiness(server: str, remote_bench: str, remote_site: str, bench: str) -> dict:
+	"""Which apps the site being moved needs, and whether this bench has them.
+
+	Answered from the two benches' app lists rather than by reading a dump,
+	which means it is answerable BEFORE anything is backed up or moved. That is
+	the whole point: finding out that erpnext is missing after pulling four
+	gigabytes is finding out too late.
+
+	The dump is still checked later — `inspect.read_apps` reads the backup's own
+	`tabInstalled Application` during the restore, and that is the authority.
+	This is the early warning, and it is allowed to be slightly wrong in the
+	direction of caution.
+	"""
+	_assert_server_admin()
+
+	source = frappe.get_doc("Managed Server", server)
+	answer = source.client().call("server.api.get_bench", {"name": remote_bench})
+	if not answer.ok:
+		frappe.throw(answer.error, title=f"{source.server_name} did not answer")
+
+	remote = answer.message or {}
+	site = next(
+		(s for s in (remote.get("sites") or []) if s.get("site_name") == remote_site),
+		None,
+	)
+	if not site:
+		frappe.throw(f"{remote_site} is not a site on {remote_bench}.", title="Unknown Site")
+
+	needed = [a for a in (site.get("installed_apps") or []) if a and a != "frappe"]
+	remote_apps = {a["app_name"]: a for a in (remote.get("apps") or [])}
+
+	here = frappe.get_doc("Server Bench", bench)
+	local_apps = {a.app_name: a for a in (here.apps or [])}
+
+	rows = []
+	for app in needed:
+		mine = local_apps.get(app)
+		theirs = remote_apps.get(app, {})
+		rows.append(
+			{
+				"app_name": app,
+				"present": bool(mine),
+				"source_branch": theirs.get("branch") or "",
+				"local_branch": mine.branch if mine else "",
+				"git_url": theirs.get("git_url") or "",
+				# A branch difference is not a blocker — plenty of deployments
+				# run the same app from different branches on purpose — but it
+				# is the most common reason a restore succeeds and then behaves
+				# oddly, so it is surfaced rather than hidden.
+				"branch_matches": (not mine) or (not theirs.get("branch")) or mine.branch == theirs.get("branch"),
+			}
+		)
+
+	return {
+		"source_server": source.server_name,
+		"remote_bench": remote_bench,
+		"remote_site": remote_site,
+		"bench": bench,
+		"apps": rows,
+		"missing": [r["app_name"] for r in rows if not r["present"]],
+		"different_branch": [r["app_name"] for r in rows if r["present"] and not r["branch_matches"]],
+	}
 
 
 @frappe.whitelist()
@@ -1467,8 +1537,6 @@ def run_console_command(bench: str, command: str, confirm: str | None = None) ->
 	# Raised BEFORE the job is queued, so the record exists even if the worker
 	# never picks it up or dies mid-command. A command that was attempted is
 	# the fact worth keeping; whether it finished is on the request row.
-	from server.server.doctype.security_event.security_event import raise_event
-
 	# THE SUBJECT CARRIES THE REQUEST NAME, AND THAT IS LOAD-BEARING.
 	# `raise_event` dedupes on subject-plus-day, which is exactly right for a
 	# standing condition — "disk is filling" should say so once a day, not once
@@ -2436,6 +2504,9 @@ def run_restore(
 	private_file: str | None = None,
 	db_root_username: str | None = None,
 	encryption_key: str | None = None,
+	remote_server: str | None = None,
+	remote_bench: str | None = None,
+	remote_site: str | None = None,
 	with_public_files: int | bool = 0,
 	with_private_files: int | bool = 0,
 	backup_first: int | bool = 1,
@@ -2463,7 +2534,16 @@ def run_restore(
 			"operation": "Restore",
 			"bench": bench,
 			"install_on_site": site,
-			"restore_source": source if source in ("Backup Set", "Chosen Files") else "Backup Set",
+			# An unknown source falls back to Backup Set rather than being
+			# refused — but the list has to include every value the doctype
+			# accepts, or a new one is silently downgraded here and the job
+			# then looks for a local backup that was never chosen.
+			"restore_source": source
+			if source in ("Backup Set", "Chosen Files", "Remote Server")
+			else "Backup Set",
+			"restore_remote_server": remote_server or None,
+			"restore_remote_bench": remote_bench or None,
+			"restore_remote_site": remote_site or None,
 			"restore_backup_key": backup_key,
 			"restore_database_file": (database_file or "").strip() or None,
 			"restore_public_file": (public_file or "").strip() or None,

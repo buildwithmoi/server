@@ -29,6 +29,9 @@
   "restore_database_file",
   "restore_public_file",
   "restore_private_file",
+  "restore_remote_server",
+  "restore_remote_bench",
+  "restore_remote_site",
   "restore_backup_first",
   "restore_public_files",
   "restore_private_files",
@@ -384,11 +387,11 @@
   {
    "default": "Backup Set",
    "depends_on": "eval:doc.operation==\"Restore\"",
-   "description": "Backup Set restores one backup frappe wrote, with its files already matched to its database dump. Chosen Files restores three paths picked by hand \u2014 for a backup copied in from another server, or when the database and the files come from different backups.",
+   "description": "Where the files come from. Backup Set is one frappe wrote on this bench; Chosen Files is a set picked by hand or uploaded; Remote Server takes a fresh backup on another machine and pulls it here first.",
    "fieldname": "restore_source",
    "fieldtype": "Select",
    "label": "Restore From",
-   "options": "Backup Set\nChosen Files"
+   "options": "Backup Set\nChosen Files\nRemote Server"
   },
   {
    "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Chosen Files\"",
@@ -519,6 +522,27 @@
    "label": "Administrator Password",
    "depends_on": "eval:doc.operation==\"Provision\"",
    "description": "For the new site's Administrator. Left empty frappe generates one and prints it in the log."
+  },
+  {
+   "fieldname": "restore_remote_server",
+   "fieldtype": "Link",
+   "options": "Managed Server",
+   "label": "From Server",
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Remote Server\"",
+   "description": "The machine holding the site being moved. This server pulls from it, so it needs that server's credentials \u2014 not the other way round."
+  },
+  {
+   "fieldname": "restore_remote_bench",
+   "fieldtype": "Data",
+   "label": "From Bench",
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Remote Server\""
+  },
+  {
+   "fieldname": "restore_remote_site",
+   "fieldtype": "Data",
+   "label": "From Site",
+   "depends_on": "eval:doc.operation==\"Restore\" && doc.restore_source==\"Remote Server\"",
+   "description": "A fresh backup is taken there when the job runs \u2014 not the newest existing one, because moving a site means moving it as it is now."
   }
  ],
  "index_web_pages_for_search": 0,

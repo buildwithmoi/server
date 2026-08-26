@@ -63,6 +63,88 @@
 					</p>
 				</div>
 
+				<!--
+					Pulling from another machine. Nothing is chosen from disk
+					here because nothing is on disk yet — the backup is taken on
+					the source when the job runs, so what is picked is a site,
+					not a file.
+				-->
+				<template v-else-if="source === 'Remote Server'">
+					<div class="grid gap-3 sm:grid-cols-3">
+						<div class="flex flex-col gap-1.5">
+							<span class="u-label">Server</span>
+							<select v-model="remote.server" @change="onRemoteServer"
+							        class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-[7px] text-[13px] outline-none focus:border-[var(--ink)]">
+								<option value="" disabled>choose</option>
+								<option v-for="s in remoteServers" :key="s.name" :value="s.name">
+									{{ s.server_name }}
+								</option>
+							</select>
+						</div>
+						<div class="flex flex-col gap-1.5">
+							<span class="u-label">Bench there</span>
+							<SearchSelect v-model="remote.bench" :options="remoteBenchOptions" mono
+							              placeholder="Choose a bench" :loading="remoteBenches.loading"
+							              :disabled="!remote.server" />
+						</div>
+						<div class="flex flex-col gap-1.5">
+							<span class="u-label">Site there</span>
+							<SearchSelect v-model="remote.site" :options="remoteSiteOptions" mono
+							              placeholder="Choose a site" :disabled="!remote.bench" />
+						</div>
+					</div>
+
+					<p v-if="!remoteServers.length" class="u-item-detail">
+						No other servers are registered yet. Add one on the Servers page — it needs an
+						API key and secret from a System Manager account there.
+					</p>
+
+					<!--
+						Answered from the two benches' app lists BEFORE anything
+						is backed up or moved. Finding out that erpnext is
+						missing after pulling four gigabytes is finding out too
+						late. The dump is checked again during the restore, and
+						that check is the authority.
+					-->
+					<div v-if="readiness.loading" class="flex items-center gap-2 text-[13px] text-[var(--ink-faint)]">
+						<Spinner class="h-3.5 w-3.5" /> Checking which apps that site needs…
+					</div>
+					<div
+						v-else-if="remoteApps.length"
+						class="rounded-lg border"
+						:class="remoteMissing.length ? 'border-[var(--danger-border)]' : 'border-[var(--rule)]'"
+					>
+						<header class="border-b px-3 py-2 text-[12.5px]"
+						        :class="remoteMissing.length ? 'border-[var(--danger-border)] bg-[var(--danger-bg)]' : 'border-[var(--rule)]'">
+							{{ remoteMissing.length
+								? `This bench is missing ${remoteMissing.length} app(s) that site uses`
+								: "This bench has every app that site uses" }}
+						</header>
+						<ul class="divide-y divide-[var(--rule)]">
+							<li v-for="app in remoteApps" :key="app.app_name"
+							    class="flex flex-wrap items-center gap-2 px-3 py-2 text-[12.5px]">
+								<Icon :name="app.present ? 'check' : 'alert'" :size="13"
+								      :class="app.present ? 'u-ok' : 'u-danger'" class="shrink-0" />
+								<span class="u-mono">{{ app.app_name }}</span>
+								<span v-if="!app.present" class="text-[var(--ink-faint)]">
+									not on this bench — needs {{ app.source_branch || "its default branch" }}
+								</span>
+								<span v-else-if="!app.branch_matches" class="text-[var(--warn)]">
+									here on {{ app.local_branch }}, there on {{ app.source_branch }}
+								</span>
+								<Button v-if="!app.present" size="sm" class="ml-auto"
+								        @click="$emit('install-app', { repo: app.app_name, branch: app.source_branch })">
+									Get it
+								</Button>
+							</li>
+						</ul>
+					</div>
+					<label v-if="remoteMissing.length" class="flex items-start gap-2 text-[13px]">
+						<input v-model="ignoreMissing" type="checkbox" class="mt-[3px]" />
+						<span>Restore anyway — I will install them straight afterwards.</span>
+					</label>
+				</template>
+
 				<!-- Three independent pickers. The database is required; the two
 				     files tars are not, because plenty of backups are database
 				     only and demanding all three would block them. -->
@@ -381,15 +463,18 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
-import { Button, Dialog, toast } from "frappe-ui";
+import { computed, reactive, ref, watch } from "vue";
+import { Button, Dialog, Spinner, toast } from "frappe-ui";
 import Icon from "./Icon.vue";
 import SearchSelect from "./SearchSelect.vue";
 import { watchJob } from "../jobs";
 import { useBusyGuard } from "../busy";
 import {
 	backupsResource,
+	callRemoteResource,
 	inspectBackupResource,
+	managedServersResource,
+	remoteReadinessResource,
 	restoreFilesResource,
 	restoreSpaceResource,
 	runRestoreResource,
@@ -416,6 +501,11 @@ const SOURCES = [
 		label: "Choose the files myself",
 		hint: "For a backup copied in from another server, or files from different backups.",
 	},
+	{
+		value: "Remote Server",
+		label: "From another server",
+		hint: "Takes a fresh backup there, copies it here, then restores. For moving a site between machines.",
+	},
 ];
 
 const FILE_SLOTS = [
@@ -431,6 +521,9 @@ const FILE_SLOTS = [
 ];
 
 const listing = backupsResource();
+const remoteServers_ = managedServersResource();
+const remoteBenches = callRemoteResource();
+const readiness = remoteReadinessResource();
 const files = restoreFilesResource();
 const spaceCheck = restoreSpaceResource();
 const contents = inspectBackupResource();
@@ -440,6 +533,7 @@ const uploadPercent = ref(0);
 const uploadName = ref("");
 const ignoreMissing = ref(false);
 const source = ref("Backup Set");
+const remote = reactive({ server: "", bench: null, site: null });
 const picks = ref({ database: null, public: null, private: null });
 const ignoreSpace = ref(false);
 const site = ref(null);
@@ -758,6 +852,62 @@ watch(
 		);
 	},
 	{ immediate: true },
+);
+
+/* --------------------------------------------------------- remote source */
+
+// Only servers that are not this machine, and only ones that answered — a
+// picker offering an unreachable server is a picker that produces a job which
+// fails at the first step.
+const remoteServers = computed(() =>
+	(remoteServers_.data || []).filter((s) => !s.is_this_server && s.status === "Reachable"),
+);
+
+const remoteBenchOptions = computed(() =>
+	(remoteBenches.data?.message || []).map((b) => ({
+		value: b.name,
+		label: b.name,
+		description: `${(b.sites || []).length} site(s) · frappe ${b.frappe_branch || "?"}`,
+		sites: (b.sites || []).map((x) => x.site_name),
+	})),
+);
+
+const remoteSiteOptions = computed(() =>
+	(remote.bench?.sites || []).map((name) => ({ value: name, label: name })),
+);
+
+const remoteApps = computed(() => readiness.data?.apps || []);
+const remoteMissing = computed(() => readiness.data?.missing || []);
+
+function onRemoteServer() {
+	remote.bench = null;
+	remote.site = null;
+	readiness.reset?.();
+	if (!remote.server) return;
+	remoteBenches
+		.submit({ server: remote.server, method: "server.api.list_benches", args: {} })
+		.catch((error) => toast.error(error.messages?.[0] || "Could not read that server"));
+}
+
+// The app check runs when a site is chosen, not when the dialog opens: it is
+// the site that decides which apps matter.
+watch(
+	() => [remote.site, props.bench],
+	() => {
+		readiness.reset?.();
+		if (!remote.server || !remote.bench?.value || !remote.site?.value) return;
+		readiness
+			.submit({
+				server: remote.server,
+				remote_bench: remote.bench.value,
+				remote_site: remote.site.value,
+				bench: props.bench,
+			})
+			.catch(() => {
+				// Leaving it silent: the restore itself still checks the dump,
+				// and an unavailable early warning should not block the move.
+			});
+	},
 );
 
 async function run() {
