@@ -126,8 +126,9 @@ def _journal_readable() -> bool:
 def after_install():
 	"""Seed settings, then tell the operator what still needs doing by hand."""
 	_seed_settings()
+	found = _scan_benches()
 	report = check_prerequisites()
-	_print_report(report)
+	_print_report(report, found)
 
 
 def _seed_settings():
@@ -146,9 +147,31 @@ def _seed_settings():
 		frappe.logger("server").warning("could not seed Server Settings defaults", exc_info=True)
 
 
-def _print_report(report: dict):
+def _scan_benches() -> int | None:
+	"""Fill the bench table now, rather than at the top of the next hour.
+
+	The scan is also scheduled hourly, so this is only about the first hour —
+	but the first hour is when somebody opens the app to see whether installing
+	it did anything. Returns None if it could not run; a failure here must not
+	fail the install, because everything else about the app still works.
+	"""
+	from server.bench import discovery
+
+	try:
+		return int(discovery.scan_benches().get("found") or 0)
+	except Exception:
+		frappe.logger("server").warning("could not scan for benches at install", exc_info=True)
+		return None
+
+
+def _print_report(report: dict, benches: int | None = None):
 	print("")
 	print("  Server app installed.")
+	print("")
+	if benches:
+		print(f"   ok benches      {benches} found")
+	elif benches == 0:
+		print("   !! benches      none found — check Bench Root in Server Settings")
 	print("")
 	for name, info in report["commands"].items():
 		mark = "ok " if info["found"] else "!! "

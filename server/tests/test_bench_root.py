@@ -128,3 +128,34 @@ class Diagnosing(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TheScanIsScheduled(unittest.TestCase):
+	"""It existed and was never wired up.
+
+	`discovery.enqueue_scan` was written as "the scheduler entry point" and
+	then not listed in any scheduler slot, so the bench table was only ever
+	filled by somebody pressing Rescan. A fresh install therefore showed an
+	empty Benches page on a machine holding twelve of them.
+	"""
+
+	def test_the_bench_scan_runs_on_the_scheduler(self):
+		from server import hooks
+
+		scheduled = set()
+		for slot in hooks.scheduler_events.values():
+			if isinstance(slot, dict):
+				for methods in slot.values():
+					scheduled.update(methods)
+			else:
+				scheduled.update(slot)
+
+		self.assertIn("server.bench.discovery.enqueue_scan", scheduled)
+
+	def test_installing_the_app_fills_the_bench_table(self):
+		import inspect
+
+		from server import install
+
+		source = inspect.getsource(install.after_install)
+		self.assertIn("_scan_benches", source)

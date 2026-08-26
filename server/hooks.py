@@ -236,6 +236,11 @@ scheduler_events = {
 	# safe to run by hand while looking at something.
 	"hourly": [
 		"server.ssh.sessionize.enqueue_sessionize",
+		# Re-read the benches on disk. This was written and then never
+		# scheduled, so the table was only ever filled by somebody pressing
+		# Rescan — which meant a fresh install showed an empty Benches page on
+		# a machine holding twelve of them, and nothing said why.
+		"server.bench.discovery.enqueue_scan",
 		# The application's own security state: credentials on disk, dangerous
 		# settings, backup recency, who holds System Manager. Hourly rather
 		# than quarter-hourly — these change when a person changes them, and

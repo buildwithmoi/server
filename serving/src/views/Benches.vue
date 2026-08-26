@@ -89,7 +89,7 @@
 			:total="rows.length"
 			:page-length="100"
 			clickable
-			:empty-title="report ? `No benches under ${report.root}` : 'No benches found'"
+			:empty-title="emptyTitle"
 			:empty-hint="emptyHint"
 			@row-click="open"
 		>
@@ -98,6 +98,22 @@
 			     one is a one-field fix nobody can make without being told where
 			     the app actually searched. -->
 			<template #empty-extra>
+				<!-- The case that matters most: the directory is right, the
+				     benches are there, and nothing has read them yet. That is
+				     one button, not a diagnosis — so it goes first and the
+				     listing below becomes supporting detail. -->
+				<div v-if="unscanned" class="mt-4 flex flex-col items-center gap-2">
+					<p class="max-w-sm text-[13px] leading-relaxed text-[var(--ink-faint)]">
+						{{ report.benches }} {{ report.benches === 1 ? "bench is" : "benches are" }} on disk
+						under <span class="u-mono">{{ report.root }}</span>, but none has been read yet.
+						This also happens on its own every hour.
+					</p>
+					<Button variant="solid" :loading="rescanning" @click="rescan">
+						<template #prefix><Icon name="refresh" :size="13" /></template>
+						Scan them now
+					</Button>
+				</div>
+
 				<div v-if="report" class="mx-auto mt-4 max-w-xl text-left">
 					<dl class="rounded-lg border border-[var(--rule)] bg-[var(--paper-sunk)] p-3 text-[12.5px]">
 						<div class="flex gap-2">
@@ -116,7 +132,7 @@
 
 					<template v-if="report.candidates.length">
 						<p class="mt-3 text-[12.5px] text-[var(--ink-faint)]">
-							Directories that came close:
+							{{ unscanned ? "What is there:" : "Directories that came close:" }}
 						</p>
 						<ul class="mt-1.5 space-y-1">
 							<li v-for="c in report.candidates" :key="c.path" class="text-[12.5px]">
@@ -199,10 +215,19 @@ const showAuth = ref(false);
 const rows = computed(() => resource.data || []);
 const report = computed(() => rootReport.data || null);
 
+/** Benches exist on disk; the table simply has not been filled from them. */
+const unscanned = computed(() => Boolean(report.value?.benches));
+
+const emptyTitle = computed(() => {
+	if (unscanned.value) return "Not scanned yet";
+	if (report.value) return `No benches under ${report.value.root}`;
+	return "No benches found";
+});
+
 const emptyHint = computed(() => {
-	if (!report.value) return "A directory counts as a bench only if it has apps, sites, config, logs and config/pids.";
-	if (!report.value.exists) return "That directory does not exist on this machine.";
-	if (!report.value.readable) return "That directory could not be read.";
+	if (unscanned.value) return "";
+	if (report.value && !report.value.exists) return "That directory does not exist on this machine.";
+	if (report.value && !report.value.readable) return "That directory could not be read.";
 	return "A directory counts as a bench only if it has apps, sites, config, logs and config/pids.";
 });
 const loading = computed(() => resource.loading && !resource.data);
@@ -249,7 +274,10 @@ async function rescan() {
 	try {
 		const result = await rescanBenchesResource().submit({});
 		toast.success(`Found ${result.found} bench${result.found === 1 ? "" : "es"} under ${result.root}`);
-		resource.fetch();
+		await resource.fetch();
+		// The diagnosis is now stale, and leaving it would show a panel saying
+		// benches are waiting to be read directly beneath the scan that read them.
+		if (!rows.value.length) rootReport.fetch();
 	} catch (error) {
 		toast.error(error.messages?.[0] || "Rescan failed");
 	} finally {
