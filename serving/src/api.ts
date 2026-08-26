@@ -854,6 +854,10 @@ export function cancelMigrationResource() {
 	return createResource({ url: `${M}.cancel_bench_migration` });
 }
 
+export function benchMigrationsResource() {
+	return switchable("list_bench_migrations");
+}
+
 export function benchRootReportResource() {
 	return switchable("bench_root_report");
 }

@@ -672,6 +672,48 @@ def start_bench_migration(
 
 
 @frappe.whitelist()
+def list_bench_migrations(limit: int = 50) -> dict:
+	"""Every bench move, so a paused one can be found again.
+
+	Written because there was nowhere to go. The detail page existed and
+	nothing linked to it: once the dialog was closed, a migration that had
+	stopped halfway was unreachable, and the only apparent way forward was to
+	start the whole thing again — re-cloning apps that were already there.
+	"""
+	_assert_server_admin()
+
+	rows = frappe.get_all(
+		"Bench Migration",
+		fields=[
+			"name", "status", "source_server", "source_bench", "target_bench",
+			"current_action", "actions_json", "action_states", "notes",
+			"creation", "started_at", "finished_at", "owner",
+		],
+		order_by="creation desc",
+		limit=min(int(limit or 50), 200),
+	)
+
+	for row in rows:
+		actions = frappe.parse_json(row.pop("actions_json") or "[]")
+		states = frappe.parse_json(row.pop("action_states") or "[]")
+		if len(states) != len(actions):
+			# Same reconstruction the document does: everything before the
+			# pointer is known to have succeeded.
+			at = int(row.get("current_action") or 0)
+			states = ["Success" if i < at else "Pending" for i in range(len(actions))]
+		row["total"] = len(actions)
+		row["done"] = sum(1 for state in states if state == "Success")
+		row["failed"] = sum(1 for state in states if state == "Failed")
+
+	return {
+		"rows": rows,
+		# The one that needs somebody. A paused move is not history — it is
+		# work waiting to be continued.
+		"unfinished": [r["name"] for r in rows if r["status"] in ("Running", "Paused")],
+	}
+
+
+@frappe.whitelist()
 def bench_migration(name: str) -> dict:
 	"""One migration, its actions, and where it has got to."""
 	_assert_server_admin()

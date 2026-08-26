@@ -1,6 +1,10 @@
 <template>
 	<AppShell :title="title" :subtitle="subtitle">
 		<template #actions>
+			<RouterLink
+				:to="{ name: 'Migrations' }"
+				class="text-[12.5px] text-[var(--ink-faint)] underline-offset-2 hover:underline"
+			>All moves</RouterLink>
 			<Button v-if="canResume" variant="solid" :loading="acting" @click="resume">
 				{{ retryCount ? `Retry ${retryCount} and continue` : "Continue" }}
 			</Button>

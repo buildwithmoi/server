@@ -82,6 +82,32 @@
 			</div>
 		</Transition>
 
+		<!--
+			A move that stopped halfway, surfaced where somebody would look for
+			it. The detail page existed and nothing linked to it, so a paused
+			migration was invisible — and the only apparent way forward was to
+			start the whole thing again and re-clone apps already there.
+		-->
+		<RouterLink
+			v-if="unfinishedMove"
+			:to="{ name: 'Migration', params: { name: unfinishedMove.name } }"
+			class="mb-4 flex items-start gap-3 rounded-lg border border-[var(--ink)] bg-[var(--paper-sunk)] px-4 py-3"
+		>
+			<Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
+			<div class="min-w-0 flex-1">
+				<p class="text-[13px] font-medium">
+					A bench move is {{ unfinishedMove.status.toLowerCase() }}
+				</p>
+				<p class="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
+					<span class="u-mono">{{ unfinishedMove.source_bench }}</span> →
+					<span class="u-mono">{{ unfinishedMove.target_bench }}</span>,
+					{{ unfinishedMove.done }} of {{ unfinishedMove.total }} steps done<template
+						v-if="unfinishedMove.failed"
+					>, {{ unfinishedMove.failed }} to retry</template>. Open it to continue.
+				</p>
+			</div>
+		</RouterLink>
+
 		<DataTable
 			:columns="COLUMNS"
 			:rows="rows"
@@ -192,7 +218,7 @@ import Skeleton from "../components/Skeleton.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import MigrateDialog from "../components/MigrateDialog.vue";
 import ProvisionDialog from "../components/ProvisionDialog.vue";
-import { benchRootReportResource, benchesResource, gitAuthResource, rescanBenchesResource } from "../api";
+import { benchMigrationsResource, benchRootReportResource, benchesResource, gitAuthResource, rescanBenchesResource } from "../api";
 
 const COLUMNS = [
 	{ key: "name", label: "Bench", width: "170px" },
@@ -209,11 +235,18 @@ const router = useRouter();
 const resource = benchesResource();
 const auth = gitAuthResource();
 const rootReport = benchRootReportResource();
+const moves = benchMigrationsResource();
 const rescanning = ref(false);
 const showAuth = ref(false);
 
 const rows = computed(() => resource.data || []);
 const report = computed(() => rootReport.data || null);
+
+/** The most recent move still waiting on somebody, if there is one. */
+const unfinishedMove = computed(() => {
+	const rows = moves.data?.rows || [];
+	return rows.find((row) => ["Running", "Paused"].includes(row.status)) || null;
+});
 
 /** Benches exist on disk; the table simply has not been filled from them. */
 const unscanned = computed(() => Boolean(report.value?.benches));
@@ -288,6 +321,7 @@ async function rescan() {
 onMounted(async () => {
 	await resource.fetch();
 	auth.fetch();
+	moves.fetch();
 	// Only when there is nothing to show. On a working machine this is a
 	// directory listing nobody needs, and the empty state is the only place
 	// its answer is used.

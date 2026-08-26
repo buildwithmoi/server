@@ -282,6 +282,10 @@ const nav = [
 	{ name: "IpAddresses", label: "Addresses", icon: "globe" },
 	{ name: "Benches", label: "Benches", icon: "layers" },
 	{ name: "Installs", label: "App Installs", icon: "download" },
+	// Next to Benches, not filed under Logs: a move that stopped halfway is
+	// work waiting to be continued, and it was unreachable — the detail page
+	// existed and nothing linked to it.
+	{ name: "Migrations", label: "Bench Moves", icon: "server" },
 	{
 		label: "Logs",
 		icon: "file",
