@@ -69,23 +69,36 @@
 								itself, with the exact file for this machine
 								rather than a description of one.
 							-->
-							<details v-if="report.sudoers" class="mt-3">
+							<details v-if="report.sudoers_command" class="mt-3">
 								<summary class="cursor-pointer text-[12px] text-[var(--ink-faint)] hover:text-[var(--ink)]">
-									Show the sudoers file to add
+									Show the command that grants it
 								</summary>
+
+								<!--
+									THE COMMAND, not the file. The file was
+									offered as the thing to copy, and
+									`erpnext ALL=(root) NOPASSWD: …` pasted into
+									a shell is eight lines of syntax error —
+									which is what came back, eight times.
+								-->
 								<div class="mt-2 flex items-center gap-2">
-									<code class="u-mono text-[11.5px] text-[var(--ink-faint)]">{{ report.sudoers_path }}</code>
+									<span class="text-[11.5px] text-[var(--ink-faint)]">
+										Paste this into a terminal on this server
+									</span>
 									<Button size="sm" variant="ghost" class="ml-auto" @click="copySudoers">
 										<template #prefix><Icon name="copy" :size="12" /></template>
 										{{ copiedSudoers ? "Copied" : "Copy" }}
 									</Button>
 								</div>
-								<pre class="u-mono u-scroll mt-1.5 max-h-[15rem] overflow-auto rounded-md border border-[var(--rule)] bg-[var(--paper-sunk)] p-3 text-[11.5px] leading-relaxed">{{ report.sudoers }}</pre>
+								<pre class="u-mono u-scroll mt-1.5 max-h-[17rem] overflow-auto rounded-md border border-[var(--rule)] bg-[var(--paper-sunk)] p-3 text-[11.5px] leading-relaxed">{{ report.sudoers_command }}</pre>
 								<p class="mt-1.5 text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
-									It grants certbot, the nginx reload and four read-only commands the
-									security detectors need — and nothing else. This app never writes to
-									your sudoers configuration; an app that could grant itself root would
-									not need to ask.
+									It writes <code class="u-mono">{{ report.sudoers_path }}</code>, checks it
+									with <code class="u-mono">visudo -c</code>, and only moves it into place if
+									it is valid — a broken sudoers file is the one mistake here that locks you
+									out of your own machine. It grants certbot, the nginx reload and four
+									read-only commands the security detectors need, and nothing else. This app
+									never writes to your sudoers configuration; one that could grant itself
+									root would not need to ask.
 								</p>
 							</details>
 						</div>
@@ -265,7 +278,7 @@ const copiedSudoers = ref(false);
 
 async function copySudoers() {
 	try {
-		await navigator.clipboard.writeText(report.value.sudoers);
+		await navigator.clipboard.writeText(report.value.sudoers_command);
 		copiedSudoers.value = true;
 		setTimeout(() => (copiedSudoers.value = false), 2000);
 	} catch {

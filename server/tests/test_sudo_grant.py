@@ -65,15 +65,59 @@ class TheSuggestedFile(unittest.TestCase):
 		self.assertNotIn("NOPASSWD: ALL", self.text)
 		self.assertNotIn("*", self.text)
 
-	def test_it_says_how_to_install_it(self):
-		self.assertIn("visudo -f", self.text)
+	def test_it_names_where_it_lives(self):
 		self.assertIn(ssl.SUDOERS_PATH, self.text)
+
+
+class TheInstallCommand(unittest.TestCase):
+	"""The file is not a thing you can paste into a shell.
+
+	It was offered as one, and `erpnext ALL=(root) NOPASSWD: ...` is eight
+	lines of bash syntax error — which is exactly what came back, eight times.
+	"""
+
+	def setUp(self):
+		self.command = ssl.sudoers_install_command("erpnext", "/usr/bin/certbot", "/usr/local/bin/bench")
+
+	def test_it_is_one_thing_to_paste(self):
+		self.assertTrue(self.command.startswith("sudo tee "))
+		self.assertIn("<<'SUDOERS'", self.command)
+
+	def test_the_heredoc_is_quoted(self):
+		# Unquoted, the shell would expand `$` and backticks inside a file
+		# that grants root.
+		self.assertIn("<<'SUDOERS'", self.command)
+		self.assertNotIn("<<SUDOERS", self.command.replace("<<'SUDOERS'", ""))
+
+	def test_it_is_checked_before_it_is_installed(self):
+		# A broken sudoers file is the one mistake here that locks somebody out
+		# of their own machine.
+		self.assertIn("visudo -c -f", self.command)
+		self.assertIn("&& sudo mv", self.command)
+		self.assertIn("|| sudo rm -f", self.command)
+
+	def test_the_temporary_name_is_inert(self):
+		# sudo skips files in sudoers.d whose names contain a dot, so the
+		# half-written one cannot take effect while it is being checked.
+		self.assertIn(f"{ssl.SUDOERS_PATH}.tmp", self.command)
+
+	def test_the_permissions_are_set(self):
+		self.assertIn("chmod 0440", self.command)
 
 
 class OfferedOnlyWhenItWouldHelp(unittest.TestCase):
 	def test_the_readiness_payload_carries_it(self):
 		source = inspect.getsource(ssl.readiness)
 		self.assertIn('"sudoers": "" if sudo_ok else sudoers_suggestion', source)
+
+	def test_the_page_copies_the_command_not_the_file(self):
+		import pathlib
+
+		view = (
+			pathlib.Path(__file__).resolve().parents[2] / "serving" / "src" / "components" / "SslDialog.vue"
+		).read_text()
+		self.assertIn("report.value.sudoers_command", view)
+		self.assertIn("Paste this into a terminal", view)
 
 	def test_a_handled_check_is_not_drawn_as_a_failure(self):
 		import pathlib

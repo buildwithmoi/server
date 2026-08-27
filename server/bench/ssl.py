@@ -164,9 +164,8 @@ def sudoers_suggestion(user: str, certbot: str = "", bench_executable: str = "")
 	bench_executable = bench_executable or "/usr/local/bin/bench"
 	return "\n".join(
 		[
-			"# Written by hand, deliberately: this app cannot grant itself root.",
-			"# Install with:",
-			f"#   sudo visudo -f {SUDOERS_PATH}",
+			"# Granted by hand, deliberately: this app cannot grant itself root.",
+			f"# Lives at {SUDOERS_PATH}, owned by root, mode 0440.",
 			"#",
 			"# Certificates. certbot binds port 80 and writes to /etc/letsencrypt.",
 			f"{user} ALL=(root) NOPASSWD: {certbot}",
@@ -370,6 +369,33 @@ def dns_check(domain: str) -> dict:
 # ----------------------------------------------------------------------
 
 
+def sudoers_install_command(user: str, certbot: str = "", bench_executable: str = "") -> str:
+	"""One command that writes the file, checks it, and only then installs it.
+
+	THE FILE IS NOT A THING YOU CAN PASTE INTO A SHELL. It was offered as one,
+	and it was — `erpnext ALL=(root) NOPASSWD: ...` is eight lines of syntax
+	error in bash, which is what the operator got, eight times.
+
+	Written to a `.tmp` name first and validated with `visudo -c` before it is
+	moved into place. sudo ignores files in sudoers.d whose names contain a
+	dot, so the half-written one is inert while it is being checked — and a
+	broken sudoers file is the one mistake here that locks somebody out of
+	their own machine.
+	"""
+	body = sudoers_suggestion(user, certbot, bench_executable)
+	temporary = f"{SUDOERS_PATH}.tmp"
+	return "\n".join(
+		[
+			f"sudo tee {temporary} > /dev/null <<'SUDOERS'",
+			body,
+			"SUDOERS",
+			f"sudo chmod 0440 {temporary}",
+			f"sudo visudo -c -f {temporary} && sudo mv {temporary} {SUDOERS_PATH} "
+			f"|| sudo rm -f {temporary}",
+		]
+	)
+
+
 def readiness(bench_path: str, sites: list[dict]) -> dict:
 	"""Answer every question that can be answered without touching the network.
 
@@ -453,6 +479,11 @@ def readiness(bench_path: str, sites: list[dict]) -> dict:
 		# change anything — a panel that offers a fix for a problem nobody has
 		# is the same noise as a warning nobody needs.
 		"sudoers": "" if sudo_ok else sudoers_suggestion(_current_user(), certbot or ""),
+		# What to actually paste. The file itself is not a shell script, and
+		# offering it as though it were produced eight syntax errors in a row.
+		"sudoers_command": (
+			"" if sudo_ok else sudoers_install_command(_current_user(), certbot or "")
+		),
 		"sudoers_path": SUDOERS_PATH,
 	}
 
