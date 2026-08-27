@@ -94,14 +94,21 @@ class GoDaddyProvider(DnsProvider):
 			if not removed.ok:
 				return removed
 
-		body = [
-			{
-				"type": record.type,
-				"name": normalise_name(record.name, zone),
-				"data": record.content,
-				"ttl": clamp_ttl(record.ttl),
-			}
-		]
+		# ONE RECORD, AS AN OBJECT. Not a list, and not wrapped in `items`.
+		#
+		# v1 took an array — `PATCH /v1/domains/{domain}/records` — and the GET
+		# here answers with `{"items": [...]}`, so both of the obvious guesses
+		# are wrong in different ways. Measured against the live API:
+		#
+		#   [{...}]            400  value must be an object
+		#   {"items": [{...}]} 400  property "name" is missing
+		#   {...}              201  {"recordId": "47d0d713-…", …}
+		body = {
+			"type": record.type,
+			"name": normalise_name(record.name, zone),
+			"data": record.content,
+			"ttl": clamp_ttl(record.ttl),
+		}
 		try:
 			http.request(
 				"POST", f"{BASE}/v3/domains/zones/{zone}/dns-records", token=self.token, payload=body

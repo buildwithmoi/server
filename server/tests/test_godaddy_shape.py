@@ -91,3 +91,41 @@ class TheFormOffersOnlyWhatItCanDo(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TheWriteBody(unittest.TestCase):
+	"""One record, as an object. Not a list, not wrapped.
+
+	v1 took an array — `PATCH /v1/domains/{domain}/records` — and the GET here
+	answers with `{"items": [...]}`, so both obvious guesses are wrong, in
+	different ways. Measured against the live API on 2026-08-27:
+
+	    [{...}]             400  value must be an object
+	    {"items": [{...}]}  400  property "name" is missing
+	    {...}               201  {"recordId": "47d0d713-…", …}
+	"""
+
+	def test_the_body_is_a_single_object(self):
+		import inspect
+
+		source = inspect.getsource(godaddy.GoDaddyProvider.upsert_record)
+		# The list form is what produced "Request body doesn't fulfill schema"
+		# in front of somebody trying to point a live site at a new server.
+		self.assertNotIn("body = [", source)
+		self.assertIn("body = {", source)
+
+	def test_it_carries_the_four_fields_v3_requires(self):
+		import inspect
+
+		source = inspect.getsource(godaddy.GoDaddyProvider.upsert_record)
+		for field in ('"type"', '"name"', '"data"', '"ttl"'):
+			self.assertIn(field, source)
+
+	def test_the_identifier_is_read_from_recordid(self):
+		# v3 deletes by id, and an upsert here is a delete followed by a
+		# create — losing the id would mean the delete could not be made.
+		found = godaddy.parse_records(
+			{"items": [{"type": "A", "name": "x", "data": "1.2.3.4", "ttl": 600,
+			            "recordId": "b6af4dc9-57eb-48b3-9723-5f2611d0a062"}]}
+		)
+		self.assertEqual(found[0].record_id, "b6af4dc9-57eb-48b3-9723-5f2611d0a062")
