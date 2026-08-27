@@ -231,20 +231,19 @@ def _preflight_ssl(request, bench_doc) -> list[str]:
 
 	if not ssl.has_passwordless_sudo():
 		raise InstallAborted(
-			"certbot and nginx both need root, and this job has no terminal to type a password "
-			"into. Give this user a NOPASSWD sudoers rule before running SSL from here."
+			"certbot needs root and this job has no terminal to type a password into. The SSL "
+			"dialog carries the exact sudoers file for this machine, under “Show the command "
+			f"that grants it” — it installs {ssl.SUDOERS_PATH} and grants nothing else."
 		)
 
 	if mode == ssl.MODE_ISSUE:
 		site = (request.install_on_site or "").strip()
 		if site not in bench_doc.site_names():
 			raise InstallAborted(f"{site!r} is not a site on {bench_doc.name}.")
-		if not ssl.is_dns_multitenant(bench_doc.bench_path):
-			raise InstallAborted(
-				"This bench is not DNS-multitenant, and bench refuses to set up SSL without it — "
-				"while still exiting 0, so it would look like it worked. Run "
-				"`bench config dns_multitenant on` first."
-			)
+		# Multitenancy is NOT checked here any more. It was, and it refused the
+		# run — before the step that turns it on, which is three steps further
+		# down the same job. The plan announced "Turn on DNS multitenancy" and
+		# the check above it stopped the run for the want of it.
 		domain, extras = ssl.site_domains(bench_doc.bench_path, site)
 		target = (request.ssl_domain or "").strip() or domain
 		if not ssl.VALID_DOMAIN.match(target):
@@ -252,12 +251,9 @@ def _preflight_ssl(request, bench_doc) -> list[str]:
 				f"{target!r} is not a public domain name, so Let's Encrypt cannot certify it. "
 				"Point a real domain at this server and set it as the site's host_name."
 			)
-		if request.ssl_domain and request.ssl_domain.strip() not in extras:
-			raise InstallAborted(
-				f"{request.ssl_domain} is not one of {site}'s configured domains "
-				f"({', '.join(extras) or 'none'}). bench only certifies a domain the site already "
-				"knows about — add it with `bench setup add-domain` first."
-			)
+		# Nor is the domain. The job adds it, in the step called "Tell the site
+		# its domain" — the same mistake in the same preflight: refusing a run
+		# because of a state the run itself creates.
 
 		# Let's Encrypt rate-limits failed authorisations and the block outlasts
 		# the mistake, so a domain that cannot possibly validate is refused here
@@ -270,6 +266,10 @@ def _preflight_ssl(request, bench_doc) -> list[str]:
 			)
 
 		notes = [f"Issue certificate for {target} · nginx will restart"]
+		if not ssl.is_dns_multitenant(bench_doc.bench_path):
+			notes.append("DNS multitenancy is off and will be turned on first.")
+		if request.ssl_domain and request.ssl_domain.strip() not in extras:
+			notes.append(f"{request.ssl_domain} will be added to {site} first.")
 		if not dns["points_here"]:
 			notes.append(dns["detail"])
 		return notes
