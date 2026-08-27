@@ -2087,11 +2087,31 @@ def save_domain_provider(
 	"""
 	_assert_server_admin()
 
-	doc = (
-		frappe.get_doc("Domain Provider", name)
-		if name and frappe.db.exists("Domain Provider", name)
-		else frappe.new_doc("Domain Provider")
-	)
+	provider_name = (provider_name or "").strip()
+	if not provider_name:
+		frappe.throw("A credential needs a name.", title="No Name")
+
+	existing = name if name and frappe.db.exists("Domain Provider", name) else None
+
+	# RENAMING IS A RENAME, not a field write.
+	#
+	# The DocType autonames `field:provider_name`, so the docname IS the name.
+	# Assigning the field on an existing document and saving does nothing at
+	# all — frappe puts the old value back, silently, and the form comes back
+	# from a refresh looking exactly as it did. Which is what happened to
+	# somebody trying to fix a credential called "Hostinger" that was talking
+	# to GoDaddy.
+	if existing and existing != provider_name:
+		if frappe.db.exists("Domain Provider", provider_name):
+			frappe.throw(
+				f"There is already a credential called {provider_name!r}.",
+				title="Name Taken",
+			)
+		frappe.rename_doc("Domain Provider", existing, provider_name, force=True)
+		frappe.db.commit()
+		existing = provider_name
+
+	doc = frappe.get_doc("Domain Provider", existing) if existing else frappe.new_doc("Domain Provider")
 	doc.provider_name = provider_name
 	doc.provider = provider
 	doc.is_default = 1 if frappe.parse_json(is_default) else 0
@@ -2099,7 +2119,17 @@ def save_domain_provider(
 		doc.api_token = api_token
 	doc.save()
 	frappe.db.commit()
-	return {"name": doc.name}
+
+	# The secret is stored in `__Auth` against the DOCNAME. If a rename did not
+	# carry it across, the credential would read as having no token — which is
+	# indistinguishable from never having had one, and the fix somebody would
+	# reach for is to paste it in again.
+	kept = bool(
+		frappe.utils.password.get_decrypted_password(
+			"Domain Provider", doc.name, "api_token", raise_exception=False
+		)
+	)
+	return {"name": doc.name, "has_token": kept}
 
 
 @frappe.whitelist(methods=["POST"])

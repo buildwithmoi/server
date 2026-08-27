@@ -40,10 +40,41 @@
 					class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)] disabled:opacity-60"
 					@change="load"
 				>
-					<option value="">{{ zones.length ? "Choose a domain" : "No domains on that credential" }}</option>
+					<option value="">{{ zones.length ? "Choose a domain" : "Not asked yet" }}</option>
 					<option v-for="z in zones" :key="z" :value="z">{{ z }}</option>
 				</select>
 			</label>
+		</div>
+
+		<!--
+			The domain list is whatever the last check found, and a credential
+			that has never been checked has none. "No domains on that
+			credential" therefore read as a verdict about the token when it was
+			only a statement that nobody had asked yet — with nothing on the
+			page to ask with.
+		-->
+		<div v-if="provider && !zones.length" class="u-note mb-4 flex flex-wrap items-center gap-3">
+			<div class="min-w-0 flex-1">
+				<p class="text-[12.5px] leading-relaxed">
+					<template v-if="chosenProvider?.verify_error">
+						The last check of this credential failed:
+						<span class="u-danger">{{ chosenProvider.verify_error }}</span>
+					</template>
+					<template v-else-if="!chosenProvider?.has_token">
+						No token is stored for this credential. Add one under Masters → Domain Providers.
+					</template>
+					<template v-else>
+						This credential has not been checked yet, so nothing knows which domains it
+						holds. Checking asks the provider and stores the list.
+					</template>
+				</p>
+			</div>
+			<Button
+				v-if="chosenProvider?.has_token"
+				variant="solid"
+				:loading="checking"
+				@click="check"
+			>Check it now</Button>
 		</div>
 
 		<p v-if="error" class="u-note u-note-danger mb-4 text-[12.5px] leading-relaxed">{{ error }}</p>
@@ -193,6 +224,7 @@ import {
 	dnsRecordsResource,
 	domainProvidersResource,
 	saveDnsRecordResource,
+	verifyDomainProviderResource,
 } from "../api";
 
 const TYPES = ["A", "AAAA", "CNAME", "TXT", "MX"];
@@ -205,6 +237,7 @@ const deleteRes = deleteDnsRecordResource();
 const provider = ref("");
 const zone = ref("");
 const editing = ref(false);
+const checking = ref(false);
 const removing = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -222,6 +255,7 @@ const form = reactive({
 
 const providers = computed(() => providersRes.data?.providers || []);
 const zones = computed(() => providers.value.find((p) => p.name === provider.value)?.zones || []);
+const chosenProvider = computed(() => providers.value.find((p) => p.name === provider.value) || null);
 const records = computed(() => recordsRes.data?.records || []);
 const thisHost = computed(() => recordsRes.data?.this_host || "");
 const loading = computed(() => recordsRes.loading);
@@ -243,6 +277,30 @@ const canSave = computed(() => {
 
 function fqdn(label) {
 	return !label || label === "@" ? zone.value : `${label}.${zone.value}`;
+}
+
+/** Ask the provider what this credential reaches, and remember the answer. */
+async function check() {
+	checking.value = true;
+	error.value = "";
+	try {
+		const result = await verifyDomainProviderResource().submit({ name: provider.value });
+		await providersRes.fetch();
+		if (result.ok) {
+			toast.success(
+				result.zones.length
+					? `${result.zones.length} domain${result.zones.length === 1 ? "" : "s"} reachable`
+					: "The credential works but holds no domains.",
+			);
+		} else {
+			// Reported, not thrown: the provider answering "no" is an answer.
+			error.value = result.error || "The provider refused the credential.";
+		}
+	} catch (caught) {
+		error.value = caught.messages?.[0] || "Could not reach the provider";
+	} finally {
+		checking.value = false;
+	}
 }
 
 function onProvider() {

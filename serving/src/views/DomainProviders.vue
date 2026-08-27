@@ -207,8 +207,14 @@ async function save() {
 	saving.value = true;
 	error.value = "";
 	try {
-		await saveResource.submit({ ...form.value, name: editing.value || null });
-		toast.success("Saved");
+		const result = await saveResource.submit({ ...form.value, name: editing.value || null });
+		// Say when the name actually moved. A rename that reports "Saved" and
+		// silently did nothing is how this went unnoticed three times.
+		toast.success(
+			editing.value && result.name !== editing.value
+				? `Renamed to ${result.name}`
+				: "Saved",
+		);
 		showForm.value = false;
 		resource.fetch();
 	} catch (caught) {
