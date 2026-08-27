@@ -179,15 +179,15 @@ export function overviewResource(days = 7) {
 }
 
 export function authEventsResource() {
-	return createResource({ url: `${M}.list_auth_events` });
+	return switchable("list_auth_events");
 }
 
 export function sudoCommandsResource() {
-	return createResource({ url: `${M}.list_sudo_commands` });
+	return switchable("list_sudo_commands");
 }
 
 export function ipAddressesResource() {
-	return createResource({ url: `${M}.list_ip_addresses` });
+	return switchable("list_ip_addresses");
 }
 
 export function settingsFormResource() {
@@ -199,11 +199,11 @@ export function saveSettingsResource() {
 }
 
 export function settingsResource() {
-	return createResource({ url: `${M}.get_settings_summary` });
+	return switchable("get_settings_summary");
 }
 
 export function logSourceResource() {
-	return createResource({ url: `${M}.check_log_source` });
+	return switchable("check_log_source");
 }
 
 /** What the reader has actually done — distinct from probing the machine. */
@@ -235,27 +235,27 @@ export interface ProfileRepo {
 }
 
 export function githubProfilesResource() {
-	return createResource({ url: `${M}.list_github_profiles` });
+	return switchable("list_github_profiles");
 }
 
 export function saveGithubProfileResource() {
-	return createResource({ url: `${M}.save_github_profile` });
+	return switchable("save_github_profile");
 }
 
 export function deleteGithubProfileResource() {
-	return createResource({ url: `${M}.delete_github_profile` });
+	return switchable("delete_github_profile");
 }
 
 export function syncGithubProfileResource() {
-	return createResource({ url: `${M}.sync_github_profile` });
+	return switchable("sync_github_profile");
 }
 
 export function profileReposResource() {
-	return createResource({ url: `${M}.list_profile_repos` });
+	return switchable("list_profile_repos");
 }
 
 export function repoBranchesResource() {
-	return createResource({ url: `${M}.list_repo_branches` });
+	return switchable("list_repo_branches");
 }
 
 export function benchAppsResource() {
@@ -284,11 +284,11 @@ export interface BenchCommandEntry {
 }
 
 export function benchCommandsResource() {
-	return createResource({ url: `${M}.list_bench_commands` });
+	return switchable("list_bench_commands");
 }
 
 export function runBenchCommandResource() {
-	return createResource({ url: `${M}.run_bench_command` });
+	return switchable("run_bench_command");
 }
 
 /* ---------------------------------------------------------------------- ssl */
@@ -364,11 +364,11 @@ export interface ConfigSetting {
 }
 
 export function siteConfigResource() {
-	return createResource({ url: `${M}.site_config` });
+	return switchable("site_config");
 }
 
 export function updateSiteConfigResource() {
-	return createResource({ url: `${M}.update_site_config` });
+	return switchable("update_site_config");
 }
 
 export function backupPlanResource() {
@@ -376,19 +376,19 @@ export function backupPlanResource() {
 }
 
 export function pruneBackupsResource() {
-	return createResource({ url: `${M}.prune_backups` });
+	return switchable("prune_backups");
 }
 
 export function logsResource() {
-	return createResource({ url: `${M}.list_logs` });
+	return switchable("list_logs");
 }
 
 export function readLogResource() {
-	return createResource({ url: `${M}.read_log` });
+	return switchable("read_log");
 }
 
 export function cancelInstallResource() {
-	return createResource({ url: `${M}.cancel_install_request` });
+	return switchable("cancel_install_request");
 }
 
 export interface AlertRow {
@@ -402,15 +402,15 @@ export interface AlertRow {
 }
 
 export function alertsResource() {
-	return createResource({ url: `${M}.recent_alerts` });
+	return switchable("recent_alerts");
 }
 
 export function markAlertsReadResource() {
-	return createResource({ url: `${M}.mark_alerts_read` });
+	return switchable("mark_alerts_read");
 }
 
 export function systemHealthResource() {
-	return createResource({ url: `${M}.system_health` });
+	return switchable("system_health");
 }
 
 export function backupUsageResource() {
@@ -418,11 +418,11 @@ export function backupUsageResource() {
 }
 
 export function sslReadinessResource() {
-	return createResource({ url: `${M}.ssl_readiness` });
+	return switchable("ssl_readiness");
 }
 
 export function runSslResource() {
-	return createResource({ url: `${M}.run_ssl` });
+	return switchable("run_ssl");
 }
 
 /* ------------------------------------------------------------------ restore */
@@ -491,7 +491,7 @@ export interface BackupContents {
 }
 
 export function inspectBackupResource() {
-	return createResource({ url: `${M}.inspect_backup` });
+	return switchable("inspect_backup");
 }
 
 /**
@@ -565,7 +565,7 @@ export function restoreFilesResource() {
 }
 
 export function restoreSpaceResource() {
-	return createResource({ url: `${M}.estimate_restore_space` });
+	return switchable("estimate_restore_space");
 }
 
 export function backupsResource() {
@@ -573,7 +573,7 @@ export function backupsResource() {
 }
 
 export function runRestoreResource() {
-	return createResource({ url: `${M}.run_restore` });
+	return switchable("run_restore");
 }
 
 /* ------------------------------------------------------------------ benches */
@@ -613,11 +613,11 @@ export function benchResource() {
 }
 
 export function rescanBenchesResource() {
-	return createResource({ url: `${M}.rescan_benches` });
+	return switchable("rescan_benches");
 }
 
 export function gitAuthResource() {
-	return createResource({ url: `${M}.check_git_auth` });
+	return switchable("check_git_auth");
 }
 
 export function installRequestsResource() {
@@ -625,65 +625,65 @@ export function installRequestsResource() {
 }
 
 export function installRequestResource() {
-	return createResource({ url: `${M}.get_install_request` });
+	return switchable("get_install_request");
 }
 
 export function createInstallResource() {
-	return createResource({ url: `${M}.create_install_request` });
+	return switchable("create_install_request");
 }
 
 export function runInstallResource() {
-	return createResource({ url: `${M}.run_install_request` });
+	return switchable("run_install_request");
 }
 
 /* ------------------------------------------------------------- provisioning */
 
 export function provisionPreflightResource() {
-	return createResource({ url: `${M}.provision_preflight` });
+	return switchable("provision_preflight");
 }
 
 export function runProvisionResource() {
-	return createResource({ url: `${M}.run_provision` });
+	return switchable("run_provision");
 }
 
 /* --------------------------------------------------------- domain providers */
 
 export function domainProvidersResource() {
-	return createResource({ url: `${M}.list_domain_providers` });
+	return switchable("list_domain_providers");
 }
 
 export function saveDomainProviderResource() {
-	return createResource({ url: `${M}.save_domain_provider` });
+	return switchable("save_domain_provider");
 }
 
 export function deleteDomainProviderResource() {
-	return createResource({ url: `${M}.delete_domain_provider` });
+	return switchable("delete_domain_provider");
 }
 
 export function verifyDomainProviderResource() {
-	return createResource({ url: `${M}.verify_domain_provider` });
+	return switchable("verify_domain_provider");
 }
 
 export function pointDomainResource() {
-	return createResource({ url: `${M}.point_domain_at_this_host` });
+	return switchable("point_domain_at_this_host");
 }
 
 export function domainReadinessResource() {
-	return createResource({ url: `${M}.domain_readiness` });
+	return switchable("domain_readiness");
 }
 
 export function runConsoleResource() {
-	return createResource({ url: `${M}.run_console_command` });
+	return switchable("run_console_command");
 }
 
 export function checkRepoResource() {
-	return createResource({ url: `${M}.check_repo_access` });
+	return switchable("check_repo_access");
 }
 
 /* ----------------------------------------------------------------- actions */
 
 export function setMonitoringResource() {
-	return createResource({ url: `${M}.set_monitoring_enabled` });
+	return switchable("set_monitoring_enabled");
 }
 
 export function readHistoryResource() {
@@ -691,19 +691,19 @@ export function readHistoryResource() {
 }
 
 export function runIngestResource() {
-	return createResource({ url: `${M}.run_ingest_now` });
+	return switchable("run_ingest_now");
 }
 
 export function resolveGeoResource() {
-	return createResource({ url: `${M}.resolve_geolocation` });
+	return switchable("resolve_geolocation");
 }
 
 export function replayFixtureResource() {
-	return createResource({ url: `${M}.replay_fixture` });
+	return switchable("replay_fixture");
 }
 
 export function purgeFixturesResource() {
-	return createResource({ url: `${M}.purge_fixture_events` });
+	return switchable("purge_fixture_events");
 }
 
 /* ---------------------------------------------------------------- security */
@@ -770,15 +770,15 @@ export function securityInventoryResource() {
 }
 
 export function acknowledgeEventResource() {
-	return createResource({ url: `${M}.acknowledge_security_event` });
+	return switchable("acknowledge_security_event");
 }
 
 export function runSecurityScanResource() {
-	return createResource({ url: `${M}.run_security_scan` });
+	return switchable("run_security_scan");
 }
 
 export function acceptBaselineResource() {
-	return createResource({ url: `${M}.accept_security_baseline` });
+	return switchable("accept_security_baseline");
 }
 
 export function sshSessionsResource() {
@@ -817,49 +817,49 @@ export interface ManagedServer {
 }
 
 export function managedServersResource() {
-	return createResource({ url: `${M}.list_managed_servers` });
+	return switchable("list_managed_servers");
 }
 
 export function saveManagedServerResource() {
-	return createResource({ url: `${M}.save_managed_server` });
+	return switchable("save_managed_server");
 }
 
 export function deleteManagedServerResource() {
-	return createResource({ url: `${M}.delete_managed_server` });
+	return switchable("delete_managed_server");
 }
 
 export function verifyManagedServerResource() {
-	return createResource({ url: `${M}.verify_managed_server` });
+	return switchable("verify_managed_server");
 }
 
 export function callRemoteResource() {
-	return createResource({ url: `${M}.call_remote` });
+	return switchable("call_remote");
 }
 
 export function remoteReadinessResource() {
-	return createResource({ url: `${M}.remote_site_readiness` });
+	return switchable("remote_site_readiness");
 }
 
 /* ------------------------------------------------------------- migrations */
 
 export function planMigrationResource() {
-	return createResource({ url: `${M}.plan_bench_migration` });
+	return switchable("plan_bench_migration");
 }
 
 export function startMigrationResource() {
-	return createResource({ url: `${M}.start_bench_migration` });
+	return switchable("start_bench_migration");
 }
 
 export function migrationResource() {
-	return createResource({ url: `${M}.bench_migration` });
+	return switchable("bench_migration");
 }
 
 export function resumeMigrationResource() {
-	return createResource({ url: `${M}.resume_bench_migration` });
+	return switchable("resume_bench_migration");
 }
 
 export function cancelMigrationResource() {
-	return createResource({ url: `${M}.cancel_bench_migration` });
+	return switchable("cancel_bench_migration");
 }
 
 export function dnsRecordsResource() {
