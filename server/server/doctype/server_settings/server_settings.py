@@ -204,6 +204,14 @@ class ServerSettings(Document):
 		- GIT_ASKPASS is emptied so git cannot fall back to a graphical prompt.
 		"""
 		env = os.environ.copy()
+		# UNBUFFERED, or a job that runs for an hour shows nothing at all.
+		#
+		# bench is Python, and Python block-buffers stdout when it is a pipe
+		# rather than a terminal. A restore that ran for the full hour and was
+		# then killed produced an empty log — every line it had written was
+		# still sitting in an 8 KB buffer that died with the process. The
+		# operator saw the command, a blank space, and "timed out".
+		env["PYTHONUNBUFFERED"] = "1"
 		env["GIT_TERMINAL_PROMPT"] = "0"
 		env["GIT_ASKPASS"] = ""
 		env["SSH_ASKPASS"] = ""

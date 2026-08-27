@@ -2004,12 +2004,29 @@ def run_install_request(name: str) -> dict:
 					frappe.db.commit()
 					emit(f"$ {shown}")
 
-					code, timed_out = _stream(argv, bench_doc.bench_path, env, timeout, emit, should_cancel)
+					# Budgeted from the dump, not from the one number that also
+					# covers a git clone. Loading a production database is
+					# InnoDB insert-bound and a compressed gigabyte is several
+					# gigabytes of statements — an hour was killing real work
+					# in the middle of it, which leaves a half-loaded database.
+					restore_budget = restore.restore_seconds(
+						getattr(backup, "database_bytes", 0) or backup.size or 0, floor=timeout
+					)
+					if restore_budget > timeout:
+						emit(
+							f"Allowing {restore_budget // 60} minutes for this restore, from the "
+							f"size of the dump."
+						)
+					code, timed_out = _stream(
+						argv, bench_doc.bench_path, env, restore_budget, emit, should_cancel
+					)
 					if code != 0:
 						return finish(
 							"Failed",
 							exit_code=code,
-							error=_explain_failure(code, timed_out, timeout, request, "bench restore"),
+							error=_explain_failure(
+								code, timed_out, restore_budget, request, "bench restore"
+							),
 						)
 
 					# Only once the site is actually up. Pointing a name at a
@@ -2225,11 +2242,25 @@ def _explain_failure(code: int, timed_out: bool, timeout: int, request, what: st
 	with a completely different fix.
 	"""
 	if timed_out:
+		minutes = max(1, timeout // 60)
+		# The advice has to match the command. A restore killed at an hour was
+		# told about shallow git checkouts fetching history, which is true of a
+		# clone and has nothing to do with loading a database — and it pointed
+		# at Install Timeout, which is not the number that budgeted it.
+		if what == "bench restore":
+			return (
+				f"Loading the database was still running after {minutes} minutes and was "
+				"terminated, so the site is now half-loaded and must be restored again. That "
+				"budget is derived from the size of the dump — if it was not enough, the dump is "
+				"unusually dense rather than unusually large, and the restore is worth running by "
+				"hand: bench --site <site> restore <file>. Nothing about it needs this app."
+			)
 		return (
-			f"{what} was still running after {timeout}s and was terminated. Pulling or cloning a "
-			"large repository can legitimately take longer, especially a shallow checkout "
-			"(bench clones with --depth 1), where git may have to fetch a great deal of history. "
-			"Raise Install Timeout in Server Settings and try again, or run the command by hand."
+			f"{what} was still running after {minutes} minutes and was terminated. Pulling or "
+			"cloning a large repository can legitimately take longer, especially a shallow "
+			"checkout (bench clones with --depth 1), where git may have to fetch a great deal of "
+			"history. Raise Install Timeout in Server Settings and try again, or run the command "
+			"by hand."
 		)
 
 	if code < 0:
@@ -2356,7 +2387,23 @@ def _worst_case_seconds(request, settings) -> int:
 	if request.is_ssl():
 		return ssl.SSL_TIMEOUT
 	if request.is_restore():
-		return budget * 2 if request.restore_backup_first else budget
+		# Derived from the dump when one can be found. The queue kills the job
+		# if its death penalty is smaller than the in-process watchdog, and the
+		# operator then gets RQ's JobTimeoutException instead of the message
+		# this file goes to some trouble to write.
+		loading = restore.MIN_RESTORE_SECONDS
+		try:
+			bench_path = frappe.db.get_value("Server Bench", request.bench, "bench_path")
+			if bench_path:
+				backup = request.resolve_backup(bench_path)
+				loading = restore.restore_seconds(
+					getattr(backup, "database_bytes", 0) or backup.size or 0, floor=budget
+				)
+		except Exception:  # noqa: BLE001
+			# A remote pull has nothing on disk yet, and a missing backup is
+			# the pre-flight's problem rather than this function's.
+			loading = max(budget, restore.MIN_RESTORE_SECONDS)
+		return loading * 2 if request.restore_backup_first else loading
 	if request.is_pull():
 		return budget
 	# Clone, plus install-app when a site was named.

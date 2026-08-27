@@ -234,7 +234,8 @@ class TestFailureExplanation(unittest.TestCase):
 		a different fix. Both surface as exit -15.
 		"""
 		message = installer._explain_failure(-15, True, 1800, self._Request(), "git pull")
-		self.assertIn("1800s", message)
+		# Minutes, not seconds: "3600s" is a number somebody has to divide.
+		self.assertIn("30 minutes", message)
 		self.assertIn("Install Timeout", message, "must say how to give it longer")
 		self.assertNotIn("diverged", message, "a timeout is not a divergence")
 

@@ -131,6 +131,10 @@ class BackupSet:
 	private_files: str | None = None
 	site_config: str | None = None
 	size: int = 0
+	#: The DUMP alone, which is what decides how long loading takes. `size` is
+	#: the whole set, and a set is mostly files — an 800 MB files tarball
+	#: unpacks in a minute while a 200 MB dump can load for an hour.
+	database_bytes: int = 0
 	encrypted: bool = False
 	source: str = "site"
 
@@ -270,6 +274,7 @@ def list_backups(
 				private_files=entry["files"].get(KIND_PRIVATE),
 				site_config=entry["files"].get(KIND_CONFIG),
 				size=entry["size"],
+				database_bytes=_size_of(database),
 				encrypted=_is_encrypted(database),
 				source=entry["source"],
 			)
@@ -463,6 +468,7 @@ def resolve_chosen(
 		public_files=public or None,
 		private_files=private or None,
 		size=size,
+		database_bytes=_size_of(database),
 		encrypted=_is_encrypted(database),
 		source="chosen",
 	)
@@ -601,6 +607,37 @@ def build_argv(
 	if with_private and backup.private_files:
 		argv += ["--with-private-files", backup.private_files]
 	return argv
+
+
+#: How long a restore is allowed, per compressed gigabyte of dump.
+#:
+#: Measured from what `bench restore` actually does: gunzip the dump, then feed
+#: it to mysql statement by statement, then rebuild every index. Loading is not
+#: I/O-bound, it is InnoDB insert-bound, and a compressed gigabyte is several
+#: gigabytes of statements.
+#:
+#: Three hours per compressed gigabyte, which is generous on purpose. The two
+#: ways to be wrong here are not symmetrical: waiting too long costs a worker
+#: slot and can be stopped from the dock, while stopping too early leaves a
+#: half-loaded database and throws away everything already done. A production
+#: ERPNext site was killed at exactly one hour having worked the whole time,
+#: with the safety backup turned off.
+SECONDS_PER_GB = 10800
+
+#: Never less than this, however small the dump. A tiny site still pays for
+#: bench's startup, the drop, and the migrate afterwards.
+MIN_RESTORE_SECONDS = 3600
+
+
+def restore_seconds(database_bytes: int, floor: int = 0) -> int:
+	"""How long to allow for loading a dump of this size.
+
+	Deliberately generous. Guessing low kills a restore in the middle, which
+	leaves a half-loaded database — the one outcome worse than waiting.
+	"""
+	gigabytes = max(float(database_bytes or 0), 0) / (1024**3)
+	estimate = int(MIN_RESTORE_SECONDS + gigabytes * SECONDS_PER_GB)
+	return max(estimate, MIN_RESTORE_SECONDS, int(floor or 0))
 
 
 def redact(argv: list[str]) -> list[str]:

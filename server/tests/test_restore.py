@@ -456,3 +456,42 @@ class TestRelativePathsAreRefused(unittest.TestCase):
 			directory = os.path.join(root, "sites", SITE)
 			os.makedirs(directory)
 			self.assertTrue(restore.is_inside(root, directory))
+
+
+class TestRestoreBudget(unittest.TestCase):
+	"""An hour is a number from a git clone, not from loading a database.
+
+	A production dump was killed at exactly 3600s having done real work the
+	whole time — and with the safety backup turned off, that hour was thrown
+	away and the site left half-loaded. The budget now comes from the dump.
+	"""
+
+	def test_a_bigger_dump_gets_longer(self):
+		small = restore.restore_seconds(50 * 1024**2)
+		large = restore.restore_seconds(2 * 1024**3)
+		self.assertGreater(large, small)
+
+	def test_even_a_tiny_dump_gets_half_an_hour(self):
+		# bench's own startup, the drop, and the migrate afterwards are not
+		# free however small the data is.
+		self.assertGreaterEqual(restore.restore_seconds(1024), restore.MIN_RESTORE_SECONDS)
+
+	def test_it_never_goes_below_the_configured_timeout(self):
+		# An operator who raised Install Timeout to four hours meant it.
+		self.assertEqual(restore.restore_seconds(1024, floor=14400), 14400)
+
+	def test_a_gigabyte_gets_well_over_the_hour_that_failed(self):
+		self.assertGreater(restore.restore_seconds(1024**3), 3600)
+
+	def test_nothing_known_still_returns_a_usable_number(self):
+		for unknown in (0, None):
+			self.assertGreaterEqual(restore.restore_seconds(unknown), restore.MIN_RESTORE_SECONDS)
+
+	def test_the_dump_is_measured_not_the_whole_set(self):
+		# `size` is the whole set, and a set is mostly files: an 800 MB files
+		# tarball unpacks in a minute while a 200 MB dump can load for an hour.
+		with tempfile.TemporaryDirectory() as root:
+			dump = make_set(root, SITE, "20260101_000000", "erp_example_com", files=True)
+			backup = restore.list_backups(root, SITE)[0]
+			self.assertEqual(backup.database_bytes, os.path.getsize(dump))
+			self.assertGreater(backup.size, backup.database_bytes)
