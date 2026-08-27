@@ -136,9 +136,55 @@ def has_passwordless_sudo() -> bool:
 
 	`-n` is the whole point: it makes sudo fail instantly rather than sit on a
 	password prompt that no one is there to answer.
+
+	ASKS ABOUT THE COMMANDS THAT ARE ACTUALLY NEEDED, not about sudo in
+	general. `sudo -n true` answers "can this user run ANYTHING as root", and a
+	correctly narrow sudoers rule — NOPASSWD for certbot and nothing else — 
+	fails it. So an operator who had done exactly the right thing was still
+	told to add a rule they had already added, with the button still disabled.
 	"""
-	code, _ = _run(["sudo", "-n", "true"], timeout=5)
-	return code == 0
+	if _run(["sudo", "-n", "true"], timeout=5)[0] == 0:
+		return True
+	certbot = certbot_path()
+	if not certbot:
+		return False
+	# The narrow grant. `--version` runs certbot for real but touches nothing.
+	return _run(["sudo", "-n", certbot, "--version"], timeout=10)[0] == 0
+
+
+#: A sudoers file that grants exactly what this app cannot do without, and
+#: nothing else. Offered as text to install by hand: an app that could write
+#: its own sudoers rule would not need one.
+SUDOERS_PATH = "/etc/sudoers.d/frappe-server"
+
+
+def sudoers_suggestion(user: str, certbot: str = "", bench_executable: str = "") -> str:
+	"""The exact file, ready to paste, for the machine asking."""
+	certbot = certbot or certbot_path() or "/usr/bin/certbot"
+	bench_executable = bench_executable or "/usr/local/bin/bench"
+	return "\n".join(
+		[
+			"# Written by hand, deliberately: this app cannot grant itself root.",
+			"# Install with:",
+			f"#   sudo visudo -f {SUDOERS_PATH}",
+			"#",
+			"# Certificates. certbot binds port 80 and writes to /etc/letsencrypt.",
+			f"{user} ALL=(root) NOPASSWD: {certbot}",
+			"",
+			"# Reloading nginx after a certificate or a domain change.",
+			f"{user} ALL=(root) NOPASSWD: {bench_executable} setup reload-nginx",
+			f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx",
+			f"{user} ALL=(root) NOPASSWD: /usr/sbin/nginx -t",
+			"",
+			"# Read-only, for the security detectors. Without these four,",
+			"# sshd's effective config, password status, the firewall and the",
+			"# root crontabs all report as unreadable rather than as clean.",
+			f"{user} ALL=(root) NOPASSWD: /usr/sbin/sshd -T",
+			f"{user} ALL=(root) NOPASSWD: /usr/bin/passwd -S -a",
+			f"{user} ALL=(root) NOPASSWD: /usr/sbin/ufw status verbose",
+			f"{user} ALL=(root) NOPASSWD: /usr/bin/crontab -l -u root",
+		]
+	)
 
 
 def _read_json(path: str) -> dict:
@@ -344,13 +390,16 @@ def readiness(bench_path: str, sites: list[dict]) -> dict:
 		),
 		Check(
 			key="sudo",
-			label="passwordless sudo",
+			label="root for certbot",
 			ok=sudo_ok,
 			detail=(
 				"Available."
 				if sudo_ok
-				else "certbot and nginx both need root, and a job has no terminal to type a "
-				"password into. Add a NOPASSWD sudoers rule for this user."
+				else "certbot binds port 80 and writes to /etc/letsencrypt, and a job has no "
+				"terminal to type a password into. This is the one thing here that cannot be "
+				"worked around: the app runs as the bench user, which is what makes it safe to "
+				"give a web interface at all. The sudoers file below grants exactly what is "
+				"needed and nothing else."
 			),
 		),
 		Check(
@@ -400,7 +449,22 @@ def readiness(bench_path: str, sites: list[dict]) -> dict:
 		"sites": [row.__dict__ for row in rows],
 		"ready": all(check.ok for check in checks if check.blocking),
 		"certificates_note": cert_note,
+		# The exact file, for this machine, ready to paste. Only when it would
+		# change anything — a panel that offers a fix for a problem nobody has
+		# is the same noise as a warning nobody needs.
+		"sudoers": "" if sudo_ok else sudoers_suggestion(_current_user(), certbot or ""),
+		"sudoers_path": SUDOERS_PATH,
 	}
+
+
+def _current_user() -> str:
+	"""Whose sudoers rule it would have to be."""
+	import getpass
+
+	try:
+		return getpass.getuser()
+	except Exception:  # noqa: BLE001
+		return "$USER"
 
 
 def _site_note(domain: str, cert: dict | None, cert_note: str) -> str:
