@@ -14,7 +14,8 @@
 		<p class="mb-4 text-[12.5px] leading-relaxed text-[var(--ink-faint)]">
 			Read straight from the registrar every time, never from a copy kept here — half of
 			these records were made in the registrar's own console, and a cached copy of somebody
-			else's DNS is wrong the moment they touch it.
+			else's DNS is wrong the moment they touch it. <b>A records only</b>: everything else in
+			the zone is left alone and is not shown.
 		</p>
 
 		<div class="mb-4 grid gap-3 sm:grid-cols-2">
@@ -150,10 +151,14 @@
 							<span class="u-label">Type</span>
 							<select
 								v-model="form.record_type"
-								class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)]"
+								:disabled="TYPES.length === 1"
+								class="rounded-md border border-[var(--rule)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] outline-none focus:border-[var(--ink)] disabled:opacity-60"
 							>
 								<option v-for="t in TYPES" :key="t" :value="t">{{ t }}</option>
 							</select>
+							<span class="text-[11.5px] text-[var(--ink-faint)]">
+								A records only — anything else stays in the registrar's console.
+							</span>
 						</label>
 					</div>
 
@@ -227,7 +232,11 @@ import {
 	verifyDomainProviderResource,
 } from "../api";
 
-const TYPES = ["A", "AAAA", "CNAME", "TXT", "MX"];
+//: A records only, because that is what the provider layer reads and writes.
+//: Offering five types in a dropdown that can only produce one is a promise
+//: this app does not keep — and the list below shows A records only too, so a
+//: CNAME written here would vanish the moment it was saved.
+const TYPES = ["A"];
 
 const providersRes = domainProvidersResource();
 const recordsRes = dnsRecordsResource();

@@ -148,7 +148,15 @@ def parse_records(payload) -> list[DnsRecord]:
 	delete followed by a create — losing the id would mean the delete could not
 	be made.
 	"""
-	rows = payload.get("dnsRecords", payload) if isinstance(payload, dict) else payload
+	# Same wrapper as the domain list: v3 collections arrive under `items`.
+	# Guessing at `dnsRecords` and falling back to the payload itself returned
+	# a dict where a list was expected, which reads as an empty zone.
+	rows = payload
+	if isinstance(payload, dict):
+		for key in ("items", "dnsRecords", "records", "data"):
+			if isinstance(payload.get(key), list):
+				rows = payload[key]
+				break
 	if not isinstance(rows, list):
 		return []
 
@@ -171,7 +179,25 @@ def parse_records(payload) -> list[DnsRecord]:
 
 
 def _domains(payload) -> list[str]:
-	rows = payload.get("domains", payload) if isinstance(payload, dict) else payload
+	# v3 wraps every collection in `items`, alongside a `links` block. The
+	# older v1 shape was a bare list, and a guess at `domains` was in between.
+	#
+	# Measured against the live API, which is the only way this was ever going
+	# to be settled:
+	#
+	#   {"items": [{"domain": "erpxpand.com", "status": "ACTIVE", ...}],
+	#    "links": [...]}
+	#
+	# Looking for `domains`, not finding it, and falling back to the payload
+	# itself gave a dict where a list was expected — so a working credential
+	# holding a real domain reported none, and the page said "no domains on
+	# that credential", which reads as a verdict on the token.
+	rows = payload
+	if isinstance(payload, dict):
+		for key in ("items", "domains", "results", "data"):
+			if isinstance(payload.get(key), list):
+				rows = payload[key]
+				break
 	if not isinstance(rows, list):
 		return []
 
