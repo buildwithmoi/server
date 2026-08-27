@@ -170,9 +170,17 @@ def sudoers_suggestion(user: str, certbot: str = "", bench_executable: str = "")
 			"# Certificates. certbot binds port 80 and writes to /etc/letsencrypt.",
 			f"{user} ALL=(root) NOPASSWD: {certbot}",
 			"",
-			"# Reloading nginx after a certificate or a domain change.",
-			f"{user} ALL=(root) NOPASSWD: {bench_executable} setup reload-nginx",
+			"# Stopping and starting nginx around certbot. It authenticates with",
+			"# --standalone, which wants the port nginx is holding — and these are",
+			"# certbot's own pre and post hooks, so the start runs even when",
+			"# issuing fails. Without the START granted, a failed certificate",
+			"# takes every site on the machine offline.",
+			f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop nginx",
+			f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl start nginx",
 			f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx",
+			"",
+			"# Reloading nginx after a domain change.",
+			f"{user} ALL=(root) NOPASSWD: {bench_executable} setup reload-nginx",
 			f"{user} ALL=(root) NOPASSWD: /usr/sbin/nginx -t",
 			"",
 			"# Read-only, for the security detectors. Without these four,",
@@ -527,6 +535,7 @@ def build_argv(
 	site: str | None = None,
 	custom_domain: str | None = None,
 	dry_run: bool = False,
+	email: str = "",
 ) -> list[str]:
 	"""The exact argv for one SSL operation.
 
@@ -539,14 +548,61 @@ def build_argv(
 	if mode == MODE_ISSUE:
 		if not site:
 			raise SSLRefused("Issuing a certificate needs a site.")
-		# `-n` skips bench's own "this stops nginx" confirmation, which would
-		# otherwise abort instantly against a closed stdin.
-		argv = [bench_exe, "setup", "lets-encrypt", site, "-n"]
-		if custom_domain:
-			domain = custom_domain.strip()
-			if not VALID_DOMAIN.match(domain):
-				raise SSLRefused(f"{domain!r} is not a valid domain name.")
-			argv += ["--custom-domain", domain]
+
+		target = (custom_domain or site).strip()
+		if custom_domain and not VALID_DOMAIN.match(target):
+			raise SSLRefused(f"{target!r} is not a valid domain name.")
+
+		certbot = certbot_path()
+		if not certbot:
+			raise SSLRefused("certbot is not installed, so there is nothing to issue with.")
+
+		# CERTBOT DIRECTLY, not `bench setup lets-encrypt`.
+		#
+		# bench's own path is written to be run AS ROOT, not by a user with a
+		# narrow grant: it writes /etc/letsencrypt/configs/<domain>.cfg with no
+		# sudo at all, and runs certbot with no sudo either. As the bench user
+		# it fails on the first mkdir. Making it work would mean granting
+		# `sudo bench setup lets-encrypt *` — a wildcard on a command that
+		# takes a site name from a browser, which is a root shell with extra
+		# steps.
+		#
+		# So this does what the RENEWAL path here already does, for the same
+		# reasons, and installs the certificate itself afterwards.
+		argv = [
+			"sudo",
+			"-n",
+			certbot,
+			"certonly",
+			"--non-interactive",
+			"--agree-tos",
+			# Matching bench's own template, so a certificate issued here and
+			# one issued by bench are the same shape.
+			"--key-type",
+			"ecdsa",
+			"--elliptic-curve",
+			"secp384r1",
+			"--standalone",
+			# Hooks rather than three sequential commands: certbot runs the
+			# post-hook even when issuing FAILS, so nginx cannot be left down
+			# by an error. Sequential is what bench does, and it is why a
+			# failed issue there takes every site offline until somebody
+			# notices.
+			"--pre-hook",
+			"systemctl stop nginx",
+			"--post-hook",
+			"systemctl start nginx",
+			"-d",
+			target,
+		]
+		if email and "@" in email:
+			argv += ["--email", email]
+		else:
+			# Let's Encrypt allows it, and it is better than inventing an
+			# address that expiry warnings will be sent to.
+			argv.append("--register-unsafely-without-email")
+		if dry_run:
+			argv.append("--dry-run")
 		return argv
 
 	certbot = certbot_path()
@@ -576,13 +632,27 @@ def build_argv(
 	return argv
 
 
+def certificate_paths(target: str) -> dict:
+	"""Where certbot puts a certificate for `target`.
+
+	The same two paths bench writes into a site config, so a site certified
+	here and one certified by bench are configured identically.
+	"""
+	live = f"/etc/letsencrypt/live/{target}"
+	return {
+		"ssl_certificate": f"{live}/fullchain.pem",
+		"ssl_certificate_key": f"{live}/privkey.pem",
+	}
+
+
 def describe(mode: str, site: str | None, custom_domain: str | None, dry_run: bool) -> str:
 	"""Plain-language summary of what pressing the button will do."""
 	if mode == MODE_ISSUE:
 		target = custom_domain or site
 		return (
-			f"Stop nginx, ask Let's Encrypt for a certificate for {target}, write it into the site "
-			"config, rebuild the nginx config and start nginx again."
+			f"Turn on DNS multitenancy if it is off, add {target} to the site, rebuild the nginx "
+			f"config, then stop nginx, ask Let's Encrypt for a certificate for {target}, start "
+			"nginx again, point the site at the certificate and reload."
 		)
 	if dry_run:
 		return (

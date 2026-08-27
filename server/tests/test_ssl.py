@@ -14,6 +14,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from server.bench import ssl
 
@@ -28,18 +29,52 @@ def make_site(root: str, site: str, config: dict | None = None) -> None:
 
 
 class TestIssueArgv(unittest.TestCase):
-	def test_uses_non_interactive_flag(self):
-		"""`-n` is not optional.
+	"""Certbot directly, not `bench setup lets-encrypt`.
 
-		Without it bench asks "this stops nginx, continue?", and a job with no
-		stdin answers that by aborting — so the run would fail every time.
-		"""
+	bench's path is written to run AS ROOT: it writes
+	/etc/letsencrypt/configs/<domain>.cfg with no sudo, and runs certbot with
+	no sudo either. As the bench user it fails on the first mkdir, and making
+	it work would mean granting `sudo bench setup lets-encrypt *` — a wildcard
+	on a command that takes a site name from a browser, which is a root shell
+	with extra steps.
+	"""
+
+	def setUp(self):
+		self._certbot = mock.patch.object(ssl, "certbot_path", lambda: "/usr/bin/certbot")
+		self._certbot.start()
+		self.addCleanup(self._certbot.stop)
+
+	def test_it_runs_certbot_under_sudo(self):
 		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com")
-		self.assertEqual(argv, [BENCH_EXE, "setup", "lets-encrypt", "erp.example.com", "-n"])
+		self.assertEqual(argv[:5], ["sudo", "-n", "/usr/bin/certbot", "certonly", "--non-interactive"])
+		self.assertNotIn("lets-encrypt", argv)
 
-	def test_custom_domain_is_appended(self):
+	def test_nginx_is_started_again_by_a_hook_not_by_a_later_command(self):
+		# certbot runs the post-hook even when issuing fails. Sequential is
+		# what bench does, and it is why a failed issue there takes every site
+		# on the machine offline until somebody notices.
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com")
+		self.assertIn("--pre-hook", argv)
+		self.assertIn("systemctl stop nginx", argv)
+		self.assertIn("--post-hook", argv)
+		self.assertIn("systemctl start nginx", argv)
+
+	def test_the_custom_domain_is_what_gets_certified(self):
 		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com", "shop.example.com")
-		self.assertEqual(argv[-2:], ["--custom-domain", "shop.example.com"])
+		self.assertEqual(argv[argv.index("-d") + 1], "shop.example.com")
+
+	def test_an_email_is_used_when_there_is_one(self):
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com", email="ops@example.com")
+		self.assertEqual(argv[argv.index("--email") + 1], "ops@example.com")
+		self.assertNotIn("--register-unsafely-without-email", argv)
+
+	def test_without_one_it_registers_without_rather_than_inventing_one(self):
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com")
+		self.assertIn("--register-unsafely-without-email", argv)
+
+	def test_a_dry_run_is_a_dry_run(self):
+		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com", dry_run=True)
+		self.assertIn("--dry-run", argv)
 
 	def test_issue_needs_a_site(self):
 		with self.assertRaises(ssl.SSLRefused):
@@ -53,7 +88,7 @@ class TestIssueArgv(unittest.TestCase):
 	def test_no_custom_domain_means_the_site_own_domain(self):
 		"""Empty is a choice, not a bad value — it means "certify the site"."""
 		argv = ssl.build_argv(ssl.MODE_ISSUE, BENCH_EXE, "erp.example.com", "")
-		self.assertNotIn("--custom-domain", argv)
+		self.assertEqual(argv[argv.index("-d") + 1], "erp.example.com")
 
 	def test_unknown_mode_is_refused(self):
 		with self.assertRaises(ssl.SSLRefused):

@@ -46,11 +46,19 @@ class TheSuggestedFile(unittest.TestCase):
 	def test_it_names_the_user_it_is_for(self):
 		# Whoever reads this page is not necessarily whoever created the
 		# account the app runs as.
-		self.assertEqual(self.text.count("erpnext ALL=(root) NOPASSWD:"), 8)
+		self.assertEqual(self.text.count("erpnext ALL=(root) NOPASSWD:"), 10)
 
 	def test_it_grants_certbot_and_the_reload(self):
 		self.assertIn("NOPASSWD: /usr/bin/certbot", self.text)
 		self.assertIn("setup reload-nginx", self.text)
+
+	def test_it_grants_stopping_AND_starting_nginx(self):
+		# certbot authenticates with --standalone, which wants the port nginx
+		# is holding. Granting the stop without the start is the worst of the
+		# three states: a failed certificate would take every site on the
+		# machine offline and leave it there.
+		self.assertIn("systemctl stop nginx", self.text)
+		self.assertIn("systemctl start nginx", self.text)
 
 	def test_it_closes_the_four_detector_gaps_too(self):
 		# sshd's effective config, password status, the firewall and the root
@@ -131,3 +139,55 @@ class OfferedOnlyWhenItWouldHelp(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class InstallingWhatCertbotWrote(unittest.TestCase):
+	"""certbot gets the certificate and stops there.
+
+	It is `bench setup lets-encrypt` that would normally write the two paths
+	into the site config and rebuild nginx. Driving certbot directly means
+	doing that here — and doing it the same way, so a site certified by this
+	app and one certified by bench are configured identically.
+	"""
+
+	def test_the_paths_match_the_ones_bench_writes(self):
+		paths = ssl.certificate_paths("senchinew.erpxpand.com")
+		self.assertEqual(
+			paths,
+			{
+				"ssl_certificate": "/etc/letsencrypt/live/senchinew.erpxpand.com/fullchain.pem",
+				"ssl_certificate_key": "/etc/letsencrypt/live/senchinew.erpxpand.com/privkey.pem",
+			},
+		)
+
+	def test_the_writer_refuses_a_path_outside_letsencrypt(self):
+		# A site config pointing nginx at a file of somebody else's choosing is
+		# worth one line to prevent.
+		import tempfile
+
+		from server.bench import siteconfig
+
+		with tempfile.TemporaryDirectory() as root:
+			with self.assertRaises(siteconfig.ConfigRefused):
+				siteconfig.install_certificate(
+					root, "site", {"ssl_certificate": "/tmp/anything.pem"}
+				)
+
+	def test_it_refuses_keys_that_are_not_the_certificate(self):
+		import tempfile
+
+		from server.bench import siteconfig
+
+		with tempfile.TemporaryDirectory() as root:
+			with self.assertRaises(siteconfig.ConfigRefused):
+				siteconfig.install_certificate(root, "site", {"encryption_key": "x"})
+
+	def test_the_job_checks_the_file_is_there_before_writing_the_config(self):
+		# certbot exiting 0 with no certificate would otherwise produce a site
+		# config pointing at a file that does not exist, and nginx then
+		# refuses to start at all.
+		from server.bench import installer
+
+		source = inspect.getsource(installer._install_certificate)
+		self.assertIn('os.path.isfile(paths["ssl_certificate"])', source)
+		self.assertIn("was NOT changed", source)

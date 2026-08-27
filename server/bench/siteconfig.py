@@ -392,6 +392,44 @@ def write(bench_path: str, site: str, changes: dict) -> dict:
 	return {"path": path, "applied": applied, "backup": backup}
 
 
+def install_certificate(bench_path: str, site: str, paths: dict) -> dict:
+	"""Write the two SSL paths into a site config.
+
+	SEPARATE FROM `write` ON PURPOSE. That one refuses any key outside the
+	editable catalogue, which is right for a form somebody types into — an
+	arbitrary editor over this file is a way to break a site by typo. These two
+	keys are not typed by anybody: they are produced by certbot and installed
+	by the job that just ran it.
+
+	The paths are checked to be inside /etc/letsencrypt rather than trusted,
+	because a site config pointing nginx at a file of somebody else's choosing
+	is worth one line to prevent.
+	"""
+	allowed = ("ssl_certificate", "ssl_certificate_key")
+	unknown = sorted(set(paths) - set(allowed))
+	if unknown:
+		raise ConfigRefused(f"{', '.join(unknown)} is not part of installing a certificate.")
+
+	for key, value in paths.items():
+		resolved = os.path.realpath(str(value))
+		if not resolved.startswith("/etc/letsencrypt/"):
+			raise ConfigRefused(f"{key} must be inside /etc/letsencrypt, not {resolved}.")
+
+	path = config_path(bench_path, site)
+	try:
+		with open(path) as handle:
+			raw = json.load(handle)
+	except FileNotFoundError as exc:
+		raise ConfigRefused(f"{path} does not exist.") from exc
+	except (OSError, ValueError) as exc:
+		raise ConfigRefused(f"{path} could not be read: {exc}") from exc
+
+	raw.update(paths)
+	backup = _backup(path)
+	_atomic_write(path, raw)
+	return {"path": path, "applied": dict(paths), "backup": backup}
+
+
 def _backup(path: str) -> str | None:
 	"""Copy the file aside before touching it.
 

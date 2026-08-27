@@ -981,6 +981,75 @@ def _sudo_kill(pgid: int, sig: int) -> bool:
 	return result.returncode == 0
 
 
+def _first_alert_address(settings) -> str:
+	"""The first address this app already alerts, or nothing."""
+	for line in str(settings.alert_recipients or "").replace(",", "\n").splitlines():
+		candidate = line.strip()
+		if "@" in candidate and "." in candidate.split("@")[-1]:
+			return candidate
+	return ""
+
+
+def _install_certificate(request, bench_doc, settings, env, emit, finish, should_cancel):
+	"""Point the site at the certificate certbot just wrote.
+
+	certbot gets the certificate and stops there; it is `bench setup
+	lets-encrypt` that would normally write the two paths into the site config
+	and rebuild nginx. Driving certbot directly means doing that here — and it
+	is exactly what bench does, so a site certified by this app and one
+	certified by bench end up configured identically.
+	"""
+	site = (request.install_on_site or "").strip()
+	target = (request.ssl_domain or "").strip() or site
+	paths = ssl.certificate_paths(target)
+
+	if not os.path.isfile(paths["ssl_certificate"]):
+		# certbot exited 0 and the certificate is not there. Reported rather
+		# than assumed: writing a site config that points at a file which does
+		# not exist stops nginx from starting at all.
+		emit("")
+		emit(
+			f"[warn] certbot reported success but {paths['ssl_certificate']} is not readable "
+			"from here. The site config was NOT changed."
+		)
+		return None
+
+	emit("")
+	emit(f"Pointing {site} at the certificate.")
+	try:
+		siteconfig.install_certificate(bench_doc.bench_path, site, paths)
+	except Exception as exc:  # noqa: BLE001
+		return finish(
+			"Failed",
+			exit_code=None,
+			error=(
+				f"The certificate was issued but {site}'s config could not be written: {exc}. "
+				f"Add ssl_certificate and ssl_certificate_key by hand — the files are in "
+				f"/etc/letsencrypt/live/{target}/."
+			),
+		)
+	for key, value in paths.items():
+		emit(f"  {key} = {value}")
+
+	argv = [settings.bench_executable, "setup", "nginx", "--yes"]
+	emit(f"$ {' '.join(argv)}")
+	code, _ = _stream(argv, bench_doc.bench_path, env, 180, emit, should_cancel)
+	if code != 0:
+		emit("[warn] The nginx config could not be regenerated. Run it by hand.")
+		return None
+
+	argv = ["sudo", "-n", "/usr/bin/systemctl", "reload", "nginx"]
+	emit(f"$ {' '.join(argv)}")
+	code, _ = _stream(argv, bench_doc.bench_path, env, 60, emit, should_cancel)
+	if code != 0:
+		emit("")
+		emit(
+			"[note] nginx is still serving the old configuration — the certificate is installed "
+			"but not being served yet. Reload it: sudo systemctl reload nginx"
+		)
+	return None
+
+
 def _prepare_for_ssl(request, bench_doc, settings, env, step, emit, finish, should_cancel):
 	"""Do the three things that must be true before certbot is worth running.
 
@@ -1828,12 +1897,26 @@ def run_install_request(name: str) -> dict:
 						request.install_on_site or None,
 						request.ssl_domain or None,
 						bool(request.ssl_dry_run),
+						# Where Let's Encrypt sends expiry warnings. Taken from
+						# who already gets this app's alerts rather than asked
+						# for again — and if there is nobody, certbot registers
+						# without an address instead of one being invented for
+						# it.
+						email=_first_alert_address(settings),
 					)
 					request.db_set("command", " ".join(argv), update_modified=False)
 					frappe.db.commit()
 					emit(f"$ {' '.join(argv)}")
 
 					code, timed_out = _stream(argv, bench_doc.bench_path, env, ssl.SSL_TIMEOUT, emit, should_cancel)
+
+					if code == 0 and request.ssl_mode_key() == ssl.MODE_ISSUE and not request.ssl_dry_run:
+						failure = _install_certificate(
+							request, bench_doc, settings, env, emit, finish, should_cancel
+						)
+						if failure:
+							return failure
+
 					if code != 0:
 						# bench stops nginx, gets the certificate, and starts it
 						# again. Killed in between — by the watchdog, or by
